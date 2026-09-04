@@ -1,110 +1,88 @@
 # Project Design Reference
-*Open source government contracting BD ecosystem — design elements, constraints, and decisions*
+*Open source government contracting business development intelligence ecosystem - design elements, constraints, and decisions*\
 *Status: living document, pre-code. Last updated: 2026-09-04*
 
 ---
 
 ## 1. Mission
 
-Build a free, open source ecosystem for U.S. federal business development intelligence —
-aggregating, searching, and analyzing public government spending and opportunity data —
-that structurally undercuts the pricing of incumbent tools (GovWin IQ at ~$13k–$119k/yr,
-enterprise AI proposal suites) by being free to self-host and community-owned.
+Build a free, open source ecosystem for U.S. federal business development intelligence, aggregating, searching, and analyzing public government spending and opportunity data, that is free to self-host and community-owned. Incumbent tools are priced for enterprise budgets, well beyond the reach of the small businesses that make up most of the market; a free, self-hosted alternative is structurally hard to answer without giving up that pricing.
 
-**This is a movement, not a competitor.** The disruption comes from being structurally
-unanswerable: nobody can compete with free + self-hosted + community-owned without
-destroying their own business model.
+The ambition is not a better SAM.gov search. The ambition is an entity graph of agencies, offices, contractors, contracts, and officials, onto which opportunity data, award history, entity registrations, budgets, economic indicators, technology developments, and the user's own company profile are all resolved. The product is the context view over that graph: an opportunity page that already knows the incumbent, the contract history, the contracting officer's other awards, the agency's budget line, and the protest record.
+
+**This is a movement, not a competitor.** The disruption comes from being structurally unanswerable: nobody can compete with free + self-hosted + community-owned without destroying their own business model.
 
 ## 2. Core principles (the non-negotiables)
 
-1. **Shipped code stays free and forkable.** Guaranteed by a permissive license,
-   not by a pricing page.
+1. **Shipped code stays free and forkable.** Guaranteed by a permissive license, not by a pricing page.
 2. **Self-hostable by design.** One `docker compose up` on a home server or cheap cloud box.
-3. **Zero telemetry.** The software phones home to nobody. In a user base that works
-   near sensitive programs, this is a headline feature.
-4. **Bring your own keys.** Users supply their own SAM.gov API key and LLM credentials.
-   The project never touches credentials, billing, or inference costs.
-5. **Model-agnostic AI.** All AI features talk to a configurable OpenAI-compatible
-   endpoint. Local (Ollama/Qwen-class) or frontier cloud (Claude/GPT) — user's choice.
-6. **No hosted service in v1.** No accounts, no uptime obligation, no support burden
-   while the project is young.
-7. **Public data + public knowledge only.** FAR mechanics, Shipley-style methodology,
-   protest case law: fair game. Proprietary capture intelligence, customer
-   relationships, or any organization's internal process: never enters the repo.
+3. **Zero telemetry.** The software phones home to nobody. In a user base that works near sensitive programs, this is a headline feature.
+4. **Bring your own keys.** Users supply their own SAM.gov API key and LLM credentials. The project never touches credentials, billing, or inference costs.
+5. **Model-agnostic AI.** All AI features talk to a configurable OpenAI-compatible endpoint. Local (Ollama/Qwen-class) or frontier cloud (Claude/GPT) - user's choice.
+6. **No hosted service in v1.** No accounts, no uptime obligation, no support burden while the project is young.
+7. **Public data + public knowledge only.** FAR mechanics, Shipley-style methodology, protest case law: fair game. Proprietary capture intelligence, customer relationships, or any organization's internal process: never enters the repo.
+8. **People appear only in their official public capacity.** Contracting officers, program managers, and agency leadership are covered from government sources (award records, the Federal Register, agency org charts, official bios) and only in the roles those sources document. No scraping of personal social media, no profiling beyond the public role. This is the first question a defense-adjacent reviewer will ask, so it is answered here.
+9. **Every fact carries provenance.** Anything the system asserts about an entity records where it came from, when it was observed, and how confident the extraction was. A fact without a source is not stored. This is what makes LLM extraction and community-contributed sources safe to build on.
 
 ## 3. Strategic decisions
 
-- **License: Apache-2.0.** Permissive, with an explicit patent grant. Chosen so
-  that corporate and defense-adjacent legal review does not block adoption, and so
-  the project can be the substrate other tools build on. Copyleft (AGPL) was
-  considered and rejected: it gives reciprocity, not exclusivity, and it deters
-  exactly the organizations the project wants as users. Closed forks by others are
-  an accepted cost; the maintainers and community are the moat, not the license.
-- **Contributions under DCO.** Contributors sign off that they have the right to
-  submit their work. No CLA: the core will never need relicensing, and copyright
-  stays with the people who wrote the code.
-- **No commercial plans.** No paid tier, hosted service, or revenue is planned.
-  The architecture (public/private data boundary, versioned interfaces) leaves
-  commercial add-ons *possible* without committing to them.
-- **Engine first, in the open, self-hosted.** A hosted deployment of the same
-  engine is a possible phase-two *deployment decision*, not a rewrite. The first
-  year of work is identical in both futures.
-- **Design for hosted from day one, without hosting.** Web UI, not just CLI.
-  Multi-user-aware data model even while v1 runs single-user. Clean API boundary
-  between engine and interface.
-- **Wedge market:** small businesses chasing set-asides who will never pay Deltek
-  five figures. Build for them.
+- **v1 thesis: semantic search *inside* solicitation documents, for a narrow slice.** SAM.gov already offers keyword search and free saved-search email alerts over notice metadata; a self-hosted copy of that is not worth a Docker install and an API key. What SAM.gov cannot do is search the attached solicitation documents themselves including the statements of work, Section L/M instructions, and amendments where the real signal lives. That capability is bounded by the SAM.gov API quota (§5), so v1 goes deep on a user-chosen NAICS / agency slice rather than wide across all of SAM.gov. "Mirror SAM.gov, then add search" is explicitly rejected.
+- **The entity graph is the foundation, from the first migration.** The schema is entity-centric, not opportunity-centric. Notices are one event stream among many that resolve onto shared identities for agencies, offices, contractors, contracts, and officials. v1 populates the graph only from SAM.gov and resolves identities only by exact keys (agency path codes, UEI, CAGE, PIID), but the tables, the provenance model, and the resolver interface exist from day one so that no later source forces a reshape.
+- **Small core, everything else is an adapter.** The core is the graph, the ingestion framework, and the query surface (web UI and MCP). Every data source is a self-contained adapter that produces raw documents, resolved entities, and sourced facts. This is the only way a solo maintainer carries the terminal ambition, and it is what makes each new source a well-bounded community contribution.
+- **License: Apache-2.0.** Permissive, with an explicit patent grant. Chosen so that corporate and defense-adjacent legal review does not block adoption, and so the project can be the substrate other tools build on. Copyleft (AGPL) was considered and rejected: it gives reciprocity, not exclusivity, and it deters exactly the organizations the project wants as users. Closed forks by others are an accepted cost; the maintainers and community are the moat, not the license.
+- **Contributions under DCO.** Contributors sign off that they have the right to submit their work. No CLA: the core will never need relicensing, and copyright stays with the people who wrote the code.
+- **No commercial plans.** No paid tier, hosted service, or revenue is planned. The architecture (public/private data boundary, versioned interfaces) leaves commercial add-ons *possible* without committing to them.
+- **Engine first, in the open, self-hosted.** A hosted deployment of the same engine is a possible phase-two *deployment decision*, not a rewrite. The first year of work is identical in both futures.
+- **Design for hosted from day one, without hosting.** Web UI, not just CLI. Multi-user-aware data model even while v1 runs single-user. Clean API boundary between engine and interface.
+- **Wedge market:** small businesses chasing set-asides who will never pay enterprise prices for BD intelligence. Build for them.
 
 ## 4. Architecture shape
 
-- **Small boring core:** a data daemon that ingests public sources into a local store.
-  Small enough that a single part-time maintainer can keep it healthy.
-- **MCP server from day one:** the whole store is exposed via MCP so any AI agent
-  can sit on top. Goal: become the substrate the next wave of tools builds on.
-  In v1 this is the *only* extension surface; the MCP interface is versioned from
-  the first release.
-- **Capability-scoped plugins in v2, not v1.** The core loads no third-party code
-  in v1. When a plugin interface arrives, each plugin declares which tables it
-  reads and writes and whether it needs network access; the core enforces the
-  declaration and shows it at install time. The community-value areas — agency
-  forecast scrapers, capture skills, compliance matrix generators, PWin models —
-  arrive through that scoped interface or as MCP-driven agents, never as
-  unreviewed code with access to a user's pipeline.
-- **Storage: SQLite.** Single file, zero admin, sufficient for a single-team BD
-  workbench. FTS5 for full-text search; sqlite-vec (or equivalent) for embeddings.
-  Revisit only if hosted multi-tenant phase arrives.
-- **Deployment: Docker Compose.** Install is one command. Installation path must be
-  transparent and auditable (defense-adjacent IT will read before running).
-- **AI task tiering:** high-volume grunt work (classification, extraction, tagging,
-  summarization, embeddings) targets small local models; heavy reasoning (proposal
-  analysis, Section L/M work, PWin judgment) targets frontier models via user's key.
+- **Small boring core:** a data daemon that ingests public sources into a local store. Small enough that a single part-time maintainer can keep it healthy.
+- **Entity graph and provenance layer:** the spine of the store (§8). Entities carry their natural keys and aliases; facts about them are append-only rows that name their source, observation time, and confidence. Resolution in v1 is exact-key matching; fuzzy and LLM-assisted resolution arrive later behind the same interface, and every resolution decision is itself a sourced fact so it can be audited and reversed.
+- **Source adapters:** one per data source, each responsible for fetching, quota accounting, raw storage, typed parsing, entity resolution, and fact emission for that source alone. Adapters are versioned, register themselves in a `sources` table, and never write outside the tables the framework hands them. In v1 the only adapters are the two SAM.gov ones and they ship inside the core; the adapter interface is what the v2 plugin interface is built on.
+- **Context view as the product:** the web UI and MCP surface are organized around entities, not tables. Pull up an opportunity and see the agency, the incumbent, the award history, the officials involved, and the budget context, each fact linked to its source. Search and alerts feed this view; they are not the product by themselves.
+- **Quota-aware attachment pipeline.** Every attachment download spends SAM.gov API quota (§5), so the pipeline is a priority queue with accounting, not a crawler: attachments for notices matching the user's configured slice and saved searches are fetched first, every request is logged against the day's budget, and the daemon stops before the quota does. Text extraction and embedding happen after fetch and never spend quota.
+- **MCP server from day one:** the whole store is exposed via MCP so any AI agent can sit on top. Goal: become the substrate the next wave of tools builds on. In v1 this is the *only* extension surface; the MCP interface is versioned from the first release.
+- **Capability-scoped plugins in v2, not v1.** The core loads no third-party code in v1. When a plugin interface arrives, each plugin declares which tables it reads and writes and whether it needs network access; the core enforces the declaration and shows it at install time. The community-value areas (agency forecast scrapers, enrichment adapters, capture skills, compliance matrix generators, PWin models) arrive through that scoped interface or as MCP-driven agents, never as unreviewed code with access to a user's pipeline.
+- **Storage: SQLite.** Single file, zero admin, sufficient for a single-team BD workbench. FTS5 for full-text search; sqlite-vec (or equivalent) for embeddings. A graph in SQLite is just tables with foreign keys. If cross-source analytics ever outgrow it, an analytical sidecar (DuckDB over the same files) comes before any change of primary store; revisit the primary store only if a hosted multi-tenant phase arrives.
+- **Deployment: Docker Compose.** Install is one command. Installation path must be transparent and auditable (defense-adjacent IT will read before running). Images are built from the repo's own Dockerfile, and a documented build-from-source path with no registry pull is a first-class install route, not an afterthought.
+- **AI task tiering:** high-volume grunt work (classification, extraction, tagging, summarization, embeddings, fact extraction) targets small local models; heavy reasoning (proposal analysis, Section L/M work, PWin judgment, fit and gap analysis against the company profile) targets frontier models via user's key.
 
 ## 5. Data sources (priority order)
 
-1. **SAM.gov Get Opportunities API** — active solicitations, sources sought,
-   presolicitations. The v1 source. Free key from open.gsa.gov.
-2. **USAspending / FPDS** — historical awards and contract actions. Phase 2;
-   powers trend analysis ("who wins what, where, at what value").
-3. **Agency long-range forecasts** — scattered, non-standard agency sites.
-   v2 territory: community scrapers via the capability-scoped plugin interface,
-   or MCP-driven agents.
-4. **Grants.gov, budget justifications (J-books), appropriations** — later phases;
-   this layer replicates what incumbent analysts sell.
+Each source is an adapter (§4) and is described by what it contributes to the graph. Everything here is public data; the user's own company is a private input and lives in the workspace layer (§8).
+
+1. **SAM.gov Get Opportunities API (v2):** Active solicitations, sources sought, presolicitations, and the only source of attachment links (`resourceLinks`). The v1 source for *current* notices. Free key from a SAM.gov account. Graph contribution: notices as events, agency and office entities from the agency path codes, and the solicitation documents themselves. The API quota is the binding constraint on the whole search layer. Verified against GSA documentation and secondary sources on 2026-09-03; re-verify before first release:
+
+   | Limit | Value |
+   |---|---|
+   | Date range per request | 1 year max |
+   | Records per page | 1,000 max |
+   | Personal key, no SAM.gov role | ~10 requests/day |
+   | Personal key with a role on an active entity registration | ~1,000 requests/day |
+   | Federal system account | ~10,000 requests/day |
+   | Attachment download | one key-authenticated request per file |
+
+   Solicitations routinely carry 5–20 attachments, so ~1,000 requests/day is on the order of 50–100 notices' worth of attachments per day, and ~10/day is zero. Attachment fetching is therefore lazy, prioritized, and accounted for (§4, §8), and history is never backfilled through this API (see source 2).
+
+   **First-run consequence of bring-your-own-key:** a self-hoster who requests a key without a role on an entity registration gets ~10 requests/day and a non-functional tool. The README must walk through the order of operations: register the entity (UEI) on SAM.gov, obtain a role on that registration, then request the API key from the account profile. The exact role name and approval turnaround are to be confirmed during first-run testing and written into the README; entity registration alone can take up to 10 business days, which makes this the long-lead item of setup.
+2. **SAM.gov Data Services bulk extracts:** A daily CSV of every active contract opportunity (on the order of 100k rows) and a weekly CSV of archived ones. No key and no quota. This is the backfill and history path: `notices` is populated from the extracts, and only attachments (which still require the API) are fetched on demand through the priority queue. Extract descriptions are plain text where the API returns HTML, so each notice row records which source produced it (§8).
+3. **SAM.gov entity registrations:** The public entity extracts and Entity Management API give UEI, CAGE, legal and DBA names, NAICS, size and socioeconomic certifications, and points of contact for every registered vendor. Phase 2. Graph contribution: the contractor entity spine, and the canonical keys that every other award and opportunity source resolves against. This is what turns "incumbent" from a string into an entity.
+4. **USAspending / FPDS:** Historical awards and contract actions with PIID, awarding office, vendor UEI, value, period of performance, and the contracting officer of record. Phase 2. Graph contribution: contract entities, award events, agency-to-vendor edges, and officials in their official capacity. Powers trend analysis ("who wins what, where, at what value") and the incumbent and history panels of the context view. Full USAspending is very large; the adapter ingests the slices the user's saved searches and tracked entities imply.
+5. **Officials and organizations:** The Federal Register, agency org charts and leadership pages, and GAO bid-protest decisions. Phase 2 to 3. Graph contribution: people in official roles, organizational structure and change over time, protest history per agency and vendor. Governed by principle 8.
+6. **Budget and appropriations:** Budget justifications (J-books), appropriations bills and reports, agency spending plans. Phase 3. Graph contribution: budget-line facts attached to agencies and programs, which is the layer incumbent analysts sell. Mostly PDF; depends on the document extraction pipeline built for attachments.
+7. **Agency long-range forecasts:** Scattered, non-standard agency sites. v2 territory: community adapters via the capability-scoped plugin interface, or MCP-driven agents. Graph contribution: forward-looking opportunity events before they reach SAM.gov.
+8. **Economic and technology context:** Public economic series (FRED, BLS), SBIR/STTR awards, agency technology roadmaps and RFIs, and public news. Later phases. Graph contribution: time-series facts on agencies and NAICS sectors, and technology-trend facts that enrich fit analysis. News is the least structured and most extraction-dependent; it arrives last and only through adapters that honor provenance.
 
 ## 6. Development workflow
 
-- **AI-assisted, human-steered.** Coding agents do the bulk of implementation;
-  people supply design, taste, and domain judgment.
+- **AI-assisted, human-steered.** Coding agents do the bulk of implementation; people supply design, taste, and domain judgment.
 - **Plan before code, always.** Domain review happens at the plan level.
 - **Small commits; git is the undo button.** Commit before every ambitious task.
-- **Read every diff; ask until understood.** "Make it simpler" is the
-  highest-value review comment.
-- **Tests accompany every feature.** A green suite is the objective check that
-  anyone can trust, regardless of experience.
-- `CLAUDE.md` at repo root carries conventions and constraints (this document's
-  principles, condensed) so that agents and contributors share the same rules.
-  Specialized agents as needed: code reviewer, researcher, and a govcon domain
-  expert.
+- **Read every diff; ask until understood.** "Make it simpler" is the highest-value review comment.
+- **Tests accompany every feature.** A green suite is the objective check that anyone can trust, regardless of experience.
+- `CLAUDE.md` at repo root carries conventions and constraints (this document's principles, condensed) so that agents and contributors share the same rules. Specialized agents as needed: code reviewer, researcher, and a govcon domain expert.
 
 ## 7. Explicit non-goals (v1)
 
@@ -114,55 +92,62 @@ destroying their own business model.
 - No fine-tuned models (skills + retrieval over stock models instead).
 - No third-party code loading. The MCP server is the only extension surface.
 - No features that require anyone to be on call.
+- No wholesale mirror of SAM.gov. v1 ingests the user's configured slice and the attachments that slice can afford within the quota.
+- No enrichment sources beyond SAM.gov in v1. The graph and provenance tables exist from the first migration; the adapters that fill them from other sources do not.
+- No fuzzy entity resolution in v1. Identities resolve by exact keys only; unresolved names are recorded as aliases awaiting a later resolver.
 
 ## 8. Draft v1 schema (opportunities engine)
 
 *Working draft; refine before first migration.*
 
+**Identity and provenance layer (public data, the spine of the graph):**
+- `sources`: Registry of adapters: source id, adapter version, terms or license of the upstream data, last successful run. Every fact and every ingested row points here.
+- `entities`: One row per organization or place: `entity_id`, kind (agency / office / contractor / place), canonical name, natural keys where the source provides them (`agency_path_code`, `uei`, `cage`), parent entity, `source_id`, `first_seen_at`, `last_seen_at`. Agencies and offices come from SAM.gov agency path codes in v1; contractors arrive with source 3.
+- `entity_aliases`: Every name string seen for an entity: alias, `entity_id` (null while unresolved), `source_id`, resolution method (exact_key / manual / fuzzy / llm), confidence, `resolved_at`. Unresolved aliases are the work queue for future resolvers.
+- `people`: Officials in their public capacity only (principle 8): `person_id`, name, role title, `entity_id` of the organization, `source_id`, `first_seen_at`, `last_seen_at`. Empty in v1; populated by sources 4 and 5.
+- `contracts`: One row per award: `piid`, awarding `entity_id`, vendor `entity_id`, value, period of performance, `source_id`. Empty in v1; populated by source 4.
+- `facts`: Append-only assertions about any subject: subject type and id (entity / person / contract / notice), predicate, value (typed as text, number, date, or reference), `source_id`, source reference (URL, document id, or row key), `observed_at`, confidence, extraction method and model where an LLM produced it. Facts are never edited; a correction is a new fact with a later `observed_at`.
+
 **Ingestion layer (public data, append-only bias):**
-- `notices` — one row per SAM.gov notice: `notice_id` (natural PK), solicitation
-  number, title, notice_type, agency path (dept / sub-tier / office), naics_code,
-  psc_code, set_aside_code, posted_at, response_deadline, place_of_performance,
-  active flag, description (full text), `raw_json` (verbatim API payload).
-- `notice_versions` — full snapshot per detected change; amendments are the norm
-  in this domain, and deadline-change history is itself intelligence.
-- `attachments` — files linked to a notice (solicitation docs, amendments);
-  fetched lazily, stored on disk, path + hash + extracted text recorded.
-- `agencies`, `naics_codes`, `psc_codes` — reference tables normalized out of
-  notices for clean filtering and joins.
+- `notices`: One row per SAM.gov notice: `notice_id` (natural PK), solicitation number, title, notice_type, `full_parent_path_name` and `full_parent_path_code` (the current v2 agency-hierarchy fields; the older `department` / `subtier` / `office` fields are deprecated and are not given typed columns), `agency_entity_id` resolved from the path code, naics_code, psc_code, set_aside_code, posted_at, response_deadline, place_of_performance, active flag, `first_seen_at`, `last_seen_at`, `source_id` (API or bulk extract), description (full text), `raw_json` (verbatim API payload, or the CSV row as JSON for bulk-sourced rows).
+- `notice_versions`: Full snapshot per detected change; amendments are the norm in this domain, and deadline-change history is itself intelligence.
+- `attachments`: Files linked to a notice (solicitation docs, amendments). Rows are created from `resourceLinks` at ingestion time; the file itself is fetched later by the priority queue. Columns: source URL, `fetch_status` (pending / fetched / failed / skipped), `priority`, `fetched_at`, `ingestion_run_id`, on-disk path, content hash, extracted text.
+- `ingestion_runs`: One row per adapter run: `source_id`, window queried (posted-from / posted-to), started and finished timestamps, records returned, requests spent, quota remaining as reported by the API, status, error text, and a resume cursor (page offset). Every API request is attributed to a run. This is what makes partial backfills resumable and the daily budget reasonable.
+- `naics_codes`, `psc_codes`: Reference tables for clean filtering and joins. Agencies are entities, not a separate reference table.
 
 **Search layer (derived, rebuildable):**
-- `notices_fts` — FTS5 virtual table over title + description + attachment text.
-- `notice_embeddings` — vector per notice (and per attachment chunk) for semantic
-  search; embedding model recorded per row so re-embedding is tractable.
+- `notices_fts`: FTS5 virtual table over title + description + attachment text.
+- `notice_embeddings`: Vector per notice (and per attachment chunk) for semantic search; embedding model recorded per row so re-embedding is tractable.
 
-**Workspace layer (user data — kept strictly separate from public data):**
-- `users` — present from day one even though v1 is single-user.
-- `saved_searches` — named query definitions (keywords, NAICS list, set-asides,
-  agencies, deadline windows); the future alerting primitive.
-- `tracked_opportunities` — user's pipeline: notice_id + stage (watching /
-  pursuing / bid / no-bid / submitted / won / lost), pwin, notes, tags.
-- `tags`, `tracked_opportunity_tags` — freeform organization.
+**Workspace layer (user data -- kept strictly separate from public data):**
+- `users`: Present from day one even though v1 is single-user.
+- `company_profiles`: The user's own company, `user_id` FK: UEI and CAGE (which link it to its own public entity row), NAICS list, size and socioeconomic certifications, capability statement text, target agencies. The input that makes fit scoring, gap analysis, and PWin judgment possible.
+- `company_past_performance`: `user_id` FK; one row per contract the company has performed: `contract_id` where it resolves to a public award, otherwise free text; customer entity, value, period, relevance notes.
+- `company_partners`: `user_id` FK; teaming partners and competitors of interest, each linked to a public `entity_id` where known, with a relationship type and notes.
+- `saved_searches`: `user_id` FK; named query definitions (keywords, NAICS list, set-asides, agencies, deadline windows). The future alerting primitive, and the input to attachment fetch priority.
+- `tracked_opportunities`: `user_id` FK; the user's pipeline: notice_id + stage (watching / pursuing / bid / no-bid / submitted / won / lost), current pwin, notes, tags.
+- `tracked_opportunity_events`: Append-only log of stage and pwin changes (tracked opportunity, `user_id`, changed_at, field, old value, new value). PWin trajectory is intelligence by the same argument that justifies `notice_versions`.
+- `tracked_entities`: `user_id` FK; agencies, contractors, and officials the user follows, which also drive adapter slice selection for sources 3 and 4.
+- `tags`, `tracked_opportunity_tags`: Freeform organization; `tags` carries a `user_id` FK.
 
 **Design rules:**
-- Raw + typed ("ELT") pattern: always keep `raw_json`; typed columns are a
-  parse that can be re-run when the parser improves.
-- All timestamps UTC. Natural keys from the source where stable (`notice_id`).
-- Public/ingested tables are world-shareable; workspace tables are private —
-  this boundary is what makes a future hosted deployment possible without a
-  rewrite.
-- Derived layers (FTS, embeddings, trends) must be rebuildable from ingestion
-  tables at any time.
+- Raw + typed ("ELT") pattern: always keep `raw_json`; typed columns are a parse that can be re-run when the parser improves.
+- All timestamps UTC. Natural keys from the source where stable (`notice_id`, `uei`, `piid`).
+- Every ingested row resolves to an entity by exact key or records an unresolved alias. Resolution is never silent and never destructive; a wrong merge is undone by re-resolving the aliases.
+- Every fact names its source. Rows in `facts` are append-only and are never updated in place.
+- Nothing in the identity or ingestion layers is deleted. When a notice stops appearing in the API or the active extract, `active` goes false and `last_seen_at` stops advancing; the row, its versions, and its attachments persist.
+- Public/ingested tables are world-shareable; workspace tables are private and every workspace row carries a `user_id`. This boundary is what makes a future hosted deployment possible without a rewrite.
+- Derived layers (FTS, embeddings, trends) must be rebuildable from ingestion tables at any time.
 
 ## 9. Sequencing snapshot
 
-1. Local prerequisites: a SAM.gov API key and a local model runtime (e.g. Ollama).
-2. Repo founding documents: README manifesto, LICENSE (Apache-2.0), DCO,
-   CONTRIBUTING, this design doc, CLAUDE.md.
-3. First feature loop: fetch yesterday's notices for a NAICS list → SQLite,
-   planned / reviewed / tested / committed.
-4. Search: FTS5, then embeddings + semantic search.
-5. Saved searches + tracking (the workspace layer).
-6. Web UI (thin, local) and MCP server.
-7. Community era: capability-scoped plugin interface, first outside issues.
-8. (Optional, distant) hosted deployment of the same engine.
+1. Local prerequisites: a SAM.gov account with a role on an entity registration and an API key issued against it (the long-lead item, §5), and a local model runtime (e.g. Ollama).
+2. Repo founding documents: README manifesto, LICENSE (Apache-2.0), DCO, CONTRIBUTING, this design doc, CLAUDE.md.
+3. First feature loop, the attachment pipeline: for a configured NAICS list, ingest yesterday's notices → queue and fetch their attachments within the quota → extract text → FTS5 search across notice and attachment text. Planned / reviewed / tested / committed. The first migration creates the identity and provenance tables even though only SAM.gov agencies and notices populate them. This loop is the v1 thesis in miniature and proves the quota math before anything is built on top of it.
+4. Embeddings + semantic search over attachment chunks.
+5. Backfill from the bulk extracts, with `ingestion_runs` making it resumable.
+6. Workspace layer: saved searches, tracking, and the company profile; saved searches begin driving attachment fetch priority.
+7. Web UI (thin, local) and MCP server, organized around entities from the start.
+8. Second and third adapters: SAM.gov entity registrations, then USAspending / FPDS, and with them the first real context view: opportunity, agency, incumbent, award history, officials. This is the first moment the tool is a terminal rather than a search box.
+9. Community era: capability-scoped plugin interface built on the adapter interface, first outside issues, first community adapters (forecasts, officials, budget).
+10. (Optional, distant) hosted deployment of the same engine.
