@@ -1,0 +1,20 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Local data
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
