@@ -5,6 +5,8 @@
 
 # Local data
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
 *.db
 *.db-journal

@@ -1,6 +1,6 @@
 # Project Design Reference
 *Open source government contracting business development intelligence ecosystem - design elements, constraints, and decisions*\
-*Status: living document, pre-code. Last updated: 2026-09-04*
+*Status: living document; §8 mirrors `src/mentor/migrations/`. Last updated: 2026-09-06*
 
 ---
 
@@ -98,41 +98,43 @@ Each source is an adapter (§4) and is described by what it contributes to the g
 
 ## 8. Draft v1 schema (opportunities engine)
 
-*Working draft; refine before first migration.*
+*Mirrors the numbered migrations in `src/mentor/migrations/`. Tables marked (later) are designed but not yet created.*
 
 **Identity and provenance layer (public data, the spine of the graph):**
-- `sources`: Registry of adapters: source id, adapter version, terms or license of the upstream data, last successful run. Every fact and every ingested row points here.
-- `entities`: One row per organization or place: `entity_id`, kind (agency / office / contractor / place), canonical name, natural keys where the source provides them (`agency_path_code`, `uei`, `cage`), parent entity, `source_id`, `first_seen_at`, `last_seen_at`. Agencies and offices come from SAM.gov agency path codes in v1; contractors arrive with source 3.
-- `entity_aliases`: Every name string seen for an entity: alias, `entity_id` (null while unresolved), `source_id`, resolution method (exact_key / manual / fuzzy / llm), confidence, `resolved_at`. Unresolved aliases are the work queue for future resolvers.
+- `sources`: Registry of adapters: `source_id`, name, adapter version, terms or license of the upstream data, `last_run_at`. Every fact and every ingested row points here. Seeded with `sam_opportunities_api` and `sam_bulk_csv`.
+- `entities`: One row per organization or place: `entity_id`, kind (agency / office / contractor / place), canonical name, natural keys where the source provides them (`agency_path_code`, `uei`, `cage`), parent entity, `source_id`, `first_seen_at`, `last_seen_at`. Agencies and offices come from SAM.gov agency path codes in v1; contractors arrive with source 3. Natural keys are unique where present (SQLite treats nulls as distinct).
+- `entity_aliases`: Every name string seen for an entity: alias, `entity_id` (null while unresolved), `source_id`, resolution method (exact_key / manual / fuzzy / llm), confidence, `resolved_at`. Unresolved aliases are the work queue for future resolvers; the schema enforces that `entity_id`, resolution method, and `resolved_at` are null together or set together.
 - `people`: Officials in their public capacity only (principle 8): `person_id`, name, role title, `entity_id` of the organization, `source_id`, `first_seen_at`, `last_seen_at`. Empty in v1; populated by sources 4 and 5.
-- `contracts`: One row per award: `piid`, awarding `entity_id`, vendor `entity_id`, value, period of performance, `source_id`. Empty in v1; populated by source 4.
-- `facts`: Append-only assertions about any subject: subject type and id (entity / person / contract / notice), predicate, value (typed as text, number, date, or reference), `source_id`, source reference (URL, document id, or row key), `observed_at`, confidence, extraction method and model where an LLM produced it. Facts are never edited; a correction is a new fact with a later `observed_at`.
+- `contracts`: One row per award: `piid` (indexed, not unique: FPDS scopes uniqueness by awarding agency), awarding `entity_id`, vendor `entity_id`, value, period of performance, `source_id`. Empty in v1; populated by source 4.
+- `facts`: Append-only assertions about any subject: subject type and id (entity / person / contract / notice), predicate, value (typed as text, number, date, or reference), `source_id`, source reference (URL, document id, or row key), `observed_at`, confidence, extraction method and model where an LLM produced it. The value is stored as text with a `value_type` tag. Facts are never edited; a correction is a new fact with a later `observed_at`, and triggers reject `UPDATE` and `DELETE` on the table.
 
 **Ingestion layer (public data, append-only bias):**
-- `notices`: One row per SAM.gov notice: `notice_id` (natural PK), solicitation number, title, notice_type, `full_parent_path_name` and `full_parent_path_code` (the current v2 agency-hierarchy fields; the older `department` / `subtier` / `office` fields are deprecated and are not given typed columns), `agency_entity_id` resolved from the path code, naics_code, psc_code, set_aside_code, posted_at, response_deadline, place_of_performance, active flag, `first_seen_at`, `last_seen_at`, `source_id` (API or bulk extract), description (full text), `raw_json` (verbatim API payload, or the CSV row as JSON for bulk-sourced rows).
-- `notice_versions`: Full snapshot per detected change; amendments are the norm in this domain, and deadline-change history is itself intelligence.
-- `attachments`: Files linked to a notice (solicitation docs, amendments). Rows are created from `resourceLinks` at ingestion time; the file itself is fetched later by the priority queue. Columns: source URL, `fetch_status` (pending / fetched / failed / skipped), `priority`, `fetched_at`, `ingestion_run_id`, on-disk path, content hash, extracted text.
-- `ingestion_runs`: One row per adapter run: `source_id`, window queried (posted-from / posted-to), started and finished timestamps, records returned, requests spent, quota remaining as reported by the API, status, error text, and a resume cursor (page offset). Every API request is attributed to a run. This is what makes partial backfills resumable and the daily budget reasonable.
-- `naics_codes`, `psc_codes`: Reference tables for clean filtering and joins. Agencies are entities, not a separate reference table.
+- `notices`: One row per SAM.gov notice: `notice_id` (natural key, unique; an integer rowid `id` exists alongside it because FTS5 external-content and vector tables key on a stable integer rowid), solicitation number, title, notice_type, `full_parent_path_name` and `full_parent_path_code` (the current v2 agency-hierarchy fields; the older `department` / `subtier` / `office` fields are deprecated and are not given typed columns), `agency_entity_id` resolved from the path code, naics_code, psc_code, set_aside_code, posted_at, response_deadline, place_of_performance, active flag, `first_seen_at`, `last_seen_at`, `source_id` (API or bulk extract), description (full text; null until fetched, since the v2 API returns a URL), `raw_json` (verbatim API payload, or the CSV row as JSON for bulk-sourced rows).
+- `notice_versions`: Full snapshot per detected change; amendments are the norm in this domain, and deadline-change history is itself intelligence. Columns: `notice_id`, `observed_at`, `raw_hash` (sha256 of `raw_json`; a change is detected when the hash differs), `raw_json`.
+- `attachments`: Files linked to a notice (solicitation docs, amendments). Rows are created from `resourceLinks` at ingestion time; the file itself is fetched later by the priority queue. Columns: source URL, filename (learned at fetch time), `fetch_status` (pending / fetched / failed / skipped), `priority`, `fetched_at`, `ingestion_run_id` (the run that fetched the file; null while pending), on-disk path, content hash, extracted text. Unique on (`notice_id`, URL).
+- `ingestion_runs`: One row per adapter run: `source_id`, window queried (posted-from / posted-to), started and finished timestamps, records returned, requests spent, quota remaining as reported by the API, status (running / succeeded / failed), error text, and a resume cursor (page offset). Every API request is attributed to a run. This is what makes partial backfills resumable and the daily budget reasonable.
+- `api_requests`: One row per SAM.gov HTTP request: `run_id`, endpoint (the URL with the API key parameter stripped; the key is never stored), `notice_id` where the request concerns one notice, HTTP status code (null if no response), response bytes, `requested_at`, error text. `ingestion_runs` keeps aggregate counts; this log is what makes them auditable and is what the daily budget check counts.
+- `naics_codes`, `psc_codes`: Reference tables for clean filtering and joins. Not foreign-key targets: notices carry the codes as plain text so ingestion never depends on reference data being loaded. Agencies are entities, not a separate reference table.
 
 **Search layer (derived, rebuildable):**
-- `notices_fts`: FTS5 virtual table over title + description + attachment text.
-- `notice_embeddings`: Vector per notice (and per attachment chunk) for semantic search; embedding model recorded per row so re-embedding is tractable.
+- `notices_fts`: FTS5 external-content table over notice title + description, kept current by insert / update / delete triggers and rebuildable with `INSERT INTO notices_fts(notices_fts) VALUES ('rebuild')`. Attachment text gets its own `attachments_fts` when extraction lands (§9 step 3).
+- `notice_embeddings` (later, §9 step 4): Vector per notice (and per attachment chunk) for semantic search; embedding model recorded per row so re-embedding is tractable.
 
 **Workspace layer (user data -- kept strictly separate from public data):**
-- `users`: Present from day one even though v1 is single-user.
-- `company_profiles`: The user's own company, `user_id` FK: UEI and CAGE (which link it to its own public entity row), NAICS list, size and socioeconomic certifications, capability statement text, target agencies. The input that makes fit scoring, gap analysis, and PWin judgment possible.
-- `company_past_performance`: `user_id` FK; one row per contract the company has performed: `contract_id` where it resolves to a public award, otherwise free text; customer entity, value, period, relevance notes.
-- `company_partners`: `user_id` FK; teaming partners and competitors of interest, each linked to a public `entity_id` where known, with a relationship type and notes.
-- `saved_searches`: `user_id` FK; named query definitions (keywords, NAICS list, set-asides, agencies, deadline windows). The future alerting primitive, and the input to attachment fetch priority.
-- `tracked_opportunities`: `user_id` FK; the user's pipeline: notice_id + stage (watching / pursuing / bid / no-bid / submitted / won / lost), current pwin, notes, tags.
-- `tracked_opportunity_events`: Append-only log of stage and pwin changes (tracked opportunity, `user_id`, changed_at, field, old value, new value). PWin trajectory is intelligence by the same argument that justifies `notice_versions`.
-- `tracked_entities`: `user_id` FK; agencies, contractors, and officials the user follows, which also drive adapter slice selection for sources 3 and 4.
-- `tags`, `tracked_opportunity_tags`: Freeform organization; `tags` carries a `user_id` FK.
+- `users`: Present from day one even though v1 is single-user. Columns: `user_id`, name, `created_at`; seeded with user 1, `local`.
+- `company_profiles` (later, §9 step 6): The user's own company, `user_id` FK: UEI and CAGE (which link it to its own public entity row), NAICS list, size and socioeconomic certifications, capability statement text, target agencies. The input that makes fit scoring, gap analysis, and PWin judgment possible.
+- `company_past_performance` (later, §9 step 6): `user_id` FK; one row per contract the company has performed: `contract_id` where it resolves to a public award, otherwise free text; customer entity, value, period, relevance notes.
+- `company_partners` (later, §9 step 6): `user_id` FK; teaming partners and competitors of interest, each linked to a public `entity_id` where known, with a relationship type and notes.
+- `saved_searches` (later, §9 step 6): `user_id` FK; named query definitions (keywords, NAICS list, set-asides, agencies, deadline windows). The future alerting primitive, and the input to attachment fetch priority.
+- `tracked_opportunities` (later, §9 step 6): `user_id` FK; the user's pipeline: notice_id + stage (watching / pursuing / bid / no-bid / submitted / won / lost), current pwin, notes, tags.
+- `tracked_opportunity_events` (later, §9 step 6): Append-only log of stage and pwin changes (tracked opportunity, `user_id`, changed_at, field, old value, new value). PWin trajectory is intelligence by the same argument that justifies `notice_versions`.
+- `tracked_entities` (later, §9 step 6): `user_id` FK; agencies, contractors, and officials the user follows, which also drive adapter slice selection for sources 3 and 4.
+- `tags`, `tracked_opportunity_tags` (later, §9 step 6): Freeform organization; `tags` carries a `user_id` FK.
 
 **Design rules:**
 - Raw + typed ("ELT") pattern: always keep `raw_json`; typed columns are a parse that can be re-run when the parser improves.
-- All timestamps UTC. Natural keys from the source where stable (`notice_id`, `uei`, `piid`).
+- All timestamps are text in ISO-8601 UTC, `YYYY-MM-DDTHH:MM:SSZ`. Natural keys from the source where stable (`notice_id`, `uei`, `piid`).
+- Schema changes are numbered SQL files in `src/mentor/migrations/`, applied in order by `mentor db migrate`, each inside one transaction, and recorded in `schema_migrations` (name, `applied_at`), which the migrate command creates itself.
 - Every ingested row resolves to an entity by exact key or records an unresolved alias. Resolution is never silent and never destructive; a wrong merge is undone by re-resolving the aliases.
 - Every fact names its source. Rows in `facts` are append-only and are never updated in place.
 - Nothing in the identity or ingestion layers is deleted. When a notice stops appearing in the API or the active extract, `active` goes false and `last_seen_at` stops advancing; the row, its versions, and its attachments persist.
