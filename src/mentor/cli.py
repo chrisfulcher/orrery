@@ -11,7 +11,7 @@ import typer
 from mentor import __version__, db, query
 from mentor import quota as quota_module
 from mentor.config import Settings
-from mentor.embed.client import EmbeddingError
+from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
 from mentor.fetch import queue
@@ -162,16 +162,22 @@ def embed(
 def search(
     text: Annotated[str, typer.Argument(metavar="QUERY", help="Words, phrases, or FTS5 syntax.")],
     limit: Annotated[int, typer.Option(help="Maximum notices to show.")] = 20,
+    semantic: Annotated[
+        bool, typer.Option("--semantic", help="Rank by meaning via the embedding endpoint.")
+    ] = False,
     json_output: JsonFlag = False,
 ) -> None:
     """Search notice text and attachment text; one best hit per notice."""
     settings = Settings()
     with closing(db.connect(settings.db_path)) as conn:
-        try:
-            hits = query.search(conn, text, limit=limit)
-        except query.InvalidQuery as exc:
-            typer.echo(f"invalid query: {exc}", err=True)
-            raise typer.Exit(1) from exc
+        if semantic:
+            hits = _semantic_hits(conn, settings, text, limit)
+        else:
+            try:
+                hits = query.search(conn, text, limit=limit)
+            except query.InvalidQuery as exc:
+                typer.echo(f"invalid query: {exc}", err=True)
+                raise typer.Exit(1) from exc
     if json_output:
         print_json([dataclasses.asdict(hit) for hit in hits])
         return
@@ -183,7 +189,23 @@ def search(
             typer.echo("")
         typer.echo(f"{hit.notice_id}  {hit.title}")
         typer.echo(f"  {hit.agency or '-'}  deadline {hit.response_deadline or '-'}")
-        typer.echo(f"  {hit.source}: {hit.snippet}")
+        page = f" p.{hit.page}" if hit.page else ""
+        typer.echo(f"  {hit.source}{page}: {hit.snippet}")
+
+
+def _semantic_hits(conn, settings: Settings, text: str, limit: int) -> list[query.SearchHit]:
+    try:
+        db.load_vec(conn)
+    except db.VecUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    try:
+        with EmbeddingClient(settings) as client:
+            [vector] = client.embed([text])
+    except EmbeddingError as exc:
+        typer.echo(f"search stopped: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    return query.semantic_search(conn, pack(vector), model=settings.embed_model, limit=limit)
 
 
 @ingest_app.command("notices")

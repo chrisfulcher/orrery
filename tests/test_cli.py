@@ -255,6 +255,7 @@ def test_extract_search_and_reindex(
         "source",
         "snippet",
         "rank",
+        "page",
     }
 
     assert runner.invoke(app, ["search", "nothing-here-zz"], env=env).output.strip() == "no matches"
@@ -296,3 +297,31 @@ def test_embed_command_and_unreachable_endpoint(
         "chunks": 0,
         "model": "nomic-embed-text",
     }
+
+
+def test_semantic_search_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock, make_pdf
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    httpx_mock.add_response(
+        url=re.compile(r".*resources/files/.*"),
+        content=make_pdf(["Deliverables include a xylophone."]),
+        headers={"Content-Disposition": "attachment; filename=sow.pdf"},
+    )
+    assert (
+        runner.invoke(app, ["fetch", "--budget", "0", "--max-attachments", "1"], env=env).exit_code
+        == 0
+    )
+    assert runner.invoke(app, ["extract"], env=env).exit_code == 0
+    register_fake_embeddings(httpx_mock, [])
+    assert runner.invoke(app, ["embed"], env=env).exit_code == 0
+
+    result = runner.invoke(app, ["search", "--semantic", "xylophone"], env=env)
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[2].startswith("  sow.pdf p.1: Deliverables include a xylophone.")
+
+    result = runner.invoke(app, ["search", "--semantic", "xylophone", "--json"], env=env)
+    payload = json.loads(result.output)
+    assert payload[0]["page"] == 1 and payload[0]["source"] == "sow.pdf"

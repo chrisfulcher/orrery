@@ -4,9 +4,9 @@
 
 ## Status
 
-Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and full-text search across all of it. The Dockerfile and compose file are new.
+Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. The Dockerfile and compose file are new.
 
-Not there yet: semantic search, backfill from the bulk extracts, saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+Not there yet: backfill from the bulk extracts, saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -44,7 +44,9 @@ v1 deliberately does not include a hosted service, accounts, telemetry, third-pa
 
 A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Each search page and each notice description is one request; attachment files download without a key and do not count. Ten a day is enough to try a narrow slice, and a thousand is the budget the tool is designed around.
 
-**A model endpoint.** Either a local runtime such as Ollama with a small model, or any OpenAI-compatible endpoint with your own key. Local models handle the high-volume work (classification, extraction, embeddings); a frontier model is optional for heavy reasoning.
+**An embedding endpoint** (optional; needed only for `mentor embed` and `mentor search --semantic`). Any OpenAI-compatible `/embeddings` endpoint works. The default is a local [Ollama](https://ollama.com): install it, run `ollama pull nomic-embed-text`, and the defaults (`MENTOR_EMBED_BASE_URL=http://localhost:11434/v1`, `MENTOR_EMBED_MODEL=nomic-embed-text`, no key) already point at it. For a cloud endpoint set the base URL, the model name, and `MENTOR_EMBED_API_KEY`.
+
+What leaves your machine: `mentor embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `mentor search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else.
 
 ## Quickstart
 
@@ -65,7 +67,9 @@ uv run mentor ingest notices      # yesterday's notices for your NAICS codes; on
 uv run mentor fetch --dry-run     # what would be fetched, and today's remaining budget
 uv run mentor fetch               # descriptions within the budget, then attachments (free)
 uv run mentor extract             # PDF text; spends no quota
+uv run mentor embed               # optional: chunk and embed via your endpoint
 uv run mentor search "statement of work"
+uv run mentor search --semantic "on-site help desk staffing"
 uv run mentor quota
 ```
 
@@ -81,11 +85,13 @@ docker compose run --rm mentor ingest notices
 docker compose run --rm mentor fetch --dry-run
 docker compose run --rm mentor fetch
 docker compose run --rm mentor extract
+docker compose run --rm mentor embed
 docker compose run --rm mentor search "statement of work"
+docker compose run --rm mentor search --semantic "on-site help desk staffing"
 docker compose run --rm mentor quota
 ```
 
-The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container.
+The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
 Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 

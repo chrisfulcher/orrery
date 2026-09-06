@@ -24,7 +24,9 @@ class SearchHit:
     """'notice' for the notice's own text, otherwise the attachment filename."""
     snippet: str
     rank: float
-    """bm25; lower is better."""
+    """bm25 for keyword hits, cosine distance for semantic hits; lower is better in both."""
+    page: int | None = None
+    """1-based page of an attachment hit; None for notice text and for keyword hits."""
 
 
 SEARCH = """
@@ -49,6 +51,41 @@ GROUP BY h.nid
 ORDER BY rank, n.posted_at DESC
 LIMIT :limit
 """
+
+
+SEMANTIC_SEARCH = """
+WITH hits AS (
+    SELECT notice_id, attachment_id, page, text, vec_distance_cosine(vector, :q) AS distance
+    FROM embeddings WHERE model = :model
+)
+SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
+       coalesce(a.filename, 'notice') AS source, h.text, min(h.distance) AS rank, h.page
+FROM hits AS h
+JOIN notices AS n ON n.notice_id = h.notice_id
+LEFT JOIN attachments AS a ON a.attachment_id = h.attachment_id
+LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
+GROUP BY h.notice_id
+ORDER BY rank, n.posted_at DESC
+LIMIT :limit
+"""
+
+
+def semantic_search(
+    conn: sqlite3.Connection, vector: bytes, *, model: str, limit: int = 20
+) -> list[SearchHit]:
+    """Nearest chunk per notice by cosine distance over rows embedded with ``model``.
+
+    ``vector`` is the query embedding as a float32 blob (``mentor.embed.client.pack``); the
+    caller embeds the query, so this module never touches the network. The connection must
+    have ``db.load_vec`` applied.
+    """
+    rows = conn.execute(SEMANTIC_SEARCH, {"q": vector, "model": model, "limit": limit}).fetchall()
+    return [SearchHit(*row[:6], _snippet(row[6]), row[7], row[8]) for row in rows]
+
+
+def _snippet(text: str, width: int = 200) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= width else text[:width].rsplit(" ", 1)[0] + "..."
 
 
 def search(conn: sqlite3.Connection, text: str, *, limit: int = 20) -> list[SearchHit]:

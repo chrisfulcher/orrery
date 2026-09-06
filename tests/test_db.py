@@ -1,10 +1,11 @@
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
 
-from mentor import db
+from mentor import db, query
 
 EXPECTED_TABLES = {
     "sources",
@@ -171,3 +172,18 @@ def test_fts_migration_over_existing_rows(
         "SELECT rowid FROM attachments_fts WHERE attachments_fts MATCH 'xenon'"
     ).fetchall()
     assert rows == [(1,)]
+
+
+def test_load_vec_registers_vector_functions(conn: sqlite3.Connection) -> None:
+    db.load_vec(conn)
+    (version,) = conn.execute("SELECT vec_version()").fetchone()
+    assert version.startswith("v")
+
+
+def test_load_vec_unavailable_leaves_keyword_search_working(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "sqlite_vec", None)
+    with pytest.raises(db.VecUnavailable):
+        db.load_vec(conn)
+    assert query.search(conn, "anything") == []

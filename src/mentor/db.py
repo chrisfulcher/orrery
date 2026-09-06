@@ -27,6 +27,28 @@ def utcnow() -> str:
     return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
 
+class VecUnavailable(RuntimeError):
+    """This Python's sqlite3 cannot load extensions; semantic search needs sqlite-vec."""
+
+
+def load_vec(conn: sqlite3.Connection) -> None:
+    """Load sqlite-vec into ``conn``. Call once per connection, and only where vector
+    functions are used; everything else works without it."""
+    try:
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        try:
+            sqlite_vec.load(conn)
+        finally:
+            conn.enable_load_extension(False)
+    except (ImportError, AttributeError, sqlite3.OperationalError) as exc:
+        raise VecUnavailable(
+            "semantic search needs the sqlite-vec extension, and this Python's sqlite3 cannot"
+            " load extensions (built without --enable-loadable-sqlite-extensions)"
+        ) from exc
+
+
 @dataclass(frozen=True)
 class Status:
     applied: list[str]

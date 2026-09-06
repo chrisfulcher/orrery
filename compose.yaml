@@ -9,3 +9,5 @@ services:
       MENTOR_DATA_DIR: /data   # always the mount below, whatever .env says
     volumes:
       - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # a host Ollama, for MENTOR_EMBED_BASE_URL

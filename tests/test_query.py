@@ -2,8 +2,12 @@ import sqlite3
 from collections.abc import Callable
 
 import pytest
+from conftest import fake_vector
 
-from mentor import query
+from mentor import db, query
+from mentor.config import Settings
+from mentor.embed.client import pack
+from mentor.embed.pipeline import embed_pending
 
 Seed = Callable[[dict | None], None]
 
@@ -112,3 +116,37 @@ def test_rebuild_restores_a_dropped_index_row(
     query.rebuild_search(conn)
 
     assert [h.notice_id for h in query.search(conn, "yttrium")] == [notice_with_links]
+
+
+def test_semantic_search_ranks_by_meaning(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    notice_with_links: str,
+    fake_embeddings: list[list[str]],
+) -> None:
+    set_text(conn, attachments_of(conn, notice_with_links)[0], "sow.pdf", "Xylophone upkeep")
+    (other,) = conn.execute(
+        "SELECT notice_id FROM notices WHERE notice_id <> ? LIMIT 1", (notice_with_links,)
+    ).fetchone()
+    conn.execute(
+        "UPDATE notices SET description = 'Zeppelin hangar', description_status = 'fetched'"
+        " WHERE notice_id = ?",
+        (other,),
+    )
+    embed_pending(conn, settings)
+    db.load_vec(conn)
+
+    hits = query.semantic_search(conn, pack(fake_vector("xylophone")), model=settings.embed_model)
+
+    assert [h.notice_id for h in hits] == [notice_with_links, other]
+    assert hits[0].source == "sow.pdf" and hits[0].page == 1
+    assert hits[1].source == "notice" and hits[1].page is None
+    assert hits[0].rank < hits[1].rank
+    assert "[" not in hits[0].snippet and len(hits[0].snippet) <= 203
+    assert len(query.semantic_search(conn, pack([1.0, 0, 0, 1.0]), model="other", limit=5)) == 0
+    assert (
+        len(
+            query.semantic_search(conn, pack([1.0, 0, 0, 1.0]), model=settings.embed_model, limit=1)
+        )
+        == 1
+    )
