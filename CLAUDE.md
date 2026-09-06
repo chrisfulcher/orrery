@@ -33,7 +33,10 @@ mentor is a free, open source, self-hosted business development intelligence too
 
 ## Stack
 
-Not yet chosen. The language, toolchain, and layout are decided in the first feature loop plan (`docs/DESIGN.md` §9 step 3), and this section is updated then. Until that decision is made, add no scaffolding and no language-specific files.
+- Python 3.13, pinned in `.mise.toml` together with uv. Dependencies live in `pyproject.toml` with a committed `uv.lock`; add a dependency only in the commit that first uses it.
+- Source layout `src/mentor/`, tests in `tests/`, CLI entry point `mentor` (typer).
+- Storage is stdlib `sqlite3`, no ORM. Schema changes are numbered SQL files in `src/mentor/migrations/`, applied in order by `mentor db migrate`, and mirrored in `docs/DESIGN.md` §8 in the same commit.
+- Commands: `uv sync` (install), `uv run mentor` (CLI), `uv run pytest` (tests), `uv run ruff check . && uv run ruff format --check .` (lint and format). All four must pass before a commit.
 
 ## Repo hygiene
 

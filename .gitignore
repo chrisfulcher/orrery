@@ -18,3 +18,13 @@
 *~
 .idea/
 .vscode/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local data directory (database, downloaded attachments)
+data/
