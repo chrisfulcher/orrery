@@ -6,6 +6,8 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
 dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.11",
     "pydantic-settings>=2.7",
     "typer>=0.12",
 ]
@@ -13,6 +15,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-httpx>=0.36",
     "ruff>=0.5",
 ]
 
