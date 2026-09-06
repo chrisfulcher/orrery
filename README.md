@@ -4,7 +4,9 @@
 
 ## Status
 
-Pre-code. The design is complete and lives in [`docs/DESIGN.md`](docs/DESIGN.md); nothing in this repository runs yet. The first feature loop is described there in §9.
+Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and full-text search across all of it. The Dockerfile and compose file are new.
+
+Not there yet: semantic search, backfill from the bulk extracts, saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -43,6 +45,49 @@ v1 deliberately does not include a hosted service, accounts, telemetry, third-pa
 A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Each search page and each notice description is one request; attachment files download without a key and do not count. Ten a day is enough to try a narrow slice, and a thousand is the budget the tool is designed around.
 
 **A model endpoint.** Either a local runtime such as Ollama with a small model, or any OpenAI-compatible endpoint with your own key. Local models handle the high-volume work (classification, extraction, embeddings); a frontier model is optional for heavy reasoning.
+
+## Quickstart
+
+Both paths start from a `.env` file. Copy the example and set `MENTOR_SAM_API_KEY` (see [Before you start](#before-you-start)) and `MENTOR_NAICS`; the other settings are documented in the file and default sensibly.
+
+```
+cp .env.example .env
+```
+
+### From source
+
+Requires Python 3.13 and uv; `mise install` provides both from `.mise.toml`.
+
+```
+uv sync
+uv run mentor db migrate
+uv run mentor ingest notices      # yesterday's notices for your NAICS codes; one request per page
+uv run mentor fetch --dry-run     # what would be fetched, and today's remaining budget
+uv run mentor fetch               # descriptions within the budget, then attachments (free)
+uv run mentor extract             # PDF text; spends no quota
+uv run mentor search "statement of work"
+uv run mentor quota
+```
+
+### With Docker
+
+The image is built from the repository's own `Dockerfile`, which installs only what `uv.lock` pins. Building fetches the `python:3.13-slim` base image and the locked packages from PyPI, nothing else. There is no daemon yet, so each command runs in a throwaway container; `docker compose up` is not the verb.
+
+```
+mkdir -p data                     # mounted at /data inside the container
+docker compose build
+docker compose run --rm mentor db migrate
+docker compose run --rm mentor ingest notices
+docker compose run --rm mentor fetch --dry-run
+docker compose run --rm mentor fetch
+docker compose run --rm mentor extract
+docker compose run --rm mentor search "statement of work"
+docker compose run --rm mentor quota
+```
+
+The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container.
+
+Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 
 ## Contributing
 

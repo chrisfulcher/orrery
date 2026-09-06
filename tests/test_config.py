@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -33,3 +34,16 @@ def test_api_key_is_read_but_never_shown(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "hunter2" not in repr(settings)
     assert "hunter2" not in str(settings)
     assert "hunter2" not in settings.model_dump_json()
+
+
+EXAMPLE = Path(__file__).parents[1] / ".env.example"
+
+
+def test_env_example_lists_every_setting() -> None:
+    names = re.findall(r"^MENTOR_([A-Z_]+)=", EXAMPLE.read_text(), flags=re.MULTILINE)
+    assert len(names) == len(set(names))
+    assert {name.lower() for name in names} == set(Settings.model_fields)
+
+
+def test_env_example_is_the_defaults() -> None:
+    assert Settings(_env_file=EXAMPLE).model_dump() == Settings(_env_file=None).model_dump()

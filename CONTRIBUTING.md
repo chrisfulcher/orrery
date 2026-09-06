@@ -2,7 +2,7 @@
 
 ## Status
 
-The project is pre-code. Until the first feature loop lands, the most valuable contribution is design discussion: read [`docs/DESIGN.md`](docs/DESIGN.md) first, then open an issue that references the section you are responding to. The design doc is the source of truth; if a proposal changes it, the pull request updates it.
+The first feature loop is in (`docs/DESIGN.md` §9 step 3). Read the design doc first; issues that reference the section they respond to are the most useful contribution, along with reports from running the loop against your own NAICS slice. The design doc is the source of truth; if a proposal changes it, the pull request updates it.
 
 ## Ground rules
 
