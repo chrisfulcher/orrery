@@ -12,6 +12,12 @@ def test_defaults() -> None:
     assert settings.sam_api_key is None
     assert settings.sam_daily_budget == 10
     assert settings.sam_base_url == "https://api.sam.gov"
+    assert settings.naics == []
+
+
+def test_naics_is_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MENTOR_NAICS", "541512, 541511,")
+    assert Settings(_env_file=None).naics == ["541512", "541511"]
 
 
 def test_data_dir_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

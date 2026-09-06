@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "users",
 }
 
+MIGRATIONS = ["0001_initial.sql", "0002_description_queue.sql"]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
 SOURCE = "sam_opportunities_api"
@@ -47,16 +48,16 @@ def fts_hits(conn: sqlite3.Connection, query: str) -> list[str]:
 def test_migrate_is_idempotent(conn: sqlite3.Connection) -> None:
     assert db.migrate(conn) == []
     (count,) = conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
-    assert count == 1
+    assert count == len(MIGRATIONS)
 
 
-def test_status_lists_initial_migration(conn: sqlite3.Connection) -> None:
-    assert db.status(conn) == db.Status(applied=["0001_initial.sql"], pending=[])
+def test_status_lists_applied_migrations(conn: sqlite3.Connection) -> None:
+    assert db.status(conn) == db.Status(applied=MIGRATIONS, pending=[])
 
 
 def test_status_on_unmigrated_database_writes_nothing(db_path: Path) -> None:
     conn = db.connect(db_path)
-    assert db.status(conn) == db.Status(applied=[], pending=["0001_initial.sql"])
+    assert db.status(conn) == db.Status(applied=[], pending=MIGRATIONS)
     tables = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
     assert tables == (0,)
 

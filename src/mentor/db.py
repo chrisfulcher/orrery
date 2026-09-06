@@ -13,11 +13,18 @@ file must not contain ``BEGIN`` or ``COMMIT``.
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _TIMESTAMP_DEFAULT = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+
+
+def utcnow() -> str:
+    """Now in the stored timestamp format (UTC, second resolution)."""
+    return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
 
 @dataclass(frozen=True)

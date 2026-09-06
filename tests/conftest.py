@@ -25,7 +25,13 @@ def conn(db_path: Path) -> Iterator[sqlite3.Connection]:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(_env_file=None, data_dir=tmp_path, sam_api_key="test-key", sam_daily_budget=10)
+    return Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        sam_api_key="test-key",
+        sam_daily_budget=10,
+        naics=["541512"],
+    )
 
 
 @pytest.fixture
