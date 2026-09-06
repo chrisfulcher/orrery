@@ -34,6 +34,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
     assert result.output.splitlines() == [
         "applied 0001_initial.sql",
         "applied 0002_description_queue.sql",
+        "applied 0003_extraction_and_search.sql",
     ]
     assert (tmp_path / "mentor.sqlite").exists()
 
@@ -47,6 +48,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         f"database: {tmp_path / 'mentor.sqlite'}",
         "applied  0001_initial.sql",
         "applied  0002_description_queue.sql",
+        "applied  0003_extraction_and_search.sql",
     ]
 
 
@@ -210,3 +212,53 @@ def test_fetch_json_and_missing_key(
 
     result = runner.invoke(app, ["fetch"], env={**env, "MENTOR_SAM_API_KEY": ""})
     assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output
+
+
+def test_extract_search_and_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock, make_pdf
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    httpx_mock.add_response(
+        url=re.compile(r".*resources/files/.*"),
+        content=make_pdf(["Deliverables include a xylophone."]),
+        headers={"Content-Disposition": "attachment; filename=sow.pdf"},
+    )
+    assert (
+        runner.invoke(app, ["fetch", "--budget", "0", "--max-attachments", "1"], env=env).exit_code
+        == 0
+    )
+
+    result = runner.invoke(app, ["extract"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "1 extracted, 0 unsupported, 0 failed"
+    result = runner.invoke(app, ["extract", "--json"], env=env)
+    assert json.loads(result.output) == {"done": 0, "unsupported": 0, "failed": 0}
+
+    result = runner.invoke(app, ["search", "xylophone"], env=env)
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert len(lines) == 3 and lines[2].startswith("  sow.pdf: ") and "[xylophone]" in lines[2]
+
+    result = runner.invoke(app, ["search", "xylophone", "--json"], env=env)
+    payload = json.loads(result.output)
+    assert len(payload) == 1 and set(payload[0]) == {
+        "notice_id",
+        "title",
+        "agency",
+        "response_deadline",
+        "posted_at",
+        "source",
+        "snippet",
+        "rank",
+    }
+
+    assert runner.invoke(app, ["search", "nothing-here-zz"], env=env).output.strip() == "no matches"
+    result = runner.invoke(app, ["search", ""], env=env)
+    assert result.exit_code == 1 and "invalid query" in result.output
+
+    result = runner.invoke(app, ["db", "reindex"], env=env)
+    assert result.exit_code == 0 and result.output.strip() == "search index rebuilt"
+    assert (
+        len(json.loads(runner.invoke(app, ["search", "xylophone", "--json"], env=env).output)) == 1
+    )

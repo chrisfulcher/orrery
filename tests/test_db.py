@@ -1,3 +1,4 @@
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -20,10 +21,11 @@ EXPECTED_TABLES = {
     "naics_codes",
     "psc_codes",
     "notices_fts",
+    "attachments_fts",
     "users",
 }
 
-MIGRATIONS = ["0001_initial.sql", "0002_description_queue.sql"]
+MIGRATIONS = ["0001_initial.sql", "0002_description_queue.sql", "0003_extraction_and_search.sql"]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
 SOURCE = "sam_opportunities_api"
@@ -138,3 +140,28 @@ def test_failed_migration_rolls_back(
     assert db.applied(conn) == []
     rows = conn.execute("SELECT name FROM sqlite_master WHERE name = 'half_done'").fetchall()
     assert rows == []
+
+
+def test_fts_migration_over_existing_rows(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0003 builds attachments_fts over existing rows; updating them must not corrupt it."""
+    real = db.MIGRATIONS_DIR
+    staged = tmp_path / "migrations"
+    staged.mkdir()
+    for name in MIGRATIONS[:2]:
+        shutil.copy(real / name, staged / name)
+    monkeypatch.setattr(db, "MIGRATIONS_DIR", staged)
+    conn = db.connect(db_path)
+    db.migrate(conn)
+    insert_notice(conn, "n1", "Title")
+    conn.execute("INSERT INTO attachments (notice_id, url) VALUES ('n1', 'https://x/1')")
+
+    shutil.copy(real / MIGRATIONS[2], staged / MIGRATIONS[2])
+    db.migrate(conn)
+    conn.execute("UPDATE attachments SET extracted_text = 'xenon lamp', extract_status = 'done'")
+
+    rows = conn.execute(
+        "SELECT rowid FROM attachments_fts WHERE attachments_fts MATCH 'xenon'"
+    ).fetchall()
+    assert rows == [(1,)]

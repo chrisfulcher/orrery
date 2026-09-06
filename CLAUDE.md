@@ -36,7 +36,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 
 - Python 3.13, pinned in `.mise.toml` together with uv. Dependencies live in `pyproject.toml` with a committed `uv.lock`; add a dependency only in the commit that first uses it.
 - Source layout `src/mentor/`, tests in `tests/`, CLI entry point `mentor` (typer).
-- Interfaces: terminal UI with Textual (`mentor top`), CLI with `--json` on every command that prints data, MCP server, and versioned read-only SQL views named `v_*`. All of them go through one query module; no front end reads the raw tables directly, and the raw tables are not a public interface.
+- Interfaces: terminal UI with Textual (`mentor top`), CLI with `--json` on every command that prints data, MCP server, and versioned read-only SQL views named `v_*`. All of them go through one query module (`src/mentor/query.py`); no front end reads the raw tables directly, and the raw tables are not a public interface.
 - Storage is stdlib `sqlite3`, no ORM. Schema changes are numbered SQL files in `src/mentor/migrations/`, applied in order by `mentor db migrate`, and mirrored in `docs/DESIGN.md` §8 in the same commit.
 - Commands: `uv sync` (install), `uv run mentor` (CLI), `uv run pytest` (tests), `uv run ruff check . && uv run ruff format --check .` (lint and format). All four must pass before a commit.
 

@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.28",
     "pydantic>=2.11",
     "pydantic-settings>=2.7",
+    "pypdf>=6",
     "typer>=0.12",
 ]
 
