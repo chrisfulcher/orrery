@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     naics: Annotated[list[str], NoDecode] = Field(default_factory=list)
     """NAICS codes to ingest, comma-separated in MENTOR_NAICS. Empty means nothing to ingest."""
 
+    fetch_delay: float = 1.0
+    """Seconds to pause between attachment downloads (public files; politeness, not quota)."""
+
+    max_attachment_bytes: int = 100 * 1024 * 1024
+    """Attachments larger than this are recorded as skipped, not downloaded."""
+
     @field_validator("naics", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

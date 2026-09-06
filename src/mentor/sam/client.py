@@ -36,6 +36,10 @@ class SamError(Exception):
     """A SAM.gov request failed. The message never contains the API key."""
 
 
+class AttachmentTooLarge(SamError):
+    """The file exceeds MENTOR_MAX_ATTACHMENT_BYTES; the queue records it as skipped."""
+
+
 @dataclass(frozen=True)
 class DownloadResult:
     path: Path
@@ -107,8 +111,14 @@ class SamClient:
         return self._keyed_request(url, notice_id=notice_id).json()["description"]
 
     def download(self, url: str, dest_dir: Path) -> DownloadResult:
-        """Fetch a public attachment. No key is sent and no ``api_requests`` row is written."""
+        """Fetch a public attachment. No key is sent and no ``api_requests`` row is written.
+
+        Raises ``AttachmentTooLarge`` (a ``SamError``) when the file exceeds the configured
+        cap, checked against ``Content-Length`` before reading and against the bytes
+        actually streamed as a backstop. Never leaves a partial file behind.
+        """
         dest_dir.mkdir(parents=True, exist_ok=True)
+        limit = self._settings.max_attachment_bytes
         digest = hashlib.sha256()
         size = 0
         fd, tmp = tempfile.mkstemp(dir=dest_dir, suffix=".part")
@@ -119,13 +129,20 @@ class SamClient:
             ):
                 if not response.is_success:
                     raise SamError(f"{url}: HTTP {response.status_code}")
+                declared = response.headers.get("content-length")
+                if declared and int(declared) > limit:
+                    raise AttachmentTooLarge(f"{url}: {declared} bytes exceeds {limit}")
                 filename = _filename_from(response.headers.get("content-disposition"))
                 for chunk in response.iter_bytes():
                     out.write(chunk)
                     digest.update(chunk)
                     size += len(chunk)
-        except BaseException:
+                    if size > limit:
+                        raise AttachmentTooLarge(f"{url}: exceeds {limit} bytes")
+        except BaseException as exc:
             Path(tmp).unlink(missing_ok=True)
+            if isinstance(exc, httpx.HTTPError):
+                raise SamError(f"{url}: {type(exc).__name__}: {exc}") from exc
             raise
         sha256 = digest.hexdigest()
         path = dest_dir / f"{sha256[:16]}-{filename}"

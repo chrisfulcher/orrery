@@ -134,3 +134,79 @@ def test_ingest_notices_budget_stop_exits_nonzero(
     assert "ingestion stopped" in result.output
     with closing(db.connect(tmp_path / "mentor.sqlite")) as conn:
         assert conn.execute("SELECT status FROM ingestion_runs").fetchone() == ("failed",)
+
+
+FETCH_ENV = {
+    "MENTOR_SAM_API_KEY": "test-key",
+    "MENTOR_NAICS": "541512",
+    "MENTOR_SAM_DAILY_BUDGET": "10",
+    "MENTOR_FETCH_DELAY": "0",
+}
+SEARCH = re.compile(r".*/opportunities/v2/search.*")
+
+
+def seed_via_cli(tmp_path: Path, httpx_mock: HTTPXMock) -> dict[str, str]:
+    env = {**FETCH_ENV, "MENTOR_DATA_DIR": str(tmp_path)}
+    assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
+    fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
+    httpx_mock.add_response(url=SEARCH, json=fixture)
+    assert runner.invoke(app, ["ingest", "notices"], env=env).exit_code == 0
+    return env
+
+
+def test_fetch_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+
+    result = runner.invoke(app, ["fetch", "--dry-run"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith(
+        "pending: 5 descriptions, 20 attachments; 9 requests remaining today"
+    )
+    assert len(result.output.splitlines()) == 6
+
+    result = runner.invoke(app, ["fetch", "--dry-run", "--json"], env=env)
+    payload = json.loads(result.output)
+    assert set(payload) == {
+        "descriptions_pending",
+        "attachments_pending",
+        "next_descriptions",
+        "budget_remaining",
+    }
+    assert len(httpx_mock.get_requests()) == 1  # only the seed's search
+    with closing(db.connect(tmp_path / "mentor.sqlite")) as conn:
+        assert conn.execute("SELECT count(*) FROM ingestion_runs").fetchone() == (1,)
+
+
+def test_fetch_json_and_missing_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    desc = json.loads((Path(__file__).with_name("fixtures") / "sam_noticedesc_v1.json").read_text())
+    httpx_mock.add_response(url=re.compile(r".*noticedesc.*"), json=desc, is_reusable=True)
+    httpx_mock.add_response(
+        url=re.compile(r".*resources/files/.*"),
+        content=b"%PDF-1.4",
+        headers={"Content-Disposition": "attachment; filename=a.pdf"},
+    )
+
+    result = runner.invoke(app, ["fetch", "--json", "--max-attachments", "1"], env=env)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert set(payload) == {
+        "run_id",
+        "descriptions_fetched",
+        "descriptions_failed",
+        "attachments_fetched",
+        "attachments_failed",
+        "attachments_skipped",
+        "requests_spent",
+        "budget_exhausted",
+    }
+    assert payload["descriptions_fetched"] == 5 and payload["attachments_fetched"] == 1
+
+    result = runner.invoke(app, ["fetch"], env={**env, "MENTOR_SAM_API_KEY": ""})
+    assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output

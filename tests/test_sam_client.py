@@ -8,11 +8,11 @@ from pathlib import Path
 
 import httpx
 import pytest
-from pytest_httpx import HTTPXMock
+from pytest_httpx import HTTPXMock, IteratorStream
 
 from mentor.config import Settings
 from mentor.quota import BudgetExceeded
-from mentor.sam.client import SamClient, SamError, _filename_from
+from mentor.sam.client import AttachmentTooLarge, SamClient, SamError, _filename_from
 
 FIXTURES = Path(__file__).with_name("fixtures")
 DOWNLOAD_URL = "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/abc/download"
@@ -178,3 +178,24 @@ def test_missing_key_is_refused(settings: Settings, conn: sqlite3.Connection, ru
 )
 def test_filename_from_content_disposition(header: str | None, expected: str) -> None:
     assert _filename_from(header) == expected
+
+
+def test_download_transport_error_is_sam_error(
+    httpx_mock: HTTPXMock, client: SamClient, tmp_path: Path
+) -> None:
+    httpx_mock.add_exception(httpx.ConnectError("boom"), url=DOWNLOAD_URL)
+    dest = tmp_path / "attachments"
+    with pytest.raises(SamError, match="ConnectError: boom"):
+        client.download(DOWNLOAD_URL, dest)
+    assert list(dest.iterdir()) == []
+
+
+def test_download_over_limit_streamed_raises_and_leaves_no_file(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(url=DOWNLOAD_URL, stream=IteratorStream([b"abc", b"def", b"ghi"]))
+    small = settings.model_copy(update={"max_attachment_bytes": 5})
+    dest = tmp_path / "attachments"
+    with SamClient(small, conn, run_id) as client, pytest.raises(AttachmentTooLarge):
+        client.download(DOWNLOAD_URL, dest)
+    assert list(dest.iterdir()) == []

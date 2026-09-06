@@ -11,6 +11,7 @@ import typer
 from mentor import __version__, db
 from mentor import quota as quota_module
 from mentor.config import Settings
+from mentor.fetch import queue
 from mentor.ingest import notices
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import SamError
@@ -63,6 +64,56 @@ def quota(json_output: JsonFlag = False) -> None:
         )
     else:
         typer.echo(f"spent {spent} of {budget} today (UTC), {remaining} remaining")
+
+
+@app.command()
+def fetch(
+    budget: Annotated[int | None, typer.Option(help="Cap descriptions fetched this run.")] = None,
+    max_attachments: Annotated[
+        int | None, typer.Option(help="Cap attachment downloads this run.")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show the queue; fetch nothing.")
+    ] = False,
+    json_output: JsonFlag = False,
+) -> None:
+    """Fetch pending notice descriptions (within today's budget) and attachments (free)."""
+    settings = Settings()
+    if dry_run:
+        with closing(db.connect(settings.db_path)) as conn:
+            status = queue.queue_status(conn)
+            remaining = quota_module.remaining(conn, settings)
+        if json_output:
+            print_json({**dataclasses.asdict(status), "budget_remaining": remaining})
+        else:
+            typer.echo(
+                f"pending: {status.descriptions_pending} descriptions,"
+                f" {status.attachments_pending} attachments;"
+                f" {remaining} requests remaining today"
+            )
+            for item in status.next_descriptions:
+                deadline = item.response_deadline or "-"
+                typer.echo(f"  {item.notice_id}  {deadline:20}  {item.title}")
+        return
+    if settings.sam_api_key is None:
+        typer.echo("MENTOR_SAM_API_KEY is not set", err=True)
+        raise typer.Exit(2)
+    with closing(db.connect(settings.db_path)) as conn:
+        result = queue.fetch_pending(conn, settings, budget=budget, max_attachments=max_attachments)
+    if json_output:
+        print_json(dataclasses.asdict(result))
+    else:
+        note = (
+            " (daily budget exhausted; attachments still fetched)"
+            if result.budget_exhausted
+            else ""
+        )
+        typer.echo(
+            f"run {result.run_id}: {result.descriptions_fetched} descriptions fetched,"
+            f" {result.descriptions_failed} failed; {result.attachments_fetched} attachments"
+            f" fetched, {result.attachments_failed} failed, {result.attachments_skipped} skipped;"
+            f" {result.requests_spent} requests{note}"
+        )
 
 
 @ingest_app.command("notices")
