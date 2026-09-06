@@ -21,7 +21,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 - Derived layers (FTS, embeddings, trends) must be rebuildable from ingestion tables at any time.
 - Every workspace table carries `user_id`, even while v1 is single-user.
 - All timestamps are UTC.
-- Every SAM.gov API request is attributed to an `ingestion_runs` row and counted against the daily quota. The daemon stops before the quota does. Attachment fetching is a prioritized queue, never a crawl.
+- Every keyed SAM.gov API request (search pages, notice descriptions) is logged in `api_requests`, attributed to an `ingestion_runs` row, and counted against the daily quota; the daemon stops before the quota does. Attachment files are public URLs that need no key and are not counted, but fetching them is a prioritized, politely rate-limited queue, never a crawl.
 
 ## Workflow
 

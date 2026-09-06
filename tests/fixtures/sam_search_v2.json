@@ -1,0 +1,355 @@
+{
+  "totalRecords": 5,
+  "limit": 25,
+  "offset": 0,
+  "opportunitiesData": [
+    {
+      "active": "Yes",
+      "additionalInfoLink": null,
+      "archiveDate": "2026-10-06",
+      "archiveType": "auto30",
+      "award": {
+        "date": "2026-08-21",
+        "number": "75S20326F80003"
+      },
+      "baseType": "Justification",
+      "classificationCode": "DJ01",
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=cf86f7253efa42bfa093ce5d0642c20f",
+      "fullParentPathCode": "075.7526.75R602",
+      "fullParentPathName": "HEALTH AND HUMAN SERVICES, DEPARTMENT OF.HEALTH RESOURCES AND SERVICES ADMINISTRATION.HRSA HEADQUARTERS",
+      "links": [
+        {
+          "rel": "self",
+          "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=cf86f7253efa42bfa093ce5d0642c20f&limit=1"
+        }
+      ],
+      "naicsCode": "541512",
+      "naicsCodes": [
+        "541512"
+      ],
+      "noticeId": "cf86f7253efa42bfa093ce5d0642c20f",
+      "officeAddress": {
+        "zipcode": "20852",
+        "city": "ROCKVILLE",
+        "countryCode": "USA",
+        "state": "MD"
+      },
+      "organizationType": "OFFICE",
+      "placeOfPerformance": {
+        "city": {
+          "code": "68464",
+          "name": "68464"
+        },
+        "state": {
+          "code": "MD",
+          "name": "Maryland"
+        },
+        "country": {
+          "code": "USA",
+          "name": "UNITED STATES"
+        }
+      },
+      "pointOfContact": [
+        {
+          "fax": null,
+          "type": "primary",
+          "email": "poc1@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 1"
+        }
+      ],
+      "postedDate": "2026-09-05",
+      "resourceLinks": [
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/8a29d4c730784473a2a884783c848234/download"
+      ],
+      "responseDeadLine": null,
+      "solicitationNumber": "75S20326F80003",
+      "title": "SAMHSA IT Security Support",
+      "type": "Justification",
+      "typeOfSetAside": null,
+      "typeOfSetAsideDescription": null,
+      "uiLink": "https://sam.gov/workspace/contract/opp/cf86f7253efa42bfa093ce5d0642c20f/view"
+    },
+    {
+      "active": "Yes",
+      "additionalInfoLink": null,
+      "archiveDate": "2026-09-25",
+      "archiveType": "auto15",
+      "award": null,
+      "baseType": "Solicitation",
+      "classificationCode": "DA10",
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=633f42f21dec477cbd6d88327a7537f3",
+      "fullParentPathCode": "021.2100.AMC.ACC.MICC.FDO EUSTIS.W91QF0",
+      "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE ARMY.AMC.ACC.MISSION INSTALLATION CONTRACTING COMMAND.FDO EUSTIS.W6QM MICC-CARLISLE BARRACKS",
+      "links": [
+        {
+          "rel": "self",
+          "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=633f42f21dec477cbd6d88327a7537f3&limit=1"
+        }
+      ],
+      "naicsCode": "541512",
+      "naicsCodes": [
+        "541512"
+      ],
+      "noticeId": "633f42f21dec477cbd6d88327a7537f3",
+      "officeAddress": {
+        "zipcode": "17013-5072",
+        "city": "CARLISLE BARRACKS",
+        "countryCode": "USA",
+        "state": "PA"
+      },
+      "organizationType": "OFFICE",
+      "placeOfPerformance": {
+        "state": {
+          "code": "PA",
+          "name": "Pennsylvania"
+        },
+        "zip": "17013",
+        "country": {
+          "code": "USA",
+          "name": "UNITED STATES"
+        }
+      },
+      "pointOfContact": [
+        {
+          "fax": null,
+          "type": "primary",
+          "email": "poc2@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 2"
+        },
+        {
+          "fax": null,
+          "type": "secondary",
+          "email": "poc3@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 3"
+        }
+      ],
+      "postedDate": "2026-09-04",
+      "resourceLinks": [
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/014ffc62e00f47f9aa293b243e02b51d/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/088dea79bc484ef4ab408a2cbadce951/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/0f7e52958e764e53a80a8eca695189df/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/236353d8e36a483689eab3eb9ed54da4/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/2a298083218046a49499fd656624c5d1/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/58c4bdb3f7304078ae33f12945ec5e7a/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/925467e3c8f74e6e86b859940771bebf/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/99409fba767b444b85b68fccc2087768/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/9bda22e2ea894b768a072283c797ebc2/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/9c8dc70d54c04129a4921aa0aa727a15/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/c4a40b6c6f6f42deb0fd696826bfd08c/download"
+      ],
+      "responseDeadLine": "2026-09-10T07:00:00-04:00",
+      "solicitationNumber": "W91QF026QA015",
+      "title": "CIO Microsoft Sentinel Implementation FY26",
+      "type": "Solicitation",
+      "typeOfSetAside": "SBA",
+      "typeOfSetAsideDescription": "Small Business Set Aside - Total",
+      "uiLink": "https://sam.gov/workspace/contract/opp/633f42f21dec477cbd6d88327a7537f3/view"
+    },
+    {
+      "active": "Yes",
+      "additionalInfoLink": null,
+      "archiveDate": "2026-09-29",
+      "archiveType": "auto15",
+      "award": null,
+      "baseType": "Solicitation",
+      "classificationCode": "DA01",
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=74b9181dc5b841b4bbf5a70c244eb164",
+      "fullParentPathCode": "017.1700.SSP.N64710",
+      "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE NAVY.SSP.STRATEGIC WEAPONS FAC PAC FINANCIAL",
+      "links": [
+        {
+          "rel": "self",
+          "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=74b9181dc5b841b4bbf5a70c244eb164&limit=1"
+        }
+      ],
+      "naicsCode": "541512",
+      "naicsCodes": [
+        "541512"
+      ],
+      "noticeId": "74b9181dc5b841b4bbf5a70c244eb164",
+      "officeAddress": {
+        "zipcode": "98315-6499",
+        "city": "SILVERDALE",
+        "countryCode": "USA",
+        "state": "WA"
+      },
+      "organizationType": "OFFICE",
+      "placeOfPerformance": {
+        "city": {
+          "code": "64365",
+          "name": "Silverdale"
+        },
+        "state": {
+          "code": "WA",
+          "name": "Washington"
+        },
+        "zip": "98315",
+        "country": {
+          "code": "USA",
+          "name": "UNITED STATES"
+        }
+      },
+      "pointOfContact": [
+        {
+          "fax": null,
+          "type": "primary",
+          "email": "poc4@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 4"
+        },
+        {
+          "fax": null,
+          "type": "secondary",
+          "email": "poc5@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 5"
+        }
+      ],
+      "postedDate": "2026-09-03",
+      "resourceLinks": [
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/5aec26a35db5479f8bc2d70a60b49d56/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/9acc1daafe434f14a9d33b38d3731345/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/a3e8efd1bfd24d85ae944f2270d875da/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/a4288066a4a94e22881c6a3f93e856b8/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/d9f4f2b5d8ff4dc2bf92bdc227abe182/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/dce4d7f6458b4146b40a98b1ed42f95b/download",
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/f911d54af40a4800b20cb7cfbacca992/download"
+      ],
+      "responseDeadLine": "2026-09-14T17:00:00-07:00",
+      "solicitationNumber": "N6471026Q0016",
+      "title": "Microsoft 365 Data Migration Project",
+      "type": "Solicitation",
+      "typeOfSetAside": "NONE",
+      "typeOfSetAsideDescription": "No Set aside used",
+      "uiLink": "https://sam.gov/workspace/contract/opp/74b9181dc5b841b4bbf5a70c244eb164/view"
+    },
+    {
+      "active": "Yes",
+      "additionalInfoLink": null,
+      "archiveDate": "2026-10-03",
+      "archiveType": "auto15",
+      "award": null,
+      "baseType": "Special Notice",
+      "classificationCode": "DA01",
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=26612559c9ec46e1b1b9741c460711de",
+      "fullParentPathCode": "097",
+      "fullParentPathName": "DEPT OF DEFENSE",
+      "links": [
+        {
+          "rel": "self",
+          "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=26612559c9ec46e1b1b9741c460711de&limit=1"
+        }
+      ],
+      "naicsCode": "541512",
+      "naicsCodes": [
+        "541512"
+      ],
+      "noticeId": "26612559c9ec46e1b1b9741c460711de",
+      "officeAddress": null,
+      "organizationType": "DEPARTMENT",
+      "placeOfPerformance": {
+        "city": {
+          "code": "77000",
+          "name": "Tucson"
+        },
+        "state": {
+          "code": "AZ",
+          "name": "Arizona"
+        },
+        "zip": "85707",
+        "country": {
+          "code": "USA",
+          "name": "UNITED STATES"
+        }
+      },
+      "pointOfContact": [
+        {
+          "type": "primary",
+          "email": "poc6@example.gov",
+          "fullName": "Point of Contact 6",
+          "phone": null,
+          "fax": null
+        },
+        {
+          "type": "secondary",
+          "email": "poc7@example.gov",
+          "fullName": "Point of Contact 7",
+          "phone": null,
+          "fax": null
+        }
+      ],
+      "postedDate": "2026-09-03",
+      "resourceLinks": [
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/3da618485fd143079d4c87427d8c7862/download"
+      ],
+      "responseDeadLine": "2026-09-18T12:00:00-04:00",
+      "solicitationNumber": "FA487726QA237",
+      "title": "Intent to Sole Source - Fire Alarm Reporting System (FARS) & PMI",
+      "type": "Special Notice",
+      "typeOfSetAside": "NONE",
+      "typeOfSetAsideDescription": "No Set aside used",
+      "uiLink": "https://sam.gov/workspace/contract/opp/26612559c9ec46e1b1b9741c460711de/view"
+    },
+    {
+      "active": "Yes",
+      "additionalInfoLink": null,
+      "archiveDate": "2026-10-31",
+      "archiveType": "autocustom",
+      "award": null,
+      "baseType": "Combined Synopsis/Solicitation",
+      "classificationCode": "R425",
+      "description": "https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=c26acd2652ef484c960bee98a5723c44",
+      "fullParentPathCode": "021.2100.NGB.JFHQ USPFO MD.USPFO MD PROC.W50S82",
+      "fullParentPathName": "DEPT OF DEFENSE.DEPT OF THE ARMY.NATIONAL GUARD BUREAU.JFHQ USPFO MD.USPFO MD PROCUREMENT.W7ND USPFO ACTIVITY MDANG 175",
+      "links": [
+        {
+          "rel": "self",
+          "href": "https://api.sam.gov/prod/opportunities/v2/search?noticeid=c26acd2652ef484c960bee98a5723c44&limit=1"
+        }
+      ],
+      "naicsCode": "541512",
+      "naicsCodes": [
+        "541512"
+      ],
+      "noticeId": "c26acd2652ef484c960bee98a5723c44",
+      "officeAddress": {
+        "zipcode": "21220-2801",
+        "city": "MIDDLE RIVER",
+        "countryCode": "USA",
+        "state": "MD"
+      },
+      "organizationType": "OFFICE",
+      "placeOfPerformance": {
+        "streetAddress": "2701 Eastern Blvd Middle River, MD 21220",
+        "zip": "21220"
+      },
+      "pointOfContact": [
+        {
+          "fax": null,
+          "type": "primary",
+          "email": "poc8@example.gov",
+          "phone": null,
+          "fullName": "Point of Contact 8"
+        }
+      ],
+      "postedDate": "2026-09-02",
+      "resourceLinks": null,
+      "responseDeadLine": "2026-09-09T11:00:00-05:00",
+      "solicitationNumber": "W50S8226QA019",
+      "title": "DATA WALL",
+      "type": "Combined Synopsis/Solicitation",
+      "typeOfSetAside": "SBA",
+      "typeOfSetAsideDescription": "Small Business Set Aside - Total",
+      "uiLink": "https://sam.gov/workspace/contract/opp/c26acd2652ef484c960bee98a5723c44/view"
+    }
+  ],
+  "links": [
+    {
+      "rel": "self",
+      "href": "https://api.sam.gov/prod/opportunities/v2/search?postedFrom=08%2F30%2F2026&postedTo=09%2F06%2F2026&ncode=541512&limit=25"
+    }
+  ]
+}

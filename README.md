@@ -40,7 +40,7 @@ v1 deliberately does not include a hosted service, accounts, telemetry, third-pa
 2. Obtain a role on that entity registration for your SAM.gov user account. The exact role name is still being confirmed and will be stated here once verified.
 3. Request your public API key from your SAM.gov account profile.
 
-A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Every attachment download is one request, so the first number is unusable and the second is the budget the whole tool is designed around.
+A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Each search page and each notice description is one request; attachment files download without a key and do not count. Ten a day is enough to try a narrow slice, and a thousand is the budget the tool is designed around.
 
 **A model endpoint.** Either a local runtime such as Ollama with a small model, or any OpenAI-compatible endpoint with your own key. Local models handle the high-volume work (classification, extraction, embeddings); a frontier model is optional for heavy reasoning.
 
