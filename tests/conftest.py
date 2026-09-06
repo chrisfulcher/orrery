@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -131,3 +132,33 @@ def fetched(
         return attachment_id
 
     return _fetched
+
+
+EMBED_URL = "http://localhost:11434/v1/embeddings"
+FAKE_TERMS = ("xylophone", "zeppelin", "quokka")
+
+
+def fake_vector(text: str) -> list[float]:
+    """A 4-dim stand-in for a real embedding: term counts plus a constant, so cosine
+    distance is meaningful and deterministic in tests."""
+    lowered = text.lower()
+    return [float(lowered.count(term)) for term in FAKE_TERMS] + [1.0]
+
+
+def register_fake_embeddings(httpx_mock: HTTPXMock, batches: list[list[str]]) -> None:
+    """Answer every embeddings request with fake vectors and record the batches seen."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        inputs = json.loads(request.read())["input"]
+        batches.append(list(inputs))
+        data = [{"index": i, "embedding": fake_vector(t)} for i, t in enumerate(inputs)]
+        return httpx.Response(200, json={"data": data})
+
+    httpx_mock.add_callback(respond, url=EMBED_URL, is_reusable=True)
+
+
+@pytest.fixture
+def fake_embeddings(httpx_mock: HTTPXMock) -> list[list[str]]:
+    batches: list[list[str]] = []
+    register_fake_embeddings(httpx_mock, batches)
+    return batches

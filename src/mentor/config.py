@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     max_attachment_bytes: int = 100 * 1024 * 1024
     """Attachments larger than this are recorded as skipped, not downloaded."""
 
+    embed_base_url: str = "http://localhost:11434/v1"
+    """OpenAI-compatible base URL; the only place embedding requests and their text go."""
+
+    embed_model: str = "nomic-embed-text"
+    """Embedding model name as the endpoint knows it; recorded on every stored vector."""
+
+    embed_api_key: SecretStr | None = None
+    """Sent as a Bearer token only when set. Never logged."""
+
+    embed_batch_size: int = 32
+    """Texts per embeddings request."""
+
     @field_validator("naics", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

@@ -4,7 +4,9 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
+from conftest import EMBED_URL, register_fake_embeddings
 from pytest_httpx import HTTPXMock
 from typer.testing import CliRunner
 
@@ -35,6 +37,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0001_initial.sql",
         "applied 0002_description_queue.sql",
         "applied 0003_extraction_and_search.sql",
+        "applied 0004_embeddings.sql",
     ]
     assert (tmp_path / "mentor.sqlite").exists()
 
@@ -49,6 +52,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0001_initial.sql",
         "applied  0002_description_queue.sql",
         "applied  0003_extraction_and_search.sql",
+        "applied  0004_embeddings.sql",
     ]
 
 
@@ -262,3 +266,33 @@ def test_extract_search_and_reindex(
     assert (
         len(json.loads(runner.invoke(app, ["search", "xylophone", "--json"], env=env).output)) == 1
     )
+
+
+def test_embed_command_and_unreachable_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    desc = json.loads((Path(__file__).with_name("fixtures") / "sam_noticedesc_v1.json").read_text())
+    httpx_mock.add_response(url=re.compile(r".*noticedesc.*"), json=desc, is_reusable=True)
+    assert runner.invoke(app, ["fetch", "--max-attachments", "0"], env=env).exit_code == 0
+
+    httpx_mock.add_exception(httpx.ConnectError("refused"), url=EMBED_URL)
+    result = runner.invoke(app, ["embed"], env=env)
+    assert result.exit_code == 1, result.output
+    assert "embedding stopped" in result.output and "http://localhost:11434/v1" in result.output
+    assert "Traceback" not in result.output
+
+    register_fake_embeddings(httpx_mock, [])
+    result = runner.invoke(app, ["embed"], env=env)
+    assert result.exit_code == 0, result.output
+    assert (
+        result.output.strip() == "5 notices, 0 attachments, 5 chunks embedded with nomic-embed-text"
+    )
+    result = runner.invoke(app, ["embed", "--json"], env=env)
+    assert json.loads(result.output) == {
+        "notices": 0,
+        "attachments": 0,
+        "chunks": 0,
+        "model": "nomic-embed-text",
+    }

@@ -11,6 +11,8 @@ import typer
 from mentor import __version__, db, query
 from mentor import quota as quota_module
 from mentor.config import Settings
+from mentor.embed.client import EmbeddingError
+from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
 from mentor.fetch import queue
 from mentor.ingest import notices
@@ -131,6 +133,28 @@ def extract(
     else:
         typer.echo(
             f"{result.done} extracted, {result.unsupported} unsupported, {result.failed} failed"
+        )
+
+
+@app.command()
+def embed(
+    limit: Annotated[int | None, typer.Option(help="Cap sources embedded this run.")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Embed fetched descriptions and extracted attachment text via the configured endpoint."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            result = embed_pending(conn, settings, limit=limit)
+        except EmbeddingError as exc:
+            typer.echo(f"embedding stopped: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+    else:
+        typer.echo(
+            f"{result.notices} notices, {result.attachments} attachments,"
+            f" {result.chunks} chunks embedded with {result.model}"
         )
 
 

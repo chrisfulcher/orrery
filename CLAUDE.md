@@ -23,6 +23,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 - All timestamps are UTC.
 - Every keyed SAM.gov API request (search pages, notice descriptions) is logged in `api_requests`, attributed to an `ingestion_runs` row, and counted against the daily quota; the daemon stops before the quota does. Attachment files are public URLs that need no key and are not counted, but fetching them is a prioritized, politely rate-limited queue, never a crawl.
 - `notices.description` is plain text from every source. Attachment paths are stored relative to `MENTOR_DATA_DIR`. Fetch failures are recorded, never retried automatically.
+- `embeddings` rows record the model that produced them and are rebuilt by deleting a model's rows and re-running `mentor embed`. Embedding and semantic search send text only to `MENTOR_EMBED_BASE_URL`; notice and attachment text is public, the user's query text is not, and the README says so.
 
 ## Workflow
 

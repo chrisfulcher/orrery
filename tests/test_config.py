@@ -14,6 +14,10 @@ def test_defaults() -> None:
     assert settings.sam_daily_budget == 10
     assert settings.sam_base_url == "https://api.sam.gov"
     assert settings.naics == []
+    assert settings.embed_base_url == "http://localhost:11434/v1"
+    assert settings.embed_model == "nomic-embed-text"
+    assert settings.embed_api_key is None
+    assert settings.embed_batch_size == 32
 
 
 def test_naics_is_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:

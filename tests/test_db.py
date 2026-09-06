@@ -22,10 +22,16 @@ EXPECTED_TABLES = {
     "psc_codes",
     "notices_fts",
     "attachments_fts",
+    "embeddings",
     "users",
 }
 
-MIGRATIONS = ["0001_initial.sql", "0002_description_queue.sql", "0003_extraction_and_search.sql"]
+MIGRATIONS = [
+    "0001_initial.sql",
+    "0002_description_queue.sql",
+    "0003_extraction_and_search.sql",
+    "0004_embeddings.sql",
+]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
 SOURCE = "sam_opportunities_api"
