@@ -37,6 +37,21 @@ def app(
     assert pursued is not None
     workspace.add_task(conn, pursued.pursuit_id, "Call the COR", due="2026-09-07")
     workspace.add_task(conn, pursued.pursuit_id, "Draft the capture plan", due="2026-09-08")
+    workspace.save_assessment(
+        conn, pursued.pursuit_id, slot="deep", provider="openai", model="qwen3:14b",
+        prompt_version=1, profile_version=None, inputs_hash="h", input_tokens=900,
+        output_tokens=120, raw_response="{}",
+        result={
+            "fit": 72, "fit_reasons": ["NAICS matches"], "gaps": [], "incumbent_standing": "-",
+            "competitive_picture": "-", "decision": "go", "decision_why": "fits",
+            "open_questions": [],
+            "suggested_tasks": [
+                {"title": "Call the COR", "stage": "qualify"},  # already a task
+                {"title": "Map the buying office", "stage": "qualify"},
+                {"title": "Price to win", "stage": "capture"},
+            ],
+        },
+    )  # fmt: skip
     conn.close()
     return MentorTop(settings)
 
@@ -259,3 +274,21 @@ async def test_radar_starts_a_pursuit_from_an_award(
         assert isinstance(app.screen, DashboardScreen)
         assert app.screen.query_one("#dates", DataTable).row_count == 0  # beyond 60 days
         assert "identify 1" in app.screen.query_one("#attention", DataTable).border_title
+
+
+async def test_pursuit_screen_shows_the_assessment_and_accepts_tasks(app: MentorTop) -> None:
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(PursuitScreen(1))
+        await pilot.pause()
+        panel = text(app, "#assessment")
+        assert panel.startswith("fit 72 · go · deep qwen3:14b · profile v- · 900 in / 120 out")
+        assert "3. [capture] Price to win" in panel
+        before = app.screen.query_one("#tasks", DataTable).row_count
+
+        await pilot.press("x")
+        await pilot.pause()
+        assert app.screen.query_one("#tasks", DataTable).row_count == before + 2  # one existed
+        await pilot.press("x")
+        await pilot.pause()
+        assert app.screen.query_one("#tasks", DataTable).row_count == before + 2

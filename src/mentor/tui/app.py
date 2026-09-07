@@ -17,7 +17,7 @@ from textual.containers import Grid, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Sparkline, Static
 
-from mentor import db, query, quota, workspace
+from mentor import assess, db, query, quota, workspace
 from mentor.config import Settings
 from mentor.fetch import queue
 
@@ -776,6 +776,7 @@ class PursuitScreen(Screen):
         Binding("n", "notes", "Notes"),
         Binding("a", "office", "Office"),
         Binding("i", "incumbent", "Incumbent"),
+        Binding("x", "accept_tasks", "Accept suggested tasks"),
         Binding("escape", "app.pop_screen", "Back"),
     ]
 
@@ -786,6 +787,7 @@ class PursuitScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(id="pursuit_header", classes="panel")
+        yield Static(id="assessment", classes="panel")
         yield WrapTable(TASK_COLUMNS, id="tasks", classes="panel", cursor_type="row")
         yield WrapTable(LINKED_COLUMNS, id="pursuit_notices", classes="panel", cursor_type="row")
         yield WrapTable(EVENT_COLUMNS, id="events", classes="panel")
@@ -793,6 +795,7 @@ class PursuitScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#pursuit_header").border_title = "pursuit"
+        self.query_one("#assessment").border_title = "assessment"
         self.query_one("#tasks").border_title = "tasks"
         self.query_one("#pursuit_notices").border_title = "notices"
         self.query_one("#events").border_title = "decisions and changes"
@@ -844,6 +847,11 @@ class PursuitScreen(Screen):
         )
         self.query_one("#pursuit_notices", WrapTable).set_rows(
             [((_day(n.response_deadline), n.role, n.title), n.notice_id) for n in detail.notices]
+        )
+        self.query_one("#assessment", Static).update(
+            "\n".join(assess.describe(detail.assessment))
+            if detail.assessment
+            else f"none yet: run `mentor pursuit assess {p.pursuit_id}` (x accepts suggested tasks)"
         )
         self.query_one("#events", WrapTable).set_rows(
             [
@@ -998,6 +1006,14 @@ class PursuitScreen(Screen):
     def action_incumbent(self) -> None:
         if self.detail and self.detail.incumbent and self.detail.incumbent.vendor_entity_id:
             self.app.push_screen(EntityScreen(self.detail.incumbent.vendor_entity_id))
+
+    def action_accept_tasks(self) -> None:
+        if not self.detail or not self.detail.assessment:
+            self.notify("no assessment yet", severity="warning")
+            return
+        added: list[workspace.Task] = []
+        self._apply(lambda: added.extend(assess.accept_tasks(self.app.conn, self.pursuit_id)))
+        self.notify(f"added {len(added)} task(s)")
 
 
 class EntityScreen(Screen):
