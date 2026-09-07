@@ -526,6 +526,23 @@ def summarize_facts(
     return summary
 
 
+def office_for_code(conn: sqlite3.Connection, code: str) -> EntityRef | None:
+    """The office entity whose agency path ends with this code: one candidate, or the
+    deepest of twins sharing the same department and sub-tier; otherwise None."""
+    candidates = conn.execute(
+        "SELECT entity_id, name, agency_path_code FROM entities WHERE kind = 'office'"
+        " AND substr(agency_path_code, -length(?) - 1) = '.' || ?",
+        (code, code),
+    ).fetchall()
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        if len({".".join(path.split(".")[:2]) for _, _, path in candidates}) > 1:
+            return None
+        candidates.sort(key=lambda c: len(c[2]), reverse=True)
+    return EntityRef(*candidates[0])
+
+
 def contract(conn: sqlite3.Connection, contract_id: int) -> ContractRef | None:
     row = conn.execute(
         f"SELECT {CONTRACT_COLUMNS} FROM v_contracts WHERE contract_id = ?", (contract_id,)

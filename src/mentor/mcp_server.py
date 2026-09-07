@@ -1,9 +1,9 @@
 """MCP server: the store for AI agents, over stdio. Interface version 1 (DESIGN.md §4).
 
 Tools are thin wrappers over the query and workspace modules and return the engine's own
-records. Reads plus two cheap writes (track, save_search). Nothing here spends SAM.gov quota
-or contacts the network: ingest, fetch, and embed are deliberately not tools. Tools and
-their fields are only ever added.
+records. Reads plus the workspace writes (pursuits, track, save_search). Nothing here spends
+SAM.gov quota or contacts the network: ingest, fetch, and embed are deliberately not tools.
+Tools and their fields are only ever added.
 """
 
 import sqlite3
@@ -148,6 +148,73 @@ def history(notice_id: str) -> list[workspace.Event]:
     """The change log of a tracked notice: every stage, win-probability, and notes change."""
     with _conn() as conn:
         return workspace.history(conn, notice_id)
+
+
+@server.tool()
+def pursuits(stage: str | None = None, include_closed: bool = False) -> list[workspace.Pursuit]:
+    """The user's pursuits by workflow stage (open ones unless include_closed): title,
+    office, NAICS, incumbent, PWin, hold, outcome, open tasks, next due, next deadline."""
+    with _conn() as conn:
+        return workspace.pursuits(conn, stage=stage, include_closed=include_closed)
+
+
+@server.tool()
+def pursuit(pursuit_id: int) -> workspace.PursuitDetail:
+    """One pursuit in full: its gate and whether it is ready, tasks, linked notices, the
+    incumbent award and the prior solicitation's notices, government dates, and every
+    recorded decision."""
+    with _conn() as conn:
+        return workspace.pursuit(conn, pursuit_id)
+
+
+@server.tool()
+def new_pursuit(
+    title: str,
+    summary: str | None = None,
+    office_code: str | None = None,
+    naics: str | None = None,
+    notice_id: str | None = None,
+    contract_id: int | None = None,
+) -> workspace.Pursuit:
+    """Open a pursuit in the workflow's first stage with its template tasks. A notice or an
+    incumbent contract fills in the office and NAICS."""
+    with _conn() as conn:
+        return workspace.new_pursuit(
+            conn, title, summary=summary, office_code=office_code, naics=naics,
+            notice_id=notice_id, contract_id=contract_id,
+        )  # fmt: skip
+
+
+@server.tool()
+def link_notice(pursuit_id: int, notice_id: str, role: str | None = None) -> workspace.LinkedNotice:
+    """Attach a notice to a pursuit (role: solicitation, rfi, sources-sought, presolicitation,
+    amendment, award, other; defaults from the notice type)."""
+    with _conn() as conn:
+        return workspace.link_notice(conn, pursuit_id, notice_id, role=role)
+
+
+@server.tool()
+def gate(pursuit_id: int, decision: str, why: str, until: str | None = None) -> workspace.Pursuit:
+    """Record a gate decision with its rationale: go advances to the next stage, no-go closes
+    the pursuit as no-bid, hold parks it until a date (YYYY-MM-DD)."""
+    with _conn() as conn:
+        return workspace.gate(conn, pursuit_id, decision, why, until=until)
+
+
+@server.tool()
+def task_done(task_id: int) -> workspace.Task:
+    """Mark a pursuit task done."""
+    with _conn() as conn:
+        return workspace.complete_task(conn, task_id)
+
+
+@server.tool()
+def update_pursuit(
+    pursuit_id: int, pwin: int | None = None, notes: str | None = None
+) -> workspace.Pursuit:
+    """Set a pursuit's win probability (0 to 100) or replace its notes; both are recorded."""
+    with _conn() as conn:
+        return workspace.update_pursuit(conn, pursuit_id, pwin=pwin, notes=notes)
 
 
 @server.tool()

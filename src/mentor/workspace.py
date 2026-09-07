@@ -411,6 +411,9 @@ def new_pursuit(
         office_entity_id = office_entity_id or award[0]
         office_code = office_code or award[1]
         naics = naics or award[2]
+    if office_code and office_entity_id is None:
+        office = query.office_for_code(conn, office_code)
+        office_entity_id = office.entity_id if office else None
     workflow_doc = workflow(conn, user_id=user_id)
     stage = workflow_doc.first_key()
     now = db.utcnow()

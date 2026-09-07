@@ -15,7 +15,8 @@ HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
 EXPECTED_TOOLS = {
     "search", "notice", "entity", "upcoming", "pipeline", "track", "history", "saved_searches",
     "run_saved_search", "save_search", "queue_status", "quota_today", "profile", "awards",
-    "contractor",
+    "contractor", "pursuits", "pursuit", "new_pursuit", "link_notice", "gate", "task_done",
+    "update_pursuit",
 }  # fmt: skip
 
 
@@ -97,3 +98,24 @@ def test_award_tools(
     assert mcp_server.notice(HRSA).incumbent is not None
     with pytest.raises(workspace.NotFound):
         mcp_server.contractor("NOPE")
+
+
+async def test_pursuit_tools(
+    seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_awards()
+    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    opened = mcp_server.new_pursuit("Help desk recompete", office_code="75R602", naics="541512")
+    assert (opened.stage, opened.office, opened.open_tasks) == ("identify", "HRSA HEADQUARTERS", 3)
+    linked = mcp_server.link_notice(opened.pursuit_id, HRSA)
+    assert linked.notice_id == HRSA
+    detail = mcp_server.pursuit(opened.pursuit_id)
+    mcp_server.task_done(detail.tasks[0].task_id)
+    assert mcp_server.update_pursuit(opened.pursuit_id, pwin=35).pwin == 35
+    assert mcp_server.gate(opened.pursuit_id, "go", "fits").stage == "qualify"
+    assert [p.pursuit_id for p in mcp_server.pursuits(stage="qualify")] == [opened.pursuit_id]
+    with pytest.raises(ValueError):
+        mcp_server.gate(opened.pursuit_id, "maybe", "x")
+    async with Client(mcp_server.server) as client:
+        result = await client.call_tool("pursuit", {"pursuit_id": opened.pursuit_id})
+    assert not result.is_error and result.structured_content["pursuit"]["stage"] == "qualify"

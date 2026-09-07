@@ -144,7 +144,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"mentor": {"command": "uv", "args": ["run", "--directory", "/path/to/mentor", "mentor", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `task_done`, `update_pursuit` (the BD workflow), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 

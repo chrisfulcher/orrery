@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import sqlite3
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
@@ -38,6 +39,8 @@ profile_app = typer.Typer(no_args_is_help=True, help="Your company profile.")
 app.add_typer(profile_app, name="profile")
 workflow_app = typer.Typer(no_args_is_help=True, help="Your stages, gates, and task templates.")
 app.add_typer(workflow_app, name="workflow")
+pursuit_app = typer.Typer(no_args_is_help=True, help="One pursuit: create, link, decide, work.")
+app.add_typer(pursuit_app, name="pursuit")
 
 JsonFlag = Annotated[bool, typer.Option("--json", help="Print as JSON.")]
 DateOption = Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], metavar="YYYY-MM-DD")]
@@ -435,6 +438,305 @@ def searches_rm(name: Annotated[str, typer.Argument()]) -> None:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from exc
     typer.echo(f"deleted {name}")
+
+
+def _money_short(value: float | None) -> str:
+    return f"${value:,.0f}" if value is not None else "-"
+
+
+def _pursuit_line(p: workspace.Pursuit) -> str:
+    flags = []
+    if p.pwin is not None:
+        flags.append(f"pwin {p.pwin}")
+    if p.held_until:
+        flags.append(f"held until {p.held_until}")
+    if p.outcome:
+        flags.append(p.outcome)
+    if p.next_due:
+        flags.append(f"next due {p.next_due}")
+    elif p.open_tasks:
+        flags.append(f"{p.open_tasks} open task(s)")
+    where = p.office or p.office_code or "-"
+    return f"#{p.pursuit_id}  {p.title}  @ {where}  {' · '.join(flags)}".rstrip()
+
+
+@app.command("pursuits")
+def pursuits_command(
+    stage: Annotated[str | None, typer.Option("--stage", help="One workflow stage key.")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Include closed pursuits.")] = False,
+    json_output: JsonFlag = False,
+) -> None:
+    """Your pursuits by workflow stage, open ones unless --all."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        rows = workspace.pursuits(conn, stage=stage, include_closed=all_)
+    if json_output:
+        print_json([dataclasses.asdict(row) for row in rows])
+        return
+    if not rows:
+        typer.echo("no pursuits" + (" (open)" if not all_ else ""))
+    current = None
+    for p in rows:
+        if p.stage != current:
+            current = p.stage
+            typer.echo(f"{current} ({sum(1 for r in rows if r.stage == current)})")
+        typer.echo("  " + _pursuit_line(p))
+
+
+def _run_pursuit(
+    action: Callable[[sqlite3.Connection], object], json_output: bool, done: str
+) -> None:
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            result = action(conn)
+        except (workspace.NotFound, ValueError) as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+    elif isinstance(result, workspace.Pursuit):
+        typer.echo(f"{done}: " + _pursuit_line(result) + f"  [{result.stage}]")
+    else:
+        typer.echo(done)
+
+
+PursuitId = Annotated[int, typer.Argument(metavar="PURSUIT_ID")]
+Why = Annotated[str, typer.Option("--why", help="The rationale, recorded with the decision.")]
+
+
+@pursuit_app.command("new")
+def pursuit_new(
+    title: Annotated[str, typer.Argument()],
+    summary: Annotated[
+        str | None, typer.Option("--summary", help="The need, in your words.")
+    ] = None,
+    office: Annotated[str | None, typer.Option("--office", help="Office code (the AAC).")] = None,
+    naics: Annotated[str | None, typer.Option("--naics")] = None,
+    notice: Annotated[str | None, typer.Option("--notice", help="A notice to link.")] = None,
+    contract: Annotated[
+        int | None, typer.Option("--contract", help="The incumbent contract id.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Open a pursuit in the first stage; a notice or contract fills in office and NAICS."""
+    _run_pursuit(
+        lambda conn: workspace.new_pursuit(
+            conn,
+            title,
+            summary=summary,
+            office_code=office,
+            naics=naics,
+            notice_id=notice,
+            contract_id=contract,
+        ),  # fmt: skip
+        json_output,
+        "opened",
+    )
+
+
+@pursuit_app.command("show")
+def pursuit_show(pursuit_id: PursuitId, json_output: JsonFlag = False) -> None:
+    """One pursuit: stage and gate, tasks, notices, government dates, and its event log."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            detail = workspace.pursuit(conn, pursuit_id)
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(detail))
+        return
+    p = detail.pursuit
+    typer.echo(f"#{p.pursuit_id}  {p.title}")
+    state = f"stage {p.stage}" + (f" → {detail.gate}" if detail.gate else "")
+    if p.held_until:
+        state += f" · held until {p.held_until}"
+    if p.outcome:
+        state += f" · {p.outcome}"
+    if not p.open:
+        state += f" · closed {p.closed_at}"
+    typer.echo(state + (" · gate ready" if detail.gate_ready else ""))
+    typer.echo(
+        f"office {p.office or '-'} ({p.office_code or '-'}) · NAICS {p.naics_code or '-'}"
+        f" · pwin {p.pwin if p.pwin is not None else '-'}"
+    )
+    if detail.incumbent:
+        i = detail.incumbent
+        typer.echo(
+            f"incumbent {i.vendor or '-'} · {i.piid} · {_money_short(i.value_usd)}"
+            f" · ends {i.pop_end or '-'}"
+        )
+    if p.summary:
+        typer.echo(f"summary: {p.summary}")
+    if p.notes:
+        typer.echo(f"notes: {p.notes}")
+    typer.echo("tasks:")
+    for task in detail.tasks:
+        mark = "x" if task.done_at else " "
+        typer.echo(
+            f"  [{mark}] {task.task_id:>4}  {task.due or '-':<10}  {task.stage:<10}  {task.title}"
+        )
+    if not detail.tasks:
+        typer.echo("  (none)")
+    if detail.notices:
+        typer.echo("notices:")
+        for n in detail.notices:
+            typer.echo(f"  {n.notice_id}  {n.role:<15}  due {_day(n.response_deadline)}  {n.title}")
+    if detail.related_notices:
+        typer.echo("related (the incumbent's solicitation):")
+        for hit in detail.related_notices:
+            typer.echo(f"  {hit.notice_id}  {hit.title}")
+    if detail.dates:
+        typer.echo("government dates:")
+        for d in detail.dates:
+            typer.echo(f"  {d.date[:10]}  {d.kind:<9}  {d.label}")
+    typer.echo("events:")
+    for e in detail.events:
+        change = (
+            f"{e.old_value or '-'} -> {e.new_value or '-'}" if e.field != "task" else e.new_value
+        )
+        typer.echo(
+            f"  {e.changed_at}  {e.field:<8}  {change}" + (f"  ({e.note})" if e.note else "")
+        )
+
+
+def _day(timestamp: str | None) -> str:
+    return timestamp[:10] if timestamp else "-"
+
+
+@pursuit_app.command("link")
+def pursuit_link(
+    pursuit_id: PursuitId,
+    notice_id: Annotated[str, typer.Argument(metavar="NOTICE_ID")],
+    role: Annotated[
+        str | None,
+        typer.Option(
+            "--role",
+            help="solicitation, rfi, sources-sought, presolicitation, amendment, award, other",
+        ),
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Attach a notice to a pursuit; the role defaults from the notice type."""
+    _run_pursuit(
+        lambda conn: workspace.link_notice(conn, pursuit_id, notice_id, role=role),
+        json_output,
+        f"linked {notice_id} to #{pursuit_id}",
+    )
+
+
+@pursuit_app.command("gate")
+def pursuit_gate(
+    pursuit_id: PursuitId,
+    decision: Annotated[str, typer.Argument(metavar="go|no-go|hold")],
+    why: Why,
+    until: Annotated[
+        str | None, typer.Option("--until", help="Revisit date for a hold (YYYY-MM-DD).")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Record the decision at the current gate: go advances, no-go closes, hold parks."""
+    _run_pursuit(
+        lambda conn: workspace.gate(conn, pursuit_id, decision, why, until=until),
+        json_output,
+        decision,
+    )
+
+
+@pursuit_app.command("back")
+def pursuit_back(
+    pursuit_id: PursuitId,
+    stage: Annotated[str, typer.Argument(metavar="STAGE")],
+    why: Why,
+    json_output: JsonFlag = False,
+) -> None:
+    """Return a pursuit to an earlier stage, with a reason."""
+    _run_pursuit(
+        lambda conn: workspace.move_back(conn, pursuit_id, stage, why), json_output, "moved back"
+    )
+
+
+@pursuit_app.command("reopen")
+def pursuit_reopen(pursuit_id: PursuitId, why: Why, json_output: JsonFlag = False) -> None:
+    """Reopen a closed pursuit at the stage it was in."""
+    _run_pursuit(lambda conn: workspace.reopen(conn, pursuit_id, why), json_output, "reopened")
+
+
+@pursuit_app.command("task")
+def pursuit_task(
+    pursuit_id: PursuitId,
+    title: Annotated[str, typer.Argument()],
+    due: Annotated[str | None, typer.Option("--due", help="YYYY-MM-DD, your date.")] = None,
+    stage: Annotated[
+        str | None, typer.Option("--stage", help="Default: the current stage.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Add a task to a pursuit."""
+    _run_pursuit(
+        lambda conn: workspace.add_task(conn, pursuit_id, title, due=due, stage=stage),
+        json_output,
+        f"added task to #{pursuit_id}",
+    )
+
+
+@pursuit_app.command("done")
+def pursuit_done(
+    task_id: Annotated[int, typer.Argument(metavar="TASK_ID")], json_output: JsonFlag = False
+) -> None:
+    """Mark a task done."""
+    _run_pursuit(
+        lambda conn: workspace.complete_task(conn, task_id), json_output, f"done {task_id}"
+    )
+
+
+@pursuit_app.command("set")
+def pursuit_set(
+    pursuit_id: PursuitId,
+    pwin: Annotated[int | None, typer.Option(min=0, max=100)] = None,
+    notes: Annotated[str | None, typer.Option()] = None,
+    title: Annotated[str | None, typer.Option()] = None,
+    summary: Annotated[str | None, typer.Option()] = None,
+    incumbent: Annotated[
+        int | None, typer.Option("--incumbent", help="The incumbent contract id.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Change PWin, notes, title, summary, or the incumbent."""
+    _run_pursuit(
+        lambda conn: workspace.update_pursuit(
+            conn,
+            pursuit_id,
+            title=title,
+            summary=summary,
+            pwin=pwin,
+            notes=notes,
+            incumbent_contract_id=incumbent,
+        ),  # fmt: skip
+        json_output,
+        "updated",
+    )
+
+
+@pursuit_app.command("outcome")
+def pursuit_outcome(
+    pursuit_id: PursuitId,
+    outcome: Annotated[str, typer.Argument(metavar="won|lost|no-bid")],
+    why: Why,
+    json_output: JsonFlag = False,
+) -> None:
+    """Record the outcome: won moves to the last stage, lost and no-bid close the pursuit."""
+    _run_pursuit(
+        lambda conn: workspace.set_outcome(conn, pursuit_id, outcome, why), json_output, outcome
+    )
+
+
+@pursuit_app.command("close")
+def pursuit_close(pursuit_id: PursuitId, json_output: JsonFlag = False) -> None:
+    """Take a finished pursuit off the board. Nothing is deleted."""
+    _run_pursuit(lambda conn: workspace.close_pursuit(conn, pursuit_id), json_output, "closed")
 
 
 def _print_tracked(tracked: workspace.Tracked) -> None:

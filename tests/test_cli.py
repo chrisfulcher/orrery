@@ -572,3 +572,60 @@ def test_profile_edit_reopens_the_editor_until_valid(
     result = runner.invoke(app, ["profile", "edit"], env=env)
     assert result.exit_code == 1 and "aborted, nothing saved" in result.output
     assert runner.invoke(app, ["profile", "history"], env=env).output.count("\n") == 1
+
+
+def test_pursuit_commands_walk_the_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
+    hrsa = fixture["opportunitiesData"][0]["noticeId"]
+
+    def run(*args: str) -> object:
+        return runner.invoke(app, list(args), env=env)
+
+    assert run("pursuits").output.strip() == "no pursuits (open)"
+    opened = run(
+        "pursuit",
+        "new",
+        "Help desk recompete",
+        "--office",
+        "75R602",
+        "--naics",
+        "541512",
+        "--summary",
+        "HRSA help desk",
+    )
+    assert opened.exit_code == 0, opened.output
+    assert opened.output.startswith("opened: #1  Help desk recompete  @ HRSA HEADQUARTERS")
+    assert run("pursuit", "link", "1", hrsa).output.strip().startswith("linked")
+    assert run("pursuit", "task", "1", "Call the COR", "--due", "2026-09-10").exit_code == 0
+    shown = run("pursuit", "show", "1").output
+    assert (
+        "stage identify → Pursuit Gate" in shown
+        and "[ ]    4  2026-09-10  identify    Call the COR" in shown
+    )
+    assert run("pursuit", "done", "4").output.strip() == "done 4"
+    assert run("pursuit", "set", "1", "--pwin", "40", "--notes", "weak incumbent").exit_code == 0
+    assert run(
+        "pursuit", "gate", "1", "hold", "--why", "budget unclear", "--until", "2026-10-01"
+    ).output.startswith("hold:")
+    assert run("pursuit", "gate", "1", "go", "--why", "fits").output.endswith("[qualify]\n")
+    assert run("pursuit", "back", "1", "identify", "--why", "recheck").output.endswith(
+        "[identify]\n"
+    )
+    assert run("pursuit", "gate", "1", "no-go", "--why", "no budget").output.startswith("no-go:")
+    assert run("pursuits").output.strip() == "no pursuits (open)"
+    assert run("pursuits", "--all").output.startswith("identify (1)")
+    assert run("pursuit", "reopen", "1", "--why", "budget found").exit_code == 0
+    assert run("pursuit", "outcome", "1", "won", "--why", "awarded").output.endswith(
+        "[post-award]\n"
+    )
+    assert run("pursuit", "close", "1").output.startswith("closed:")
+    detail = json.loads(run("pursuit", "show", "1", "--json").output)
+    assert detail["pursuit"]["outcome"] == "won" and detail["pursuit"]["closed_at"]
+    assert [e["field"] for e in detail["events"]][:4] == ["stage", "notice", "task", "task"]
+    assert run("pursuit", "gate", "1", "go", "--why", "x").exit_code == 1
+    assert run("pursuit", "show", "99").exit_code == 1
+    assert run("pursuit", "new", "From award", "--contract", "999").exit_code == 1
