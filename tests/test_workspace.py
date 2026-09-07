@@ -344,7 +344,10 @@ def test_new_pursuit_from_a_notice_and_a_contract(
     assert (q.office_code, q.naics_code, q.incumbent) == ("75R602", "541512", "LEIDOS, INC.")
     assert detail.incumbent is not None and detail.incumbent.piid == "75R60222F00009"
     assert [n.notice_id for n in detail.related_notices] == [HRSA]  # the prior solicitation
-    assert [(d.kind, d.date) for d in detail.dates] == [("pop_end", "2026-02-28")]
+    assert [(d.kind, d.date) for d in detail.dates] == [
+        ("pop_end", "2026-02-28"),
+        ("pop_potential_end", "2027-02-28"),
+    ]
     role = workspace.NOTICE_ROLES.get(NOTICES[0]["type"], "other")
     linked = workspace.link_notice(conn, q.pursuit_id, HRSA)
     assert linked.role == role

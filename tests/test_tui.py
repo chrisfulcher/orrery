@@ -18,6 +18,7 @@ from mentor.tui.app import (
     PursueModal,
     PursuitScreen,
     PursuitsScreen,
+    RadarScreen,
 )
 
 Seed = Callable[[dict | None], None]
@@ -228,3 +229,33 @@ async def test_pursuit_screen_drives_the_lifecycle(app: MentorTop) -> None:
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
         assert app.screen.query_one("#work", DataTable).row_count == 2  # one done, one added
+
+
+async def test_radar_starts_a_pursuit_from_an_award(
+    app_with_awards: MentorTop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
+    app = app_with_awards
+    async with app.run_test(size=(140, 50)) as pilot:
+        await pilot.pause()
+        await pilot.press("4")
+        await pilot.pause()
+        assert isinstance(app.screen, RadarScreen)
+        radar = app.screen.query_one("#radar", DataTable)
+        assert radar.row_count == 2 and "next 18 months" in radar.border_title
+        assert radar.get_row_at(0)[0] == "2027-02-28"
+
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PursuitScreen)
+        header = text(app, "#pursuit_header")
+        assert header.startswith("#1 Recompete: 75R60222F00009 · LEIDOS, INC.")
+        assert "incumbent LEIDOS, INC." in header and "2027-02-28 pop_potential_end" in header
+        assert "office HRSA HEADQUARTERS" in header
+
+        await pilot.press("escape")
+        await pilot.press("1")
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+        assert app.screen.query_one("#dates", DataTable).row_count == 0  # beyond 60 days
+        assert "identify 1" in app.screen.query_one("#attention", DataTable).border_title

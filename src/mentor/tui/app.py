@@ -677,6 +677,92 @@ class PursuitsScreen(Screen):
             self.app.push_screen(PursuitScreen(int(event.row_key.value)))
 
 
+RADAR_COLUMNS: list[tuple[str, int | None]] = [
+    ("ends", 10), ("current", 10), ("vendor", None), ("office", 26), ("value", 13),
+    ("set-aside", 9), ("piid", 18),
+]  # fmt: skip
+
+
+class RadarScreen(Screen):
+    """The recompete radar: awards ending soonest, options included, in the profile's NAICS."""
+
+    BINDINGS = [
+        Binding("p", "pursue", "Pursue"),
+        Binding("m", "more", "Wider window"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.months = 18
+        self.rows: list[query.ContractRef] = []
+
+    def compose(self) -> ComposeResult:
+        yield WrapTable(RADAR_COLUMNS, id="radar", classes="panel", cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.refresh_radar()
+        self.query_one("#radar", WrapTable).focus()
+
+    def on_screen_resume(self) -> None:
+        self.refresh_radar()
+
+    def refresh_radar(self) -> None:
+        conn = self.app.conn
+        profile = workspace.get_profile(conn)
+        naics = profile.naics if profile and profile.naics else None
+        self.rows = query.recompetes(conn, months=self.months, naics=naics, limit=500)
+        table = self.query_one("#radar", WrapTable)
+        scope = (
+            f"NAICS {', '.join(naics)}" if naics else "every NAICS (set the profile's offerings)"
+        )
+        table.border_title = f"recompetes, next {self.months} months · {scope} · {len(self.rows)}"
+        table.set_rows(
+            [
+                (
+                    (
+                        award.pop_potential_end or award.pop_end or "-",
+                        award.pop_end or "-",
+                        award.vendor or "-",
+                        award.awarding_office or "-",
+                        _money(award.value_usd),
+                        award.set_aside_code or "-",
+                        award.piid,
+                    ),
+                    str(award.contract_id),
+                )
+                for award in self.rows
+            ]
+        )
+
+    def action_more(self) -> None:
+        self.months = {18: 36, 36: 6}.get(self.months, 18)
+        self.refresh_radar()
+
+    def _selected(self) -> query.ContractRef | None:
+        table = self.query_one("#radar", WrapTable)
+        if not table.row_count:
+            return None
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        return next((a for a in self.rows if str(a.contract_id) == key), None)
+
+    def action_pursue(self) -> None:
+        award = self._selected()
+        if award is None:
+            return
+        opened = workspace.new_pursuit(
+            self.app.conn,
+            f"Recompete: {award.piid} · {award.vendor or 'unknown vendor'}",
+            contract_id=award.contract_id,
+        )
+        self.app.push_screen(PursuitScreen(opened.pursuit_id))
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        award = self._selected()
+        if award and award.vendor_entity_id:
+            self.app.push_screen(EntityScreen(award.vendor_entity_id))
+
+
 class PursuitScreen(Screen):
     """One pursuit: where it stands, its tasks, its notices, and every decision."""
 
@@ -987,11 +1073,13 @@ class MentorTop(App):
         "dashboard": DashboardScreen,
         "opportunities": OpportunitiesScreen,
         "pursuits": PursuitsScreen,
+        "radar": RadarScreen,
     }
     BINDINGS = [
         Binding("1", "switch_mode('dashboard')", "Dashboard"),
         Binding("2", "switch_mode('opportunities')", "Opportunities"),
         Binding("3", "switch_mode('pursuits')", "Pursuits"),
+        Binding("4", "switch_mode('radar')", "Radar"),
         Binding("slash", "search", "Search"),
         Binding("q", "quit", "Quit"),
     ]

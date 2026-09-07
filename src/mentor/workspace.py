@@ -242,7 +242,8 @@ class GovDate:
 
     date: str
     kind: str
-    """'response' (a linked notice's deadline) or 'pop_end' (the incumbent's period ends)."""
+    """'response' (a linked notice's deadline), 'pop_end' (the incumbent's current period
+    ends), or 'pop_potential_end' (the incumbent's period ends with every option)."""
     label: str
     pursuit_id: int
     pursuit_title: str
@@ -501,17 +502,23 @@ def _dates(
         for n in notices
         if n.response_deadline
     ]
-    if incumbent and incumbent.pop_end:
-        dates.append(
-            GovDate(
-                incumbent.pop_end,
-                "pop_end",
-                f"{incumbent.vendor or '-'} {incumbent.piid} ends",
-                row.pursuit_id,
-                row.title,
-                contract_id=incumbent.contract_id,
-            )  # fmt: skip
-        )
+    if incumbent:
+        label = f"{incumbent.vendor or '-'} {incumbent.piid}"
+        for kind, date, what in (
+            ("pop_end", incumbent.pop_end, "ends"),
+            ("pop_potential_end", incumbent.pop_potential_end, "ends with options"),
+        ):
+            if date and date not in {d.date for d in dates if d.kind.startswith("pop")}:
+                dates.append(
+                    GovDate(
+                        date,
+                        kind,
+                        f"{label} {what}",
+                        row.pursuit_id,
+                        row.title,
+                        contract_id=incumbent.contract_id,
+                    )  # fmt: skip
+                )
     return sorted(dates, key=lambda d: d.date)
 
 

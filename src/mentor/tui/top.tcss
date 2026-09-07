@@ -40,7 +40,7 @@ Sparkline {
 #entity_awards {
     height: 10;
 }
-#board, #entity_notices {
+#board, #radar, #entity_notices {
     height: 1fr;
 }
 #tasks {
