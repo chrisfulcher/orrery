@@ -418,3 +418,36 @@ def test_workspace_commands(
 
     assert run("search", "xylophone", "--naics", "999999").output.strip() == "no matches"
     assert run("search", "x", "--semantic", "--naics", "1").exit_code == 2
+
+
+def test_ingest_awards_from_file(tmp_path: Path) -> None:
+    from conftest import make_awards_csv
+
+    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    path = tmp_path / "awards.csv"
+    path.write_bytes(make_awards_csv([{}, {"award_id_piid": "B", "recipient_uei": "PHZDZ8SJ5CM1"}]))
+
+    result = runner.invoke(app, ["ingest", "awards", "--file", str(path)], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == (
+        "run 1: 2 rows read, 2 in slice, 2 new, 0 updated, 2 contractors new,"
+        " 2 offices and 0 vendors unresolved"
+    )
+
+    result = runner.invoke(app, ["ingest", "awards", "--file", str(path), "--json"], env=env)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.split("\n", 1)[1])
+    assert (payload["rows_read"], payload["resumed_from"]) == (
+        0,
+        2,
+    )  # same file: resumed at its end
+
+
+def test_ingest_awards_refuses_a_backwards_window(tmp_path: Path) -> None:
+    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    result = runner.invoke(
+        app, ["ingest", "awards", "--since", "2026-01-02", "--until", "2026-01-01"], env=env
+    )
+    assert result.exit_code == 2
+    assert "--since must not be after --until" in result.output

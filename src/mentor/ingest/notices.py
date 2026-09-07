@@ -176,7 +176,7 @@ def resolve_agency_path(
         return resolve_agency_segments(conn, codes, names, source_id, now)
     leaf = resolve_agency_segments(conn, codes, [], source_id, now)
     if name and leaf is not None:
-        _record_alias(conn, leaf, name, source_id, now)
+        record_alias(conn, leaf, name, source_id, now)
     return leaf
 
 
@@ -197,12 +197,12 @@ def resolve_agency_segments(
             ("agency" if depth == 0 else "office", label, prefix, parent, source_id, now, now),
         ).fetchone()
         if names:
-            _record_alias(conn, entity_id, label, source_id, now)
+            record_alias(conn, entity_id, label, source_id, now)
         parent = entity_id
     return parent
 
 
-def _record_alias(
+def record_alias(
     conn: sqlite3.Connection, entity_id: int, alias: str, source_id: str, now: str
 ) -> None:
     conn.execute(

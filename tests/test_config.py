@@ -14,6 +14,7 @@ def test_defaults() -> None:
     assert settings.sam_daily_budget == 10
     assert settings.sam_base_url == "https://api.sam.gov"
     assert settings.naics == []
+    assert settings.usaspending_base_url == "https://api.usaspending.gov"
     assert settings.embed_base_url == "http://localhost:11434/v1"
     assert settings.embed_model == "nomic-embed-text"
     assert settings.embed_api_key is None

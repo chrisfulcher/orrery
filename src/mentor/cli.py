@@ -3,7 +3,7 @@
 import dataclasses
 import json
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -16,9 +16,10 @@ from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
 from mentor.fetch import queue
-from mentor.ingest import bulk, notices
+from mentor.ingest import awards, bulk, notices
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import SamError
+from mentor.usaspending.client import UsaspendingError
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -530,6 +531,61 @@ def ingest_bulk_command(
         f" {result.descriptions_filled} descriptions filled, {result.versions_added} versions,"
         f" {result.notices_deactivated} marked inactive{resumed}"
     )
+
+
+@ingest_app.command("awards")
+def ingest_awards_command(
+    since: DateOption = None,
+    until: DateOption = None,
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Ingest a downloaded award file instead.")
+    ] = None,
+    limit: Annotated[int | None, typer.Option(help="Cap rows in the slice this run.")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Ingest USAspending award history for your NAICS codes: no key, no quota.
+
+    Actions in the window (default the last three years to today) are requested as one
+    download, which the service takes minutes to prepare.
+    """
+    settings = Settings()
+    if not settings.naics:
+        typer.echo("MENTOR_NAICS is empty; nothing to ingest", err=True)
+        raise typer.Exit(2)
+    if file is not None and (since or until):
+        typer.echo("--file ignores the window; drop --since/--until", err=True)
+        raise typer.Exit(2)
+    today = datetime.now(UTC).date()
+    posted_to = until.date() if until else today
+    posted_from = since.date() if since else _years_before(today, 3)
+    if posted_from > posted_to:
+        typer.echo("--since must not be after --until", err=True)
+        raise typer.Exit(2)
+    try:
+        path = file or awards.fetch_awards(settings, since=posted_from, until=posted_to)
+        typer.echo(f"awards: {path}", err=True)
+        with closing(db.connect(settings.db_path)) as conn:
+            result = awards.ingest_awards(conn, settings, path, limit=limit)
+    except (UsaspendingError, awards.AwardsError, ValueError) as exc:
+        typer.echo(f"awards ingest stopped: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+        return
+    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
+    typer.echo(
+        f"run {result.run_id}: {result.rows_read} rows read, {result.rows_matched} in slice,"
+        f" {result.contracts_new} new, {result.contracts_updated} updated,"
+        f" {result.contractors_new} contractors new, {result.offices_unresolved} offices and"
+        f" {result.vendors_unresolved} vendors unresolved{resumed}"
+    )
+
+
+def _years_before(day: date, years: int) -> date:
+    try:
+        return day.replace(year=day.year - years)
+    except ValueError:  # 29 February
+        return day.replace(year=day.year - years, day=28)
 
 
 @app.command()

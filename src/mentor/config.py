@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     max_attachment_bytes: int = 100 * 1024 * 1024
     """Attachments larger than this are recorded as skipped, not downloaded."""
 
+    usaspending_base_url: str = "https://api.usaspending.gov"
+    """USAspending API host: no key, no quota. The finished file is served from a sibling host
+    under the same domain, which is the only other host this adapter contacts."""
+
     embed_base_url: str = "http://localhost:11434/v1"
     """OpenAI-compatible base URL; the only place embedding requests and their text go."""
 

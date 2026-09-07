@@ -14,6 +14,7 @@ from pytest_httpx import HTTPXMock
 
 from mentor import db, runs
 from mentor.config import Settings
+from mentor.ingest.awards import AwardsResult
 from mentor.ingest.bulk import COLUMNS
 from mentor.ingest.notices import ingest_notices
 from mentor.sam.client import SamClient
@@ -217,3 +218,114 @@ def make_extract(rows: list[dict], columns: list[str] = COLUMNS) -> bytes:
         full.update(row)
         writer.writerow(full)
     return out.getvalue().encode("cp1252")
+
+
+AWARD_COLUMNS = next(
+    csv.reader(
+        io.StringIO(
+            (Path(__file__).with_name("fixtures") / "usaspending_awards_sample.csv")
+            .read_text(encoding="utf-8-sig")
+            .splitlines()[0]
+        )
+    )
+)
+AWARD_DEFAULTS = {
+    "award_id_piid": "75R60225F00001",
+    "parent_award_id_piid": "47QTCA18D00L8",
+    "current_total_value_of_award": "125000.50",
+    "potential_total_value_of_award": "250000.00",
+    "award_base_action_date": "2025-03-01",
+    "award_latest_action_date": "2025-06-15",
+    "period_of_performance_start_date": "2025-03-01",
+    "period_of_performance_current_end_date": "2026-02-28",
+    "awarding_agency_code": "075",
+    "awarding_agency_name": "Department of Health and Human Services",
+    "awarding_sub_agency_code": "7526",
+    "awarding_sub_agency_name": "Health Resources and Services Administration",
+    "awarding_office_code": "75R602",
+    "awarding_office_name": "HRSA HEADQUARTERS",
+    "recipient_uei": "UE9QJD4KK1L6",
+    "recipient_name": "LEIDOS, INC.",
+    "cage_code": "5UTE1",
+    "solicitation_identifier": "75R60225R00001",
+    "naics_code": "541512",
+    "product_or_service_code": "D399",
+    "award_type_code": "C",
+    "type_of_set_aside_code": "SBA",
+    "extent_competed_code": "A",
+    "usaspending_permalink": "https://www.usaspending.gov/award/CONT_AWD_EXAMPLE/",
+    # Present in the real file and always dropped by the adapter.
+    "recipient_phone_number": "5555550100",
+    "highly_compensated_officer_1_name": "Officer Placeholder",
+    "highly_compensated_officer_1_amount": "1",
+}
+_award_counter = iter(range(1, 10_000))
+
+
+def make_awards_csv(rows: list[dict]) -> bytes:
+    """A UTF-8 award summary with the real 286 headers; unspecified cells take defaults."""
+    out = io.StringIO(newline="")
+    writer = csv.DictWriter(out, fieldnames=AWARD_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        full = dict.fromkeys(AWARD_COLUMNS, "")
+        full.update(AWARD_DEFAULTS)
+        full.update(row)
+        if not full["contract_award_unique_key"]:
+            full["contract_award_unique_key"] = f"CONT_AWD_{next(_award_counter):05d}_7526"
+        writer.writerow(full)
+    return "﻿".encode() + out.getvalue().encode("utf-8")
+
+
+def make_awards_zip(rows: list[dict]) -> bytes:
+    """The zip USAspending serves: the award summary plus a subawards file we ignore."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "Contracts_PrimeAwardSummaries_2026-09-07_H14M26S52_1.csv", make_awards_csv(rows)
+        )
+        archive.writestr("Contracts_Subawards_2026-09-07_H14M29S15_1.csv", "ignored\r\n")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def seed_awards(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed: Callable[[dict | None], None],
+    tmp_path: Path,
+) -> Callable[[list[dict] | None], AwardsResult]:
+    """Seed the notices, then ingest an award file: by default one incumbent contract for the
+    fixture's HRSA notice and one older award at the same office by another vendor."""
+    from mentor.ingest.awards import ingest_awards
+
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
+    default_rows = [
+        {
+            "solicitation_identifier": hrsa["solicitationNumber"],
+            "award_id_piid": "75R60222F00009",
+            "award_base_action_date": "2022-09-30",
+            "award_latest_action_date": "2025-08-01",
+        },
+        {
+            "recipient_uei": "PHZDZ8SJ5CM1",
+            "recipient_name": "CDW GOVERNMENT LLC",
+            "cage_code": "1KH72",
+            "award_id_piid": "75R60224F00021",
+            "solicitation_identifier": "",
+            "award_base_action_date": "2024-01-15",
+            "award_latest_action_date": "2024-01-15",
+            "current_total_value_of_award": "48000.00",
+            "type_of_set_aside_code": "",
+        },
+    ]
+
+    def _seed(rows: list[dict] | None = None) -> AwardsResult:
+        seed()
+        path = tmp_path / "awards.csv"
+        path.write_bytes(make_awards_csv(default_rows if rows is None else rows))
+        return ingest_awards(conn, settings, path)
+
+    return _seed
