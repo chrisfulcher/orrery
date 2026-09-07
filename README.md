@@ -109,7 +109,8 @@ uv run mentor searches run sdvosb-it
 uv run mentor track NOTICE_ID --stage pursuing --pwin 40
 uv run mentor pipeline
 uv run mentor history NOTICE_ID
-uv run mentor profile set --name "Example LLC" --naics 541512 --cert SB
+uv run mentor profile edit                  # your company as a TOML document, in $EDITOR; every save is a version
+uv run mentor profile edit --file p.toml    # the same without an editor (Docker, scripts)
 uv run mentor awards --office 75R602        # who wins at an office, newest first
 uv run mentor contractor UE9QJD4KK1L6      # one vendor: names, awards, facts
 ```

@@ -50,6 +50,15 @@ def test_tools_read_and_write_the_store(store: sqlite3.Connection) -> None:
     budget = mcp_server.quota_today()
     assert budget["spent"] == 1 and budget["remaining"] == budget["budget"] - 1
     assert mcp_server.profile() is None
+    with store:
+        workspace.save_profile(
+            store, '[company]\nname = "Example LLC"\n[offerings]\nnaics = ["541512"]\n'
+        )
+    profile = mcp_server.profile()
+    assert profile is not None and profile.document == {
+        **profile.document,
+        "company": {"name": "Example LLC", "uei": None, "cage": None},
+    }
 
 
 def test_unknown_ids_raise(store: sqlite3.Connection) -> None:

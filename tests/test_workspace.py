@@ -4,7 +4,7 @@ from collections.abc import Callable
 import pytest
 from conftest import SEARCH_FIXTURE
 
-from mentor import db, query, workspace
+from mentor import db, documents, query, workspace
 from mentor.query import Filters
 
 Seed = Callable[[dict | None], None]
@@ -83,7 +83,7 @@ def test_other_users_rows_are_invisible(seeded: sqlite3.Connection) -> None:
     seeded.execute("INSERT INTO users (user_id, name) VALUES (2, 'other')")
     workspace.track(seeded, HRSA, user_id=2)
     workspace.save_search(seeded, "theirs", user_id=2)
-    workspace.set_profile(seeded, user_id=2, name="Other LLC")
+    workspace.save_profile(seeded, '[company]\nname = "Other LLC"\n', user_id=2)
 
     assert workspace.pipeline(seeded) == []
     assert workspace.list_searches(seeded) == []
@@ -145,21 +145,49 @@ def test_run_search_with_text_intersects_filters(seeded: sqlite3.Connection) -> 
     assert len(query.search(seeded, "quokka")) == 5
 
 
-def test_profile_upsert_merges_fields(conn: sqlite3.Connection) -> None:
+def test_profile_document_projects_into_the_profile_row(conn: sqlite3.Connection) -> None:
     assert workspace.get_profile(conn) is None
-    workspace.set_profile(conn, name="Example LLC", naics=("541512", "541511"))
-    profile = workspace.set_profile(conn, certifications=("SB", "SDVOSB"), cage="1ABC2")
+    assert workspace.profile_document(conn).startswith("# mentor company profile")
+    body = (
+        '[company]\nname = "Example LLC"\ncage = "1abc2"\n'
+        '[offerings]\nnaics = ["541512", "541511"]\ncapability_statement = "We do IT."\n'
+        '[markets]\nagency_prefixes = ["075"]\n'
+        '[qualifications]\ncertifications = ["SB", "SDVOSB"]\n'
+    )
+    profile = workspace.save_profile(conn, body)
+    assert profile.name == "Example LLC" and profile.cage == "1ABC2" and profile.uei is None
+    assert profile.naics == ("541512", "541511") and profile.certifications == ("SB", "SDVOSB")
+    assert (
+        profile.target_agency_prefixes == ("075",) and profile.capability_statement == "We do IT."
+    )
+    assert profile.document is not None and profile.document["company"]["name"] == "Example LLC"
+    assert workspace.profile_document(conn) == body  # verbatim, not re-rendered
 
-    assert profile.name == "Example LLC" and profile.cage == "1ABC2"
-    assert profile.naics == ("541512", "541511")
-    assert profile.certifications == ("SB", "SDVOSB")
-    assert profile.target_agency_prefixes == () and profile.uei is None
+    later = workspace.save_profile(conn, '[company]\nname = "Example LLC"\n')
+    assert later.naics == () and later.certifications == ()  # the document is the whole truth
+    assert [d.version for d in workspace.document_versions(conn, "profile")] == [1, 2]
+    with pytest.raises(documents.DocumentError):
+        workspace.save_profile(conn, "[company]\nnope = 1\n")
+    assert len(workspace.document_versions(conn, "profile")) == 2
+
+
+def test_profile_document_renders_a_legacy_row(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO company_profiles (user_id, name, uei, naics, certifications, updated_at)"
+        " VALUES (1, 'Legacy LLC', 'UE9QJD4KK1L6', '[\"541512\"]', '[\"SB\"]', 'x')"
+    )
+    text = workspace.profile_document(conn)
+    doc = documents.parse(text, documents.ProfileDocument)
+    assert doc.company.name == "Legacy LLC" and doc.company.uei == "UE9QJD4KK1L6"
+    assert doc.offerings.naics == ["541512"] and doc.qualifications.certifications == ["SB"]
+    assert workspace.get_profile(conn).document is None  # nothing saved as a document yet
 
 
 def test_profile_links_to_the_companys_entity_by_uei(
     conn: sqlite3.Connection, seed_awards: Callable[..., object]
 ) -> None:
-    assert workspace.set_profile(conn, name="Example LLC", uei="UE9QJD4KK1L6").entity_id is None
+    body = '[company]\nname = "Example LLC"\nuei = "UE9QJD4KK1L6"\n'
+    assert workspace.save_profile(conn, body).entity_id is None
     seed_awards()
     profile = workspace.get_profile(conn)
     assert profile is not None and profile.entity_id is not None

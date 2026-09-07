@@ -2,16 +2,19 @@
 
 import dataclasses
 import json
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
+import click
 import typer
 
-from mentor import __version__, db, query, workspace
+from mentor import __version__, db, documents, query, workspace
 from mentor import quota as quota_module
 from mentor.config import Settings
+from mentor.documents import DocumentError, ProfileDocument
 from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
@@ -468,61 +471,101 @@ def history(
 
 @profile_app.command("show")
 def profile_show(json_output: JsonFlag = False) -> None:
-    """Show your company profile."""
+    """Show your company profile document (or, with --json, the profile record)."""
     settings = Settings()
     with closing(db.connect(settings.db_path)) as conn:
-        profile = workspace.get_profile(conn)
-    if profile is None:
-        typer.echo("no profile yet; set one with `mentor profile set`")
-        return
-    _print_profile(profile, json_output)
+        if json_output:
+            profile = workspace.get_profile(conn)
+            print_json(dataclasses.asdict(profile) if profile else None)
+            return
+        typer.echo(workspace.profile_document(conn), nl=False)
 
 
-@profile_app.command("set")
-def profile_set(
-    name: Annotated[str | None, typer.Option()] = None,
-    uei: Annotated[str | None, typer.Option()] = None,
-    cage: Annotated[str | None, typer.Option()] = None,
-    naics: NaicsOption = None,
-    cert: Annotated[
-        str | None, typer.Option("--cert", help="Certification codes, comma-separated.")
-    ] = None,
-    capability_file: Annotated[
-        Path | None, typer.Option("--capability-file", help="Capability statement text file.")
-    ] = None,
-    target_agency: Annotated[
-        str | None, typer.Option("--target-agency", help="Agency path prefixes, comma-separated.")
+@profile_app.command("edit")
+def profile_edit(
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Save this TOML file instead of opening $EDITOR.")
     ] = None,
     json_output: JsonFlag = False,
 ) -> None:
-    """Set profile fields; fields not given keep their values."""
+    """Edit your company profile as TOML in $EDITOR; every save is a new version."""
     settings = Settings()
     with closing(db.connect(settings.db_path)) as conn:
-        profile = workspace.set_profile(
-            conn,
-            name=name,
-            uei=uei,
-            cage=cage,
-            naics=_csv(naics),
-            certifications=_csv(cert),
-            capability_statement=capability_file.read_text() if capability_file else None,
-            target_agency_prefixes=_csv(target_agency),
-        )
-    _print_profile(profile, json_output)
-
-
-def _print_profile(profile: workspace.Profile, json_output: bool) -> None:
+        try:
+            body = (
+                file.read_text()
+                if file
+                else _edit_until_valid(
+                    workspace.profile_document(conn),
+                    lambda text: documents.parse(text, ProfileDocument),
+                )
+            )
+            profile = workspace.save_profile(conn, body)
+        except DocumentError as exc:
+            typer.echo(f"invalid profile: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        except _Aborted:
+            typer.echo("aborted, nothing saved", err=True)
+            raise typer.Exit(1) from None
+        latest = workspace.latest_document(conn, "profile")
     if json_output:
         print_json(dataclasses.asdict(profile))
+    else:
+        typer.echo(f"saved profile version {latest.version if latest else '?'}")
+
+
+@profile_app.command("history")
+def profile_history(json_output: JsonFlag = False) -> None:
+    """Every saved version of your profile."""
+    _document_history("profile", json_output)
+
+
+def _document_history(kind: str, json_output: bool) -> None:
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        versions = workspace.document_versions(conn, kind)
+    if json_output:
+        print_json([dataclasses.asdict(v) for v in versions])
         return
-    typer.echo(f"name: {profile.name or '-'}")
-    typer.echo(f"uei: {profile.uei or '-'}  cage: {profile.cage or '-'}")
-    typer.echo(f"naics: {', '.join(profile.naics) or '-'}")
-    typer.echo(f"entity: {profile.entity_id if profile.entity_id is not None else '-'}")
-    typer.echo(f"certifications: {', '.join(profile.certifications) or '-'}")
-    typer.echo(f"target agencies: {', '.join(profile.target_agency_prefixes) or '-'}")
-    statement = profile.capability_statement or ""
-    typer.echo(f"capability statement: {len(statement)} characters")
+    if not versions:
+        typer.echo(f"no {kind} saved yet")
+    for version in versions:
+        typer.echo(f"v{version.version}  {version.created_at}  {len(version.body)} characters")
+
+
+class _Aborted(Exception):
+    """The editor returned nothing new."""
+
+
+ERROR_HEADER = "# error: "
+
+
+def _edit(text: str) -> str | None:
+    """Open ``text`` in $VISUAL/$EDITOR; None when it was not saved or not changed."""
+    return click.edit(text, extension=".toml", require_save=True)
+
+
+def _edit_until_valid(text: str, validate: Callable[[str], object]) -> str:
+    """Re-open the editor with the problem at the top until the document validates.
+    Leaving the text unchanged aborts."""
+    header = ""
+    while True:
+        edited = _edit(header + text)
+        if edited is None or edited.strip() == (header + text).strip():
+            raise _Aborted
+        lines = edited.splitlines(keepends=True)
+        while lines and lines[0].startswith((ERROR_HEADER, "# fix ")):
+            lines.pop(0)
+        text = "".join(lines)
+        try:
+            validate(text)
+        except DocumentError as exc:
+            header = (
+                f"{ERROR_HEADER}{exc}\n"
+                "# fix the document and save again, or leave it unchanged to abort\n"
+            )
+            continue
+        return text
 
 
 @ingest_app.command("notices")

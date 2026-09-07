@@ -12,7 +12,8 @@ import sqlite3
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from mentor import db, query
+from mentor import db, documents, query
+from mentor.documents import ProfileDocument
 
 USER_ID = 1  # v1 single-user: the seeded 'local' row
 STAGES = ("watching", "pursuing", "bid", "no-bid", "submitted", "won", "lost")
@@ -54,20 +55,26 @@ def save_document(
         raise ValueError(f"unknown document kind {kind!r}")
     conn.execute("BEGIN")
     try:
-        (version,) = conn.execute(
-            "SELECT coalesce(max(version), 0) + 1 FROM workspace_documents"
-            " WHERE user_id = ? AND kind = ?",
-            (user_id, kind),
-        ).fetchone()
-        row = conn.execute(
-            "INSERT INTO workspace_documents (user_id, kind, version, body, created_at)"
-            " VALUES (?, ?, ?, ?, ?) RETURNING document_id, kind, version, body, created_at",
-            (user_id, kind, version, body, db.utcnow()),
-        ).fetchone()
+        document = _insert_document(conn, kind, body, user_id)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+    return document
+
+
+def _insert_document(conn: sqlite3.Connection, kind: str, body: str, user_id: int) -> Document:
+    """The next version, inside the caller's transaction."""
+    (version,) = conn.execute(
+        "SELECT coalesce(max(version), 0) + 1 FROM workspace_documents"
+        " WHERE user_id = ? AND kind = ?",
+        (user_id, kind),
+    ).fetchone()
+    row = conn.execute(
+        "INSERT INTO workspace_documents (user_id, kind, version, body, created_at)"
+        " VALUES (?, ?, ?, ?, ?) RETURNING document_id, kind, version, body, created_at",
+        (user_id, kind, version, body, db.utcnow()),
+    ).fetchone()
     return Document(*row)
 
 
@@ -139,6 +146,8 @@ class Profile:
     updated_at: str
     entity_id: int | None = None
     """The company's own contractor entity, once its UEI is in the graph (source 3)."""
+    document: dict | None = None
+    """The latest profile document, parsed; None until one has been saved."""
 
 
 PIPELINE = """
@@ -318,43 +327,61 @@ def run_search(
     return query.list_notices(conn, filters, limit=limit)
 
 
-def set_profile(
-    conn: sqlite3.Connection,
-    *,
-    user_id: int = USER_ID,
-    name: str | None = None,
-    uei: str | None = None,
-    cage: str | None = None,
-    naics: tuple[str, ...] | None = None,
-    certifications: tuple[str, ...] | None = None,
-    capability_statement: str | None = None,
-    target_agency_prefixes: tuple[str, ...] | None = None,
-) -> Profile:
-    """Create or update the profile; fields left ``None`` keep their current values."""
-    conn.execute(
-        "INSERT INTO company_profiles (user_id, name, uei, cage, naics, certifications,"
-        " capability_statement, target_agency_prefixes, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT(user_id) DO UPDATE SET"
-        " name = coalesce(excluded.name, name), uei = coalesce(excluded.uei, uei),"
-        " cage = coalesce(excluded.cage, cage), naics = coalesce(excluded.naics, naics),"
-        " certifications = coalesce(excluded.certifications, certifications),"
-        " capability_statement = coalesce(excluded.capability_statement, capability_statement),"
-        " target_agency_prefixes ="
-        " coalesce(excluded.target_agency_prefixes, target_agency_prefixes),"
-        " updated_at = excluded.updated_at",
-        (
-            user_id,
-            name,
-            uei,
-            cage,
-            _json_or_none(naics),
-            _json_or_none(certifications),
-            capability_statement,
-            _json_or_none(target_agency_prefixes),
-            db.utcnow(),
-        ),
+def profile_document(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> str:
+    """The profile as TOML: the latest saved document, else one rendered from the legacy
+    row, else the empty template."""
+    latest = latest_document(conn, "profile", user_id=user_id)
+    if latest is not None:
+        return latest.body
+    profile = get_profile(conn, user_id=user_id)
+    if profile is None:
+        return documents.render_profile(ProfileDocument())
+    return documents.render_profile(
+        ProfileDocument(
+            company={"name": profile.name or "", "uei": profile.uei, "cage": profile.cage},
+            offerings={
+                "naics": list(profile.naics),
+                "capability_statement": profile.capability_statement or "",
+            },
+            markets={"agency_prefixes": list(profile.target_agency_prefixes)},
+            qualifications={"certifications": list(profile.certifications)},
+        )
     )
+
+
+def save_profile(conn: sqlite3.Connection, body: str, *, user_id: int = USER_ID) -> Profile:
+    """Validate ``body``, store it as the next profile version, and project its typed fields
+    into ``company_profiles`` so every existing read sees the same profile."""
+    doc = documents.parse(body, ProfileDocument)
+    conn.execute("BEGIN")
+    try:
+        _insert_document(conn, "profile", body, user_id)
+        conn.execute(
+            "INSERT INTO company_profiles (user_id, name, uei, cage, naics, certifications,"
+            " capability_statement, target_agency_prefixes, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, uei = excluded.uei,"
+            " cage = excluded.cage, naics = excluded.naics,"
+            " certifications = excluded.certifications,"
+            " capability_statement = excluded.capability_statement,"
+            " target_agency_prefixes = excluded.target_agency_prefixes,"
+            " updated_at = excluded.updated_at",
+            (
+                user_id,
+                doc.company.name or None,
+                doc.company.uei,
+                doc.company.cage,
+                _json_or_none(tuple(doc.offerings.naics)),
+                _json_or_none(tuple(doc.qualifications.certifications)),
+                doc.offerings.capability_statement or None,
+                _json_or_none(tuple(doc.markets.agency_prefixes)),
+                db.utcnow(),
+            ),
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
     profile = get_profile(conn, user_id=user_id)
     assert profile is not None
     return profile
@@ -373,9 +400,16 @@ def get_profile(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> Profile 
         if row[1]
         else None
     )
+    latest = latest_document(conn, "profile", user_id=user_id)
+    document = None
+    if latest is not None:
+        try:
+            document = documents.parse(latest.body, ProfileDocument).model_dump()
+        except documents.DocumentError:  # a hand-written row from an older version
+            document = None
     return Profile(
         row[0], row[1], row[2], _tuple(row[3]), _tuple(row[4]), row[5], _tuple(row[6]), row[7],
-        entity[0] if entity else None,
+        entity[0] if entity else None, document,
     )  # fmt: skip
 
 

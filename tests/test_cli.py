@@ -412,13 +412,20 @@ def test_workspace_commands(
     assert run("pipeline").output.startswith("pursuing (1)")
     assert len(json.loads(run("pipeline", "--json").output)) == 1
 
-    assert run("profile", "show").output.startswith("no profile yet")
-    result = run(
-        "profile", "set", "--name", "Example LLC", "--naics", "541512,541511", "--cert", "SB"
+    assert run("profile", "show").output.startswith("# mentor company profile")
+    toml = tmp_path / "profile.toml"
+    toml.write_text(
+        '[company]\nname = "Example LLC"\n[offerings]\nnaics = ["541512", "541511"]\n'
+        '[qualifications]\ncertifications = ["SB"]\n'
     )
-    assert result.exit_code == 0 and "name: Example LLC" in result.output
+    assert run("profile", "edit", "--file", str(toml)).output.strip() == "saved profile version 1"
     profile = json.loads(run("profile", "show", "--json").output)
     assert profile["naics"] == ["541512", "541511"] and profile["certifications"] == ["SB"]
+    assert profile["document"]["offerings"]["naics"] == ["541512", "541511"]
+    assert run("profile", "history").output.startswith("v1  ")
+    toml.write_text("[company]\nnope = 1\n")
+    bad = runner.invoke(app, ["profile", "edit", "--file", str(toml)], env=env)
+    assert bad.exit_code == 1 and "invalid profile: company.nope" in bad.output
 
     assert run("search", "xylophone", "--naics", "999999").output.strip() == "no matches"
     assert run("search", "x", "--semantic", "--naics", "1").exit_code == 2
@@ -511,3 +518,28 @@ def test_ingest_entities_from_file_and_key_guard(
 
     result = runner.invoke(app, ["ingest", "entities"], env=env)  # nothing on disk, no key
     assert result.exit_code == 2
+
+
+def test_profile_edit_reopens_the_editor_until_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mentor import cli
+
+    env = {"MENTOR_DATA_DIR": str(tmp_path)}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    shown: list[str] = []
+    answers = iter(['[company]\nname = "X"\ntypo = 1\n', '[company]\nname = "Fixed LLC"\n'])
+    monkeypatch.setattr(cli, "_edit", lambda text: (shown.append(text), next(answers))[1])
+
+    result = runner.invoke(app, ["profile", "edit"], env=env)
+    assert result.exit_code == 0, result.output
+    assert len(shown) == 2 and shown[1].startswith("# error: company.typo")
+    assert (
+        json.loads(runner.invoke(app, ["profile", "show", "--json"], env=env).output)["name"]
+        == "Fixed LLC"
+    )
+
+    monkeypatch.setattr(cli, "_edit", lambda text: None)  # closed without saving
+    result = runner.invoke(app, ["profile", "edit"], env=env)
+    assert result.exit_code == 1 and "aborted, nothing saved" in result.output
+    assert runner.invoke(app, ["profile", "history"], env=env).output.count("\n") == 1
