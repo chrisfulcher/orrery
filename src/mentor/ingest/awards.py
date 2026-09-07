@@ -41,6 +41,7 @@ REQUIRED_COLUMNS = frozenset(
         "current_total_value_of_award", "potential_total_value_of_award",
         "award_base_action_date", "award_latest_action_date",
         "period_of_performance_start_date", "period_of_performance_current_end_date",
+        "period_of_performance_potential_end_date",
         "awarding_office_code", "awarding_office_name", "recipient_uei", "recipient_name",
         "cage_code", "solicitation_identifier", "naics_code", "product_or_service_code",
         "award_type_code", "type_of_set_aside_code", "extent_competed_code",
@@ -62,8 +63,8 @@ INSERT INTO contracts (
     awarding_office_name, vendor_entity_id, recipient_name, recipient_uei, cage,
     solicitation_identifier, award_date, last_action_date, pop_start, pop_end, value_usd,
     potential_value_usd, naics_code, psc_code, award_type_code, set_aside_code,
-    extent_competed_code, source_id, first_seen_at, last_seen_at, raw_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    extent_competed_code, source_id, first_seen_at, last_seen_at, raw_json, pop_potential_end
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(award_key) DO UPDATE SET
     piid = excluded.piid,
     parent_piid = excluded.parent_piid,
@@ -87,7 +88,8 @@ ON CONFLICT(award_key) DO UPDATE SET
     set_aside_code = excluded.set_aside_code,
     extent_competed_code = excluded.extent_competed_code,
     last_seen_at = excluded.last_seen_at,
-    raw_json = excluded.raw_json
+    raw_json = excluded.raw_json,
+    pop_potential_end = excluded.pop_potential_end
 """
 
 
@@ -333,6 +335,7 @@ def _ingest_row(
             now,
             now,
             json.dumps(raw, sort_keys=True, separators=(",", ":")),
+            _date(row["period_of_performance_potential_end_date"]),
         ),
     )
     return existing is None, created, office_id, vendor_id
@@ -365,6 +368,12 @@ def _opt(cell: str | None) -> str | None:
         return None
     cell = cell.strip()
     return cell or None
+
+
+def _date(cell: str | None) -> str | None:
+    """The date part of a source timestamp such as '2027-02-28 00:00:00'."""
+    value = _opt(cell)
+    return value[:10] if value else None
 
 
 def _num(cell: str | None) -> float | None:

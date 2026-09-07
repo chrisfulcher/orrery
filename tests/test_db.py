@@ -48,6 +48,7 @@ MIGRATIONS = [
     "0008_registrations.sql",
     "0009_documents.sql",
     "0010_pursuits.sql",
+    "0011_recompetes.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
@@ -293,3 +294,27 @@ def test_pursuits_migration_converts_tracked_opportunities(
         conn.execute("UPDATE pursuit_events SET note = 'x'")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("DELETE FROM pursuit_events")
+
+
+def test_recompetes_migration_backfills_the_potential_end(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = db.MIGRATIONS_DIR
+    staged = tmp_path / "migrations"
+    staged.mkdir()
+    for name in MIGRATIONS[:10]:
+        shutil.copy(real / name, staged / name)
+    monkeypatch.setattr(db, "MIGRATIONS_DIR", staged)
+    conn = db.connect(db_path)
+    db.migrate(conn)
+    conn.execute(
+        "INSERT INTO contracts (award_key, piid, pop_end, source_id, first_seen_at, last_seen_at,"
+        " raw_json) VALUES ('K1', 'P1', '2026-06-30', 'usaspending_awards', ?, ?,"
+        ' \'{"period_of_performance_potential_end_date": "2028-06-30 00:00:00"}\'),'
+        " ('K2', 'P2', '2026-01-31', 'usaspending_awards', ?, ?, '{}')",
+        (NOW, NOW, NOW, NOW),
+    )
+    shutil.copy(real / MIGRATIONS[10], staged / MIGRATIONS[10])
+    db.migrate(conn)
+    rows = conn.execute("SELECT piid, pop_potential_end FROM v_contracts ORDER BY piid").fetchall()
+    assert rows == [("P1", "2028-06-30"), ("P2", None)]

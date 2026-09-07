@@ -362,3 +362,19 @@ def test_contractor_facts_and_their_summary(
     twin = query.Fact("sam.business_type", "2X", "text", newest, "sam_entities", "api:v3")
     merged = dict(query.summarize_facts((twin, *detail.facts)))["sam.business_type"].split(", ")
     assert sorted(merged) == ["2X", "MF"]  # no duplicate for the value both sources carry
+
+
+def test_recompetes_window_order_and_filters(
+    conn: sqlite3.Connection, seed_awards: SeedAwards, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_awards()  # both fixture awards end 2027-02-28 with options
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-01T00:00:00Z")
+    assert query.recompetes(conn, months=3) == []
+    rows = query.recompetes(conn, months=18)
+    assert [r.piid for r in rows] == ["75R60222F00009", "75R60224F00021"]
+    assert rows[0].pop_potential_end == "2027-02-28" and rows[0].pop_end == "2026-02-28"
+    assert [r.piid for r in query.recompetes(conn, set_aside="SBA")] == ["75R60222F00009"]
+    assert query.recompetes(conn, naics=("111111",)) == []
+    assert [r.piid for r in query.recompetes(conn, office_code="75R602", limit=1)] == [
+        "75R60222F00009"
+    ]

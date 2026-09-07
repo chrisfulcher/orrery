@@ -22,7 +22,7 @@ V1_COLUMNS = {
         "cage", "solicitation_identifier", "award_date", "last_action_date", "pop_start",
         "pop_end", "value_usd", "potential_value_usd", "naics_code", "psc_code",
         "award_type_code", "set_aside_code", "extent_competed_code", "source_id",
-        "first_seen_at", "last_seen_at", "url",
+        "first_seen_at", "last_seen_at", "url", "pop_potential_end",
     },
     "v_entities": {
         "entity_id", "kind", "name", "agency_path_code", "uei", "cage", "parent_entity_id",

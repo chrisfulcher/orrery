@@ -239,6 +239,7 @@ AWARD_DEFAULTS = {
     "award_latest_action_date": "2025-06-15",
     "period_of_performance_start_date": "2025-03-01",
     "period_of_performance_current_end_date": "2026-02-28",
+    "period_of_performance_potential_end_date": "2027-02-28 00:00:00",
     "awarding_agency_code": "075",
     "awarding_agency_name": "Department of Health and Human Services",
     "awarding_sub_agency_code": "7526",

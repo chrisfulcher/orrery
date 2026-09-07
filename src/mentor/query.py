@@ -235,13 +235,15 @@ class ContractRef:
     extent_competed_code: str | None
     solicitation_identifier: str | None
     url: str | None
+    pop_potential_end: str | None = None
+    """The end of the period of performance with every option exercised."""
 
 
 CONTRACT_COLUMNS = (
     "contract_id, award_key, piid, parent_piid, vendor, vendor_entity_id, vendor_uei,"
     " awarding_office, awarding_office_code, awarding_entity_id, value_usd, potential_value_usd,"
     " award_date, last_action_date, pop_end, naics_code, psc_code, award_type_code,"
-    " set_aside_code, extent_competed_code, solicitation_identifier, url"
+    " set_aside_code, extent_competed_code, solicitation_identifier, url, pop_potential_end"
 )
 
 
@@ -524,6 +526,37 @@ def summarize_facts(
         more = "" if shown is values else f", … {len(values)} in all"
         summary.append((predicate, ", ".join(shown) + more))
     return summary
+
+
+def recompetes(
+    conn: sqlite3.Connection,
+    *,
+    months: int = 18,
+    naics: tuple[str, ...] | None = None,
+    office_code: str | None = None,
+    set_aside: str | None = None,
+    limit: int = 50,
+) -> list[ContractRef]:
+    """Awards whose period of performance (options included) ends within ``months`` from
+    today, soonest first: the requirements likely to be bought again."""
+    today = db.utcnow()[:10]
+    rows = conn.execute(
+        f"SELECT {CONTRACT_COLUMNS} FROM v_contracts"
+        " WHERE coalesce(pop_potential_end, pop_end) BETWEEN :today AND date(:today, :horizon)"
+        " AND (:naics IS NULL OR naics_code IN (SELECT value FROM json_each(:naics)))"
+        " AND (:office IS NULL OR awarding_office_code = :office)"
+        " AND (:set_aside IS NULL OR set_aside_code = :set_aside)"
+        " ORDER BY coalesce(pop_potential_end, pop_end), contract_id LIMIT :limit",
+        {
+            "today": today,
+            "horizon": f"+{months} months",
+            "naics": json.dumps(list(naics)) if naics else None,
+            "office": office_code,
+            "set_aside": set_aside,
+            "limit": limit,
+        },
+    ).fetchall()
+    return [ContractRef(*row) for row in rows]
 
 
 def office_for_code(conn: sqlite3.Connection, code: str) -> EntityRef | None:

@@ -301,6 +301,41 @@ def awards_command(
     _print_contracts(rows, json_output)
 
 
+@app.command("recompetes")
+def recompetes_command(
+    months: Annotated[int, typer.Option(help="How far ahead to look.")] = 18,
+    naics: Annotated[
+        str | None,
+        typer.Option("--naics", help="Comma-separated; default: the profile's offerings."),
+    ] = None,
+    office: Annotated[str | None, typer.Option("--office", help="Awarding office code.")] = None,
+    set_aside: Annotated[str | None, typer.Option("--set-aside")] = None,
+    limit: Annotated[int, typer.Option(help="Maximum awards to show.")] = 50,
+    json_output: JsonFlag = False,
+) -> None:
+    """The recompete radar: awards ending soonest, options included, likely to be bought again."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        codes = _csv(naics)
+        if codes is None:
+            profile = workspace.get_profile(conn)
+            codes = profile.naics if profile and profile.naics else None
+        rows = query.recompetes(
+            conn, months=months, naics=codes, office_code=office, set_aside=set_aside, limit=limit
+        )
+    if json_output:
+        print_json([dataclasses.asdict(row) for row in rows])
+        return
+    if not rows:
+        typer.echo("no awards end in the window")
+    for row in rows:
+        typer.echo(
+            f"{row.pop_potential_end or row.pop_end}  {row.piid:<20} {_money(row.value_usd):>15}"
+            f"  {row.set_aside_code or '-':<8} {row.vendor or '-'}  @ {row.awarding_office or '-'}"
+            f"  [{row.contract_id}]"
+        )
+
+
 @app.command("contractor")
 def contractor_command(
     uei: Annotated[str, typer.Argument(metavar="UEI")],

@@ -16,7 +16,7 @@ EXPECTED_TOOLS = {
     "search", "notice", "entity", "upcoming", "pipeline", "track", "history", "saved_searches",
     "run_saved_search", "save_search", "queue_status", "quota_today", "profile", "awards",
     "contractor", "pursuits", "pursuit", "new_pursuit", "link_notice", "gate", "task_done",
-    "update_pursuit",
+    "update_pursuit", "recompetes",
 }  # fmt: skip
 
 
@@ -93,6 +93,9 @@ def test_award_tools(
     rows = mcp_server.awards(office="75R602")
     assert [row.piid for row in rows] == ["75R60222F00009", "75R60224F00021"]
     assert mcp_server.awards(uei="PHZDZ8SJ5CM1")[0].vendor == "CDW GOVERNMENT LLC"
+    assert [r.piid for r in mcp_server.recompetes(months=18)] == [
+        "75R60222F00009", "75R60224F00021",
+    ]  # fmt: skip
     detail = mcp_server.contractor("UE9QJD4KK1L6")
     assert detail.kind == "contractor" and detail.awards_count == 1
     assert mcp_server.notice(HRSA).incumbent is not None

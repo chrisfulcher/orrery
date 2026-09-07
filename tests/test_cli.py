@@ -45,6 +45,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0008_registrations.sql",
         "applied 0009_documents.sql",
         "applied 0010_pursuits.sql",
+        "applied 0011_recompetes.sql",
     ]
     assert (tmp_path / "mentor.sqlite").exists()
 
@@ -66,6 +67,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0008_registrations.sql",
         "applied  0009_documents.sql",
         "applied  0010_pursuits.sql",
+        "applied  0011_recompetes.sql",
     ]
 
 
@@ -629,3 +631,37 @@ def test_pursuit_commands_walk_the_lifecycle(
     assert run("pursuit", "gate", "1", "go", "--why", "x").exit_code == 1
     assert run("pursuit", "show", "99").exit_code == 1
     assert run("pursuit", "new", "From award", "--contract", "999").exit_code == 1
+
+
+def test_recompetes_command_defaults_to_the_profile_naics(tmp_path: Path) -> None:
+    from conftest import make_awards_csv
+
+    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    path = tmp_path / "awards.csv"
+    path.write_bytes(
+        make_awards_csv(
+            [
+                {"award_id_piid": "SOON", "period_of_performance_potential_end_date": "2026-12-31"},
+                {
+                    "award_id_piid": "LATER",
+                    "period_of_performance_potential_end_date": "2030-01-01",
+                },
+            ]
+        )
+    )
+    runner.invoke(app, ["ingest", "awards", "--file", str(path)], env=env)
+    with (tmp_path / "p.toml").open("w") as fh:
+        fh.write('[offerings]\nnaics = ["541512"]\n')
+    runner.invoke(app, ["profile", "edit", "--file", str(tmp_path / "p.toml")], env=env)
+
+    result = runner.invoke(app, ["recompetes", "--months", "6"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("2026-12-31  SOON") and "LATER" not in result.output
+    payload = json.loads(
+        runner.invoke(app, ["recompetes", "--months", "60", "--json"], env=env).output
+    )
+    assert [row["piid"] for row in payload] == ["SOON", "LATER"]
+    assert runner.invoke(app, ["recompetes", "--naics", "111111"], env=env).output.strip() == (
+        "no awards end in the window"
+    )

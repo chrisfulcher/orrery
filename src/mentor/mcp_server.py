@@ -103,6 +103,23 @@ def awards(
 
 
 @server.tool()
+def recompetes(
+    months: int = 18,
+    naics: list[str] | None = None,
+    office: str | None = None,
+    set_aside: str | None = None,
+    limit: int = 50,
+) -> list[query.ContractRef]:
+    """The recompete radar: awards whose period of performance (options included) ends within
+    the window, soonest first; the contract id is what new_pursuit takes as the incumbent."""
+    with _conn() as conn:
+        return query.recompetes(
+            conn, months=months, naics=_tuple(naics), office_code=office, set_aside=set_aside,
+            limit=limit,
+        )  # fmt: skip
+
+
+@server.tool()
 def contractor(uei: str) -> query.EntityDetail:
     """One contractor by UEI: names seen, awards won with their offices and values, and every
     sourced fact about it."""
