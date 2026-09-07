@@ -25,6 +25,10 @@ EXPECTED_TABLES = {
     "attachments_fts",
     "embeddings",
     "users",
+    "saved_searches",
+    "tracked_opportunities",
+    "tracked_opportunity_events",
+    "company_profiles",
 }
 
 MIGRATIONS = [
@@ -32,6 +36,7 @@ MIGRATIONS = [
     "0002_description_queue.sql",
     "0003_extraction_and_search.sql",
     "0004_embeddings.sql",
+    "0005_workspace.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
@@ -187,3 +192,21 @@ def test_load_vec_unavailable_leaves_keyword_search_working(
     with pytest.raises(db.VecUnavailable):
         db.load_vec(conn)
     assert query.search(conn, "anything") == []
+
+
+def test_tracked_events_are_append_only(conn: sqlite3.Connection) -> None:
+    insert_notice(conn, "n1", "Title")
+    conn.execute(
+        "INSERT INTO tracked_opportunities (user_id, notice_id, stage) VALUES (1, 'n1', 'watching')"
+    )
+    conn.execute(
+        "INSERT INTO tracked_opportunity_events (tracked_id, user_id, changed_at, field, new_value)"
+        " VALUES (1, 1, ?, 'stage', 'watching')",
+        (NOW,),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE tracked_opportunity_events SET new_value = 'bid'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM tracked_opportunity_events")
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(attachments)").fetchall()]
+    assert "priority" not in columns

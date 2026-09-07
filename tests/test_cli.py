@@ -39,6 +39,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0002_description_queue.sql",
         "applied 0003_extraction_and_search.sql",
         "applied 0004_embeddings.sql",
+        "applied 0005_workspace.sql",
     ]
     assert (tmp_path / "mentor.sqlite").exists()
 
@@ -54,6 +55,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0002_description_queue.sql",
         "applied  0003_extraction_and_search.sql",
         "applied  0004_embeddings.sql",
+        "applied  0005_workspace.sql",
     ]
 
 

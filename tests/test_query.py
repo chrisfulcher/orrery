@@ -150,3 +150,19 @@ def test_semantic_search_ranks_by_meaning(
         )
         == 1
     )
+
+
+def test_search_filters_narrow_hits(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    conn.execute("UPDATE notices SET description = 'quokka habitat'")
+    assert len(query.search(conn, "quokka")) == 5
+    assert len(query.search(conn, "quokka", filters=query.Filters(set_asides=("SBA",)))) == 2
+
+
+def test_list_notices_orders_by_deadline(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    hits = query.list_notices(conn, query.Filters())
+    deadlines = [h.response_deadline for h in hits]
+    assert deadlines[:-1] == sorted(deadlines[:-1]) and deadlines[-1] is None
+    assert all(h.rank == 0.0 and h.source == "notice" for h in hits)
+    assert len(query.list_notices(conn, query.Filters(), limit=2)) == 2
