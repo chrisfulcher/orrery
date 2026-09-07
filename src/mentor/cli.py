@@ -16,7 +16,7 @@ from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
 from mentor.fetch import queue
-from mentor.ingest import awards, bulk, notices
+from mentor.ingest import awards, bulk, entities, notices
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import SamError
 from mentor.usaspending.client import UsaspendingError
@@ -641,6 +641,65 @@ def ingest_awards_command(
         f" {result.contracts_new} new, {result.contracts_updated} updated,"
         f" {result.contractors_new} contractors new, {result.offices_unresolved} offices and"
         f" {result.vendors_unresolved} vendors unresolved{resumed}"
+    )
+
+
+@ingest_app.command("entities")
+def ingest_entities_command(
+    uei: Annotated[
+        str | None,
+        typer.Option("--uei", help="Comma-separated UEIs to look up (one request per ten)."),
+    ] = None,
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Ingest a downloaded extract instead.")
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Download this month's extract even if one is on disk."),
+    ] = False,
+    limit: Annotated[
+        int | None, typer.Option(help="Cap registrants in the slice this run.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Ingest SAM.gov entity registrations: the monthly public extract (one keyed request,
+    filtered to contractors already known, your NAICS codes, and your own company), or a
+    few UEIs through the Entity Management API."""
+    settings = Settings()
+    if uei is not None and file is not None:
+        typer.echo("--uei and --file are mutually exclusive", err=True)
+        raise typer.Exit(2)
+    extract_dir = settings.data_dir / "extracts" / "sam"
+    needs_key = uei is not None or (
+        file is None and (refresh or entities.newest_extract(extract_dir) is None)
+    )
+    if needs_key and settings.sam_api_key is None:
+        typer.echo("MENTOR_SAM_API_KEY is not set", err=True)
+        raise typer.Exit(2)
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            if uei is not None:
+                result = entities.lookup_entities(conn, settings, uei.split(","))
+            else:
+                path = file
+                if path is None and not refresh:
+                    path = entities.newest_extract(extract_dir)
+                if path is None:
+                    path = entities.fetch_extract(conn, settings, extract_dir)
+                typer.echo(f"extract: {path}", err=True)
+                result = entities.ingest_extract(conn, settings, path, limit=limit)
+        except (BudgetExceeded, SamError, entities.EntitiesError) as exc:
+            typer.echo(f"entities ingest stopped: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+        return
+    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
+    typer.echo(
+        f"run {result.run_id}: {result.rows_read} registrants read, {result.rows_matched} in slice,"
+        f" {result.rows_malformed} malformed, {result.entities_new} contractors new,"
+        f" {result.registrations_added} registrations, {result.facts_added} facts,"
+        f" {result.requests_spent} requests{resumed}"
     )
 
 

@@ -485,3 +485,27 @@ def test_awards_and_contractor_commands(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["contractor", "NOPE"], env=env)
     assert result.exit_code == 1 and "no contractor NOPE" in result.output
+
+
+def test_ingest_entities_from_file_and_key_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    from conftest import EXTRACT_SAMPLE
+
+    monkeypatch.chdir(tmp_path)  # no .env here: the key must come from the environment
+    monkeypatch.delenv("MENTOR_SAM_API_KEY", raising=False)
+    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "611310"}
+    runner.invoke(app, ["db", "migrate"], env=env)
+
+    result = runner.invoke(app, ["ingest", "entities", "--file", str(EXTRACT_SAMPLE)], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == (
+        "run 1: 3 registrants read, 1 in slice, 0 malformed, 1 contractors new,"
+        " 1 registrations, 11 facts, 0 requests"
+    )
+
+    result = runner.invoke(app, ["ingest", "entities", "--uei", "C39LJA3KD378"], env=env)
+    assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output
+
+    result = runner.invoke(app, ["ingest", "entities"], env=env)  # nothing on disk, no key
+    assert result.exit_code == 2

@@ -16,6 +16,7 @@ from mentor import db, runs
 from mentor.config import Settings
 from mentor.ingest.awards import AwardsResult
 from mentor.ingest.bulk import COLUMNS
+from mentor.ingest.entities import EntitiesResult
 from mentor.ingest.notices import ingest_notices
 from mentor.sam.client import SamClient
 
@@ -327,5 +328,22 @@ def seed_awards(
         path = tmp_path / "awards.csv"
         path.write_bytes(make_awards_csv(default_rows if rows is None else rows))
         return ingest_awards(conn, settings, path)
+
+    return _seed
+
+
+EXTRACT_SAMPLE = Path(__file__).with_name("fixtures") / "sam_entity_extract_sample.txt"
+
+
+@pytest.fixture
+def seed_registrations(
+    conn: sqlite3.Connection, settings: Settings, seed_awards: Callable[..., AwardsResult]
+) -> Callable[[], EntitiesResult]:
+    """Seed notices and awards, then the fixture extract: registrations for the two vendors."""
+    from mentor.ingest.entities import ingest_extract
+
+    def _seed() -> EntitiesResult:
+        seed_awards()
+        return ingest_extract(conn, settings, EXTRACT_SAMPLE)
 
     return _seed

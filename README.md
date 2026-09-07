@@ -66,6 +66,7 @@ uv run mentor db migrate
 uv run mentor ingest notices      # yesterday's notices for your NAICS codes; one request per page
 uv run mentor ingest bulk         # today's full extract (~250 MB, no key, no quota), your NAICS codes only
 uv run mentor ingest awards       # three years of USAspending award history for your NAICS codes (no key, no quota)
+uv run mentor ingest entities     # SAM.gov registrations of the vendors seen and your NAICS codes (one request per month)
 uv run mentor fetch --dry-run     # what would be fetched, and today's remaining budget
 uv run mentor fetch               # descriptions within the budget, then attachments (free)
 uv run mentor extract             # PDF text; spends no quota
@@ -86,6 +87,7 @@ docker compose run --rm mentor db migrate
 docker compose run --rm mentor ingest notices
 docker compose run --rm mentor ingest bulk
 docker compose run --rm mentor ingest awards
+docker compose run --rm mentor ingest entities
 docker compose run --rm mentor fetch --dry-run
 docker compose run --rm mentor fetch
 docker compose run --rm mentor extract
@@ -97,7 +99,7 @@ docker compose run --rm mentor quota
 
 The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
-`mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. `mentor ingest awards` asks USAspending for every contract action in your NAICS codes over the last three years (`--since` and `--until` change the window), waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. Vendors become contractor entities keyed by UEI; awards resolve to offices already in the store by office code, and what cannot resolve is queued as an unresolved alias rather than guessed. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
+`mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. `mentor ingest awards` asks USAspending for every contract action in your NAICS codes over the last three years (`--since` and `--until` change the window), waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. Vendors become contractor entities keyed by UEI; awards resolve to offices already in the store by office code, and what cannot resolve is queued as an unresolved alias rather than guessed. `mentor ingest entities` downloads SAM.gov's public monthly entity extract (one keyed request for every registrant in the country, about 150 MB) into `data/extracts/sam/` and keeps only the registrants the store cares about: vendors seen in awards, registrants whose primary NAICS is one of yours, and your own company. Each becomes a contractor entity with its registration status, expiry, structure, business and SBA types, NAICS and PSC lists, and address as sourced facts; registrant contacts are never stored. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. Both count against the same daily budget as notices. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 
 ### Working the pipeline
 

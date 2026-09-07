@@ -1,9 +1,9 @@
 """SAM.gov client with local quota accounting.
 
-Every keyed request (search pages, notice descriptions) goes through ``_keyed_request``:
-budget check, ``api_requests`` row, send, row update. Attachment downloads are public,
-carry no key, and are not counted. The API key never appears in a stored URL, an
-exception message, or a log line.
+Every keyed request (search pages, notice descriptions, entity lookups, the entity extract)
+goes through ``_keyed_request``: budget check, ``api_requests`` row, send, row update.
+Attachment downloads are public, carry no key, and are not counted. The API key never
+appears in a stored URL, an exception message, or a log line.
 """
 
 import hashlib
@@ -28,6 +28,12 @@ from mentor.sam.models import SearchPage
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SEARCH_PATH = "/opportunities/v2/search"
+ENTITIES_PATH = "/entity-information/v3/entities"
+EXTRACTS_PATH = "/data-services/v1/extracts"
+ENTITY_EXTRACT_PARAMS = {
+    "fileType": "ENTITY", "sensitivity": "PUBLIC", "frequency": "MONTHLY", "charset": "UTF-8"
+}  # fmt: skip
+ENTITIES_PER_REQUEST = 10  # the v3 page size cap
 MAX_WINDOW = timedelta(days=365)
 DATE_FORMAT = "%m/%d/%Y"
 
@@ -110,6 +116,56 @@ class SamClient:
         """Fetch a notice description (the v2 search response carries only its URL)."""
         return self._keyed_request(url, notice_id=notice_id).json()["description"]
 
+    def get_entities(self, ueis: list[str]) -> dict:
+        """Public registration records for up to ten UEIs in one keyed request. Points of
+        contact are not requested."""
+        if not 0 < len(ueis) <= ENTITIES_PER_REQUEST:
+            raise ValueError(f"1 to {ENTITIES_PER_REQUEST} UEIs per request, got {len(ueis)}")
+        return self._keyed_request(
+            self._settings.sam_base_url + ENTITIES_PATH,
+            {
+                "ueiSAM": ",".join(ueis),
+                "includeSections": "entityRegistration,coreData,assertions",
+                "size": ENTITIES_PER_REQUEST,
+            },
+        ).json()
+
+    def download_entity_extract(self, dest_dir: Path) -> Path:
+        """The public monthly entity extract: one keyed request, answered with a redirect to a
+        presigned file URL that carries no key and is streamed without one. The file keeps
+        the name the service gives it. Never leaves a partial file behind."""
+        response = self._keyed_request(
+            self._settings.sam_base_url + EXTRACTS_PATH, ENTITY_EXTRACT_PARAMS, redirect_ok=True
+        )
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if not response.is_redirect:
+            path = dest_dir / "SAM_PUBLIC_UTF-8_MONTHLY_V2.ZIP"
+            tmp = path.with_name(path.name + ".part")
+            tmp.write_bytes(response.content)
+            os.replace(tmp, path)
+            return path
+        location = httpx.URL(response.headers["location"])
+        if "api_key" in location.params or self._key.get_secret_value() in str(location):
+            raise SamError("refusing to follow a redirect that carries the API key")
+        path = dest_dir / (Path(unquote_plus(location.path)).name or "SAM_PUBLIC_MONTHLY.ZIP")
+        tmp = path.with_name(path.name + ".part")
+        try:
+            with (
+                open(tmp, "wb") as out,
+                self._http.stream("GET", location, follow_redirects=False) as stream,
+            ):
+                if not stream.is_success:
+                    raise SamError(f"{location.host}: HTTP {stream.status_code}")
+                for chunk in stream.iter_bytes():
+                    out.write(chunk)
+        except BaseException as exc:
+            tmp.unlink(missing_ok=True)
+            if isinstance(exc, httpx.HTTPError):
+                raise SamError(f"{location.host}: {type(exc).__name__}: {exc}") from exc
+            raise
+        os.replace(tmp, path)
+        return path
+
     def download(self, url: str, dest_dir: Path) -> DownloadResult:
         """Fetch a public attachment. No key is sent and no ``api_requests`` row is written.
 
@@ -155,6 +211,7 @@ class SamClient:
         params: dict[str, str | int] | None = None,
         *,
         notice_id: str | None = None,
+        redirect_ok: bool = False,
     ) -> httpx.Response:
         target = httpx.URL(url).copy_merge_params(params or {})
         endpoint = str(target)
@@ -181,7 +238,7 @@ class SamClient:
             "UPDATE api_requests SET status_code = ?, response_bytes = ? WHERE request_id = ?",
             (response.status_code, len(response.content), request_id),
         )
-        if not response.is_success:
+        if not response.is_success and not (redirect_ok and response.is_redirect):
             raise SamError(f"{endpoint}: HTTP {response.status_code}")
         return response
 

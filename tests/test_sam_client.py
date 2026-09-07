@@ -199,3 +199,59 @@ def test_download_over_limit_streamed_raises_and_leaves_no_file(
     with SamClient(small, conn, run_id) as client, pytest.raises(AttachmentTooLarge):
         client.download(DOWNLOAD_URL, dest)
     assert list(dest.iterdir()) == []
+
+
+ENTITY_FIXTURE = json.loads((FIXTURES / "sam_entity_v3.json").read_text())
+S3_URL = "https://falextracts.s3.amazonaws.com/Entity%20Registration/Public%20V2/SAM_PUBLIC_UTF-8_MONTHLY_V2_20260906.ZIP?X-Amz-Signature=abc"
+
+
+def test_get_entities_is_keyed_counted_and_capped(
+    httpx_mock: HTTPXMock, client: SamClient, conn: sqlite3.Connection
+) -> None:
+    httpx_mock.add_response(
+        url=re.compile(r".*/entity-information/v3/entities.*"), json=ENTITY_FIXTURE
+    )
+    body = client.get_entities(["UE9QJD4KK1L6"])
+    assert body["totalRecords"] == 1
+    sent = httpx_mock.get_request()
+    assert sent.url.params["api_key"] == "test-key"
+    assert sent.url.params["ueiSAM"] == "UE9QJD4KK1L6"
+    assert "pointsOfContact" not in sent.url.params["includeSections"]
+    [logged] = endpoints(conn)
+    assert "ueiSAM=UE9QJD4KK1L6" in logged and "api_key" not in logged
+    with pytest.raises(ValueError):
+        client.get_entities([f"UEI{i:09d}" for i in range(11)])
+    assert len(httpx_mock.get_requests()) == 1
+
+
+def test_entity_extract_follows_the_presigned_redirect_without_the_key(
+    httpx_mock: HTTPXMock, client: SamClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(
+        url=re.compile(r".*/data-services/v1/extracts.*"),
+        status_code=302,
+        headers={"location": S3_URL},
+    )
+    httpx_mock.add_response(url=S3_URL, content=b"PK\x05\x06zip")
+    path = client.download_entity_extract(tmp_path / "sam")
+    assert path == tmp_path / "sam" / "SAM_PUBLIC_UTF-8_MONTHLY_V2_20260906.ZIP"
+    assert path.read_bytes() == b"PK\x05\x06zip"
+    first, second = httpx_mock.get_requests()
+    assert first.url.params["fileType"] == "ENTITY" and first.url.params["api_key"] == "test-key"
+    assert "api_key" not in second.url.params and second.url.host == "falextracts.s3.amazonaws.com"
+    rows = conn.execute("SELECT status_code, endpoint FROM api_requests").fetchall()
+    assert len(rows) == 1 and rows[0][0] == 302 and "api_key" not in rows[0][1]
+    assert list((tmp_path / "sam").glob("*.part")) == []
+
+
+def test_entity_extract_refuses_a_redirect_carrying_the_key(
+    httpx_mock: HTTPXMock, client: SamClient, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(
+        url=re.compile(r".*/data-services/v1/extracts.*"),
+        status_code=302,
+        headers={"location": "https://example.com/x.zip?api_key=test-key"},
+    )
+    with pytest.raises(SamError, match="refusing to follow"):
+        client.download_entity_extract(tmp_path)
+    assert len(httpx_mock.get_requests()) == 1
