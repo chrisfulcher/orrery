@@ -89,6 +89,100 @@ def latest_document(
     return Document(*row) if row else None
 
 
+@dataclass(frozen=True)
+class AssessmentRecord:
+    """One AI assessment of a pursuit as stored, with its provenance."""
+
+    assessment_id: int
+    pursuit_id: int
+    slot: str
+    provider: str
+    model: str
+    prompt_version: int
+    profile_version: int | None
+    inputs_hash: str
+    input_tokens: int | None
+    output_tokens: int | None
+    created_at: str
+    result: dict
+
+
+ASSESSMENT_COLUMNS = (
+    "assessment_id, pursuit_id, slot, provider, model, prompt_version, profile_version,"
+    " inputs_hash, input_tokens, output_tokens, created_at, result"
+)
+
+
+def _assessment(row: tuple) -> AssessmentRecord:
+    return AssessmentRecord(*row[:11], json.loads(row[11]))
+
+
+def save_assessment(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    *,
+    slot: str,
+    provider: str,
+    model: str,
+    prompt_version: int,
+    profile_version: int | None,
+    inputs_hash: str,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    raw_response: str,
+    result: dict,
+    user_id: int = USER_ID,
+) -> AssessmentRecord:
+    """Store one assessment; the row is never changed afterwards."""
+    _pursuit_row(conn, pursuit_id, user_id)
+    row = conn.execute(
+        "INSERT INTO assessments (pursuit_id, user_id, slot, provider, model, prompt_version,"
+        " profile_version, inputs_hash, input_tokens, output_tokens, raw_response, result,"
+        " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        f" RETURNING {ASSESSMENT_COLUMNS}",
+        (
+            pursuit_id,
+            user_id,
+            slot,
+            provider,
+            model,
+            prompt_version,
+            profile_version,
+            inputs_hash,
+            input_tokens,
+            output_tokens,
+            raw_response,
+            json.dumps(result, sort_keys=True),
+            db.utcnow(),
+        ),  # fmt: skip
+    ).fetchone()
+    return _assessment(row)
+
+
+def latest_assessment(
+    conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID
+) -> AssessmentRecord | None:
+    row = conn.execute(
+        f"SELECT {ASSESSMENT_COLUMNS} FROM assessments WHERE user_id = ? AND pursuit_id = ?"
+        " ORDER BY assessment_id DESC LIMIT 1",
+        (user_id, pursuit_id),
+    ).fetchone()
+    return _assessment(row) if row else None
+
+
+def assessments(
+    conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID
+) -> list[AssessmentRecord]:
+    """Every assessment of a pursuit, newest first."""
+    _pursuit_row(conn, pursuit_id, user_id)
+    rows = conn.execute(
+        f"SELECT {ASSESSMENT_COLUMNS} FROM assessments WHERE user_id = ? AND pursuit_id = ?"
+        " ORDER BY assessment_id DESC",
+        (user_id, pursuit_id),
+    ).fetchall()
+    return [_assessment(row) for row in rows]
+
+
 def document_versions(
     conn: sqlite3.Connection, kind: str, *, user_id: int = USER_ID
 ) -> list[Document]:
@@ -265,6 +359,8 @@ class PursuitDetail:
     """The gate the current stage feeds, or None for a stage with no decision."""
     gate_ready: bool
     """Open, not held, gated, and every task of the current stage done."""
+    assessment: AssessmentRecord | None = None
+    """The latest AI assessment, if one has been run."""
 
 
 @dataclass(frozen=True)
@@ -490,7 +586,7 @@ def pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID
     gate_ready = bool(gate_name) and row.open and row.held_until is None and not open_here
     return PursuitDetail(
         row, tasks, notices, incumbent, related, tuple(_dates(row, notices, incumbent)),
-        events, gate_name, gate_ready,
+        events, gate_name, gate_ready, latest_assessment(conn, pursuit_id, user_id=user_id),
     )  # fmt: skip
 
 

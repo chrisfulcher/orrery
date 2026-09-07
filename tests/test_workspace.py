@@ -398,3 +398,41 @@ def test_dashboard_classifies_the_weeks_work(
         ("post-award", 1),
     )  # fmt: skip
     assert noticed.stage == "identify" and stale.stage == "identify"
+
+
+def test_assessments_are_stored_with_provenance_and_never_changed(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-07T20:00:00Z")
+    p = workspace.new_pursuit(conn, "X")
+    assert workspace.latest_assessment(conn, p.pursuit_id) is None
+    assert workspace.pursuit(conn, p.pursuit_id).assessment is None
+    first = workspace.save_assessment(
+        conn, p.pursuit_id, slot="fast", provider="openai", model="qwen3:14b", prompt_version=1,
+        profile_version=None, inputs_hash="abc", input_tokens=100, output_tokens=20,
+        raw_response='{"fit": 40}', result={"fit": 40, "decision": "hold"},
+    )  # fmt: skip
+    second = workspace.save_assessment(
+        conn, p.pursuit_id, slot="deep", provider="anthropic", model="claude-opus-5",
+        prompt_version=1, profile_version=3, inputs_hash="def", input_tokens=None,
+        output_tokens=None, raw_response="{}", result={"fit": 70, "decision": "go"},
+    )  # fmt: skip
+    assert first.assessment_id < second.assessment_id and first.created_at == "2026-09-07T20:00:00Z"
+    assert workspace.latest_assessment(conn, p.pursuit_id) == second
+    assert workspace.pursuit(conn, p.pursuit_id).assessment == second
+    assert [a.result["fit"] for a in workspace.assessments(conn, p.pursuit_id)] == [70, 40]
+    assert second.profile_version == 3 and second.result["decision"] == "go"
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE assessments SET result = '{}'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM assessments")
+    conn.execute("INSERT INTO users (user_id, name) VALUES (2, 'other')")
+    assert workspace.latest_assessment(conn, p.pursuit_id, user_id=2) is None
+    with pytest.raises(workspace.NotFound):
+        workspace.assessments(conn, p.pursuit_id, user_id=2)
+    with pytest.raises(workspace.NotFound):
+        workspace.save_assessment(
+            conn, 999, slot="fast", provider="openai", model="m", prompt_version=1,
+            profile_version=None, inputs_hash="x", input_tokens=None, output_tokens=None,
+            raw_response="", result={},
+        )  # fmt: skip
