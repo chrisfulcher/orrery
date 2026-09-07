@@ -19,6 +19,12 @@ def test_defaults() -> None:
     assert settings.embed_model == "nomic-embed-text"
     assert settings.embed_api_key is None
     assert settings.embed_batch_size == 32
+    assert settings.ai_fast_provider == "openai"
+    assert settings.ai_fast_base_url == "http://localhost:11434/v1"
+    assert settings.ai_fast_model == "qwen3:14b"
+    assert settings.ai_fast_api_key is None and settings.ai_fast_context_chars == 48_000
+    assert settings.ai_deep_provider is None and settings.ai_deep_model is None
+    assert settings.ai_timeout == 600.0
 
 
 def test_naics_is_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:

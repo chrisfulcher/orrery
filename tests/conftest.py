@@ -162,6 +162,30 @@ def register_fake_embeddings(httpx_mock: HTTPXMock, batches: list[list[str]]) ->
     httpx_mock.add_callback(respond, url=EMBED_URL, is_reusable=True)
 
 
+CHAT_URL = "http://localhost:11434/v1/chat/completions"
+
+
+def register_fake_chat(httpx_mock: HTTPXMock, replies: list[str], requests: list[dict]) -> None:
+    """Answer chat requests with canned replies in order (the last one repeats) and record
+    every request body."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        requests.append(body)
+        text = replies[min(len(requests), len(replies)) - 1]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 40},
+            },
+        )
+
+    httpx_mock.add_callback(respond, url=CHAT_URL, is_reusable=True)
+
+
 @pytest.fixture
 def fake_embeddings(httpx_mock: HTTPXMock) -> list[list[str]]:
     batches: list[list[str]] = []
