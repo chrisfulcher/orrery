@@ -7,12 +7,15 @@ from conftest import SEARCH_FIXTURE
 from mcp import Client
 
 from mentor import mcp_server, workspace
+from mentor.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
+SeedAwards = Callable[[list[dict] | None], AwardsResult]
 HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
 EXPECTED_TOOLS = {
     "search", "notice", "entity", "upcoming", "pipeline", "track", "history", "saved_searches",
-    "run_saved_search", "save_search", "queue_status", "quota_today", "profile",
+    "run_saved_search", "save_search", "queue_status", "quota_today", "profile", "awards",
+    "contractor",
 }  # fmt: skip
 
 
@@ -64,3 +67,18 @@ async def test_tools_are_listed_over_the_protocol(store: sqlite3.Connection) -> 
         result = await client.call_tool("notice", {"notice_id": HRSA})
     assert not result.is_error
     assert result.structured_content["title"] == SEARCH_FIXTURE["opportunitiesData"][0]["title"]
+
+
+def test_award_tools(
+    seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_awards()
+    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    rows = mcp_server.awards(office="75R602")
+    assert [row.piid for row in rows] == ["75R60222F00009", "75R60224F00021"]
+    assert mcp_server.awards(uei="PHZDZ8SJ5CM1")[0].vendor == "CDW GOVERNMENT LLC"
+    detail = mcp_server.contractor("UE9QJD4KK1L6")
+    assert detail.kind == "contractor" and detail.awards_count == 1
+    assert mcp_server.notice(HRSA).incumbent is not None
+    with pytest.raises(workspace.NotFound):
+        mcp_server.contractor("NOPE")

@@ -24,7 +24,8 @@ server = MCPServer(
     version=__version__,
     instructions=(
         f"mentor MCP interface v{INTERFACE_VERSION}: a local store of U.S. federal contract"
-        " opportunities (SAM.gov notices, their documents, agencies, and the user's pipeline)."
+        " opportunities (SAM.gov notices, their documents, agencies, contractors, USAspending"
+        " awards, and the user's pipeline)."
         " Notice ids are 32-character hex SAM.gov ids. Tools and fields are only ever added."
     ),
 )
@@ -65,7 +66,8 @@ def search(
 @server.tool()
 def notice(notice_id: str) -> query.NoticeDetail:
     """Everything public about one notice: typed fields, description, agency chain,
-    attachments with fetch and extraction status, version count, and the SAM.gov page URL."""
+    attachments with fetch and extraction status, version count, the SAM.gov page URL, the
+    incumbent award, recent awards from the same office, and the government contacts."""
     with _conn() as conn:
         detail = query.notice(conn, notice_id)
     if detail is None:
@@ -75,12 +77,39 @@ def notice(notice_id: str) -> query.NoticeDetail:
 
 @server.tool()
 def entity(entity_id: int) -> query.EntityDetail:
-    """One agency or office: its place in the hierarchy, children, aliases, notice count,
-    and recent notices."""
+    """One agency, office, or contractor: its place in the hierarchy, children, aliases,
+    notice count, recent notices, awards made or won, and sourced facts."""
     with _conn() as conn:
         detail = query.entity(conn, entity_id)
     if detail is None:
         raise workspace.NotFound(f"no entity {entity_id}")
+    return detail
+
+
+@server.tool()
+def awards(
+    office: str | None = None,
+    uei: str | None = None,
+    naics: str | None = None,
+    solicitation: str | None = None,
+    limit: int = 20,
+) -> list[query.ContractRef]:
+    """Award history from USAspending, newest action first. Filters: awarding office code
+    (the last segment of an agency path), vendor UEI, NAICS code, solicitation identifier."""
+    with _conn() as conn:
+        return query.awards(
+            conn, office_code=office, uei=uei, naics=naics, solicitation=solicitation, limit=limit
+        )
+
+
+@server.tool()
+def contractor(uei: str) -> query.EntityDetail:
+    """One contractor by UEI: names seen, awards won with their offices and values, and every
+    sourced fact about it."""
+    with _conn() as conn:
+        detail = query.contractor(conn, uei)
+    if detail is None:
+        raise workspace.NotFound(f"no contractor {uei}")
     return detail
 
 

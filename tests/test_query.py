@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from conftest import SEARCH_FIXTURE, fake_vector
@@ -8,8 +9,10 @@ from mentor import db, query
 from mentor.config import Settings
 from mentor.embed.client import pack
 from mentor.embed.pipeline import embed_pending
+from mentor.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
+SeedAwards = Callable[[list[dict] | None], AwardsResult]
 
 
 def set_text(conn: sqlite3.Connection, attachment_id: int, filename: str, text: str) -> None:
@@ -227,3 +230,110 @@ def test_activity_and_quota_series(
     assert quota[:2] == [("2026-09-04", 0), ("2026-09-05", 1)]
     assert query.upcoming(conn, days=365)[0].response_deadline is not None
     assert query.counts(conn) == query.StoreCounts(notices=5, active=5, entities=19)
+
+
+def test_notice_detail_carries_award_fields_incumbent_history_and_officials(
+    conn: sqlite3.Connection, seed_awards: SeedAwards
+) -> None:
+    seed_awards()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
+
+    detail = query.notice(conn, hrsa["noticeId"])
+
+    assert detail is not None
+    assert (detail.award_number, detail.award_date) == ("75S20326F80003", "2026-08-21")
+    assert detail.incumbent is not None and detail.incumbent.piid == "75R60222F00009"
+    assert (
+        detail.incumbent.vendor == "LEIDOS, INC." and detail.incumbent.vendor_uei == "UE9QJD4KK1L6"
+    )
+    assert [c.piid for c in detail.award_history] == ["75R60222F00009", "75R60224F00021"]
+    assert detail.award_history[0].awarding_office == "HRSA HEADQUARTERS"
+    assert detail.award_history[1].value_usd == 48000.0
+    assert detail.officials == (
+        query.Official(
+            "Point of Contact 1", "primary", None, "poc1@example.gov", None, None,
+            "ROCKVILLE MD 20852", 0,
+        ),
+    )  # fmt: skip
+    army = SEARCH_FIXTURE["opportunitiesData"][1]
+    assert query.notice(conn, army["noticeId"]).incumbent is None
+
+
+def test_incumbent_falls_back_to_the_award_number(
+    conn: sqlite3.Connection, seed_awards: SeedAwards
+) -> None:
+    seed_awards([{"award_id_piid": "75S20326F80003", "solicitation_identifier": "OTHER"}])
+    detail = query.notice(conn, SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"])
+    assert detail is not None and detail.incumbent is not None
+    assert detail.incumbent.piid == "75S20326F80003"
+
+
+def test_officials_from_an_extract_row_count_other_notices(
+    conn: sqlite3.Connection, settings: Settings, seed_awards: SeedAwards, tmp_path: Path
+) -> None:
+    from conftest import make_extract
+
+    from mentor.ingest.bulk import ingest_bulk
+
+    seed_awards()
+    path = tmp_path / "extract.csv"
+    path.write_bytes(
+        make_extract(
+            [
+                {
+                    "NoticeId": "b" * 32,
+                    "PrimaryContactTitle": "Contracting Officer",
+                    "PrimaryContactPhone": "301-555-0100",
+                    "SecondaryContactFullname": "Point of Contact 2",
+                    "SecondaryContactEmail": "poc2@example.gov",
+                }
+            ]
+        )
+    )
+    ingest_bulk(conn, settings, path)
+
+    detail = query.notice(conn, "b" * 32)
+
+    assert detail is not None
+    assert detail.officials == (
+        query.Official("Point of Contact 1", "primary", "Contracting Officer", "poc1@example.gov",
+                       "301-555-0100", None, "ROCKVILLE MD 20852", 1),
+        query.Official("Point of Contact 2", "secondary", None, "poc2@example.gov", None, None,
+                       "ROCKVILLE MD 20852", 0),
+    )  # fmt: skip
+    hrsa = query.notice(conn, SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"])
+    assert hrsa is not None and hrsa.officials[0].other_notices == 1
+
+
+def test_awards_filters_and_order(conn: sqlite3.Connection, seed_awards: SeedAwards) -> None:
+    seed_awards()
+    assert [c.piid for c in query.awards(conn)] == ["75R60222F00009", "75R60224F00021"]
+    assert [c.piid for c in query.awards(conn, limit=1)] == ["75R60222F00009"]
+    assert [c.piid for c in query.awards(conn, uei="PHZDZ8SJ5CM1")] == ["75R60224F00021"]
+    assert query.awards(conn, office_code="75R602", naics="541511") == []
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["solicitationNumber"]
+    assert [c.piid for c in query.awards(conn, solicitation=hrsa)] == ["75R60222F00009"]
+    assert query.awards(conn, office_code="ZZZZZZ") == []
+
+
+def test_contractor_and_office_award_summaries(
+    conn: sqlite3.Connection, seed_awards: SeedAwards
+) -> None:
+    seed_awards()
+    vendor = query.contractor(conn, "UE9QJD4KK1L6")
+    assert vendor is not None and vendor.kind == "contractor"
+    assert (vendor.uei, vendor.cage, vendor.notices) == ("UE9QJD4KK1L6", "5UTE1", 0)
+    assert vendor.aliases == ("LEIDOS, INC.",) and vendor.chain == (
+        query.EntityRef(vendor.entity_id, "LEIDOS, INC.", None),
+    )
+    assert (vendor.awards_count, vendor.awards_value_usd) == (1, 125000.5)
+    assert vendor.awards[0].awarding_office_code == "75R602" and vendor.facts == ()
+    assert query.contractor(conn, "NOPE") is None
+
+    (office_id,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075.7526.75R602'"
+    ).fetchone()
+    office = query.entity(conn, office_id)
+    assert office is not None and office.uei is None
+    assert (office.awards_count, office.awards_value_usd) == (2, 173000.5)
+    assert [c.vendor for c in office.awards] == ["LEIDOS, INC.", "CDW GOVERNMENT LLC"]

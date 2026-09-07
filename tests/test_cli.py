@@ -451,3 +451,35 @@ def test_ingest_awards_refuses_a_backwards_window(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "--since must not be after --until" in result.output
+
+
+def test_awards_and_contractor_commands(tmp_path: Path) -> None:
+    from conftest import make_awards_csv
+
+    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    path = tmp_path / "awards.csv"
+    path.write_bytes(make_awards_csv([{}]))
+    runner.invoke(app, ["ingest", "awards", "--file", str(path)], env=env)
+
+    result = runner.invoke(app, ["awards", "--uei", "UE9QJD4KK1L6"], env=env)
+    assert result.exit_code == 0, result.output
+    assert "75R60225F00001" in result.output and "$125,000" in result.output
+    assert "LEIDOS, INC.  @ HRSA HEADQUARTERS" in result.output
+
+    result = runner.invoke(app, ["awards", "--office", "NOPE"], env=env)
+    assert result.output.strip() == "no awards"
+
+    result = runner.invoke(app, ["contractor", "UE9QJD4KK1L6"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[:3] == [
+        "LEIDOS, INC.  uei UE9QJD4KK1L6  cage 5UTE1",
+        "also seen as: -",
+        "awards: 1, $125,000 current value",
+    ]
+
+    result = runner.invoke(app, ["contractor", "UE9QJD4KK1L6", "--json"], env=env)
+    assert json.loads(result.output)["awards"][0]["piid"] == "75R60225F00001"
+
+    result = runner.invoke(app, ["contractor", "NOPE"], env=env)
+    assert result.exit_code == 1 and "no contractor NOPE" in result.output

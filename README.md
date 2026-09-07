@@ -108,6 +108,8 @@ uv run mentor track NOTICE_ID --stage pursuing --pwin 40
 uv run mentor pipeline
 uv run mentor history NOTICE_ID
 uv run mentor profile set --name "Example LLC" --naics 541512 --cert SB
+uv run mentor awards --office 75R602        # who wins at an office, newest first
+uv run mentor contractor UE9QJD4KK1L6      # one vendor: names, awards, facts
 ```
 
 A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadline window); the same filters work on `mentor search`. Notices matching any saved search move to the front of `mentor fetch`. Every stage and PWin change is kept, so `history` shows the trajectory; nothing is untracked, a dropped pursuit is `--stage no-bid`.
@@ -137,7 +139,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"mentor": {"command": "uv", "args": ["run", "--directory", "/path/to/mentor", "mentor", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 

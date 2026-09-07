@@ -254,6 +254,69 @@ def _semantic_hits(conn, settings: Settings, text: str, limit: int) -> list[quer
     return query.semantic_search(conn, pack(vector), model=settings.embed_model, limit=limit)
 
 
+def _money(value: float | None) -> str:
+    return f"${value:,.0f}" if value is not None else "-"
+
+
+def _print_contracts(rows: list[query.ContractRef], json_output: bool) -> None:
+    if json_output:
+        print_json([dataclasses.asdict(row) for row in rows])
+        return
+    if not rows:
+        typer.echo("no awards")
+    for row in rows:
+        typer.echo(
+            f"{row.last_action_date or '-'}  {row.piid:<20} {_money(row.value_usd):>15}"
+            f"  {row.set_aside_code or '-':<8} {row.vendor or '-'}  @ {row.awarding_office or '-'}"
+        )
+
+
+@app.command("awards")
+def awards_command(
+    office: Annotated[
+        str | None, typer.Option("--office", help="Awarding office code (the AAC).")
+    ] = None,
+    uei: Annotated[str | None, typer.Option("--uei", help="Vendor UEI.")] = None,
+    naics: Annotated[str | None, typer.Option("--naics", help="One NAICS code.")] = None,
+    solicitation: Annotated[
+        str | None, typer.Option("--solicitation", help="Solicitation identifier.")
+    ] = None,
+    limit: Annotated[int, typer.Option(help="Maximum awards to show.")] = 20,
+    json_output: JsonFlag = False,
+) -> None:
+    """Award history from USAspending, newest action first."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        rows = query.awards(
+            conn, office_code=office, uei=uei, naics=naics, solicitation=solicitation, limit=limit
+        )
+    _print_contracts(rows, json_output)
+
+
+@app.command("contractor")
+def contractor_command(
+    uei: Annotated[str, typer.Argument(metavar="UEI")],
+    limit: Annotated[int, typer.Option(help="Maximum awards to show.")] = 20,
+    json_output: JsonFlag = False,
+) -> None:
+    """One contractor by UEI: names, awards won, and what the store knows about it."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        detail = query.contractor(conn, uei, recent=limit)
+    if detail is None:
+        typer.echo(f"no contractor {uei}", err=True)
+        raise typer.Exit(1)
+    if json_output:
+        print_json(dataclasses.asdict(detail))
+        return
+    typer.echo(f"{detail.name}  uei {detail.uei}  cage {detail.cage or '-'}")
+    typer.echo(f"also seen as: {', '.join(a for a in detail.aliases if a != detail.name) or '-'}")
+    typer.echo(f"awards: {detail.awards_count}, {_money(detail.awards_value_usd)} current value")
+    for fact in detail.facts:
+        typer.echo(f"  {fact.predicate}: {fact.value}  ({fact.source_id}, {fact.observed_at})")
+    _print_contracts(list(detail.awards), False)
+
+
 @searches_app.command("add")
 def searches_add(
     name: Annotated[str, typer.Argument(help="A name unique to you; re-adding replaces it.")],

@@ -209,6 +209,69 @@ class AttachmentInfo:
 
 
 @dataclass(frozen=True)
+class ContractRef:
+    """One award as ``v_contracts`` presents it: resolved names where the graph has them,
+    the source's strings otherwise."""
+
+    contract_id: int
+    award_key: str
+    piid: str
+    parent_piid: str | None
+    vendor: str | None
+    vendor_entity_id: int | None
+    vendor_uei: str | None
+    awarding_office: str | None
+    awarding_office_code: str | None
+    awarding_entity_id: int | None
+    value_usd: float | None
+    potential_value_usd: float | None
+    award_date: str | None
+    last_action_date: str | None
+    pop_end: str | None
+    naics_code: str | None
+    psc_code: str | None
+    award_type_code: str | None
+    set_aside_code: str | None
+    extent_competed_code: str | None
+    solicitation_identifier: str | None
+    url: str | None
+
+
+CONTRACT_COLUMNS = (
+    "contract_id, award_key, piid, parent_piid, vendor, vendor_entity_id, vendor_uei,"
+    " awarding_office, awarding_office_code, awarding_entity_id, value_usd, potential_value_usd,"
+    " award_date, last_action_date, pop_end, naics_code, psc_code, award_type_code,"
+    " set_aside_code, extent_competed_code, solicitation_identifier, url"
+)
+
+
+@dataclass(frozen=True)
+class Official:
+    """A government point of contact as the notice names them (official capacity only)."""
+
+    name: str
+    kind: str
+    """'primary' or 'secondary'."""
+    title: str | None
+    email: str | None
+    phone: str | None
+    fax: str | None
+    office_address: str | None
+    other_notices: int
+    """Other notices from the same office naming this contact."""
+
+
+@dataclass(frozen=True)
+class Fact:
+    predicate: str
+    value: str
+    value_type: str
+    observed_at: str
+    source_id: str
+    source_ref: str | None
+
+
+@dataclass(frozen=True)
 class NoticeDetail:
     notice_id: str
     solicitation_number: str | None
@@ -231,6 +294,15 @@ class NoticeDetail:
     """Root first, leaf last."""
     attachments: tuple[AttachmentInfo, ...]
     versions: int
+    award_number: str | None = None
+    award_date: str | None = None
+    award_amount: str | None = None
+    awardee: str | None = None
+    incumbent: ContractRef | None = None
+    """The award this notice continues: same solicitation identifier, else same award number."""
+    award_history: tuple[ContractRef, ...] = ()
+    """Recent awards from the same office in the notice's NAICS, newest first."""
+    officials: tuple[Official, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -247,6 +319,14 @@ class EntityDetail:
     notices: int
     """Notices under this entity or any office below it."""
     recent: tuple[SearchHit, ...]
+    uei: str | None = None
+    cage: str | None = None
+    awards: tuple[ContractRef, ...] = ()
+    """Won, for a contractor; made, for an office. Newest first."""
+    awards_count: int = 0
+    awards_value_usd: float = 0.0
+    facts: tuple[Fact, ...] = ()
+    """Every sourced fact about the entity, newest first."""
 
 
 @dataclass(frozen=True)
@@ -273,12 +353,15 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
     row = conn.execute(
         "SELECT notice_id, solicitation_number, title, notice_type, naics_code, psc_code,"
         " set_aside_code, posted_at, response_deadline, active, first_seen_at, last_seen_at,"
-        " source_id, description_status, description, url, agency, agency_entity_id, versions"
+        " source_id, description_status, description, url, agency, agency_entity_id, versions,"
+        " award_number, award_date, award_amount, awardee, agency_path_code"
         " FROM v_notices WHERE notice_id = ?",
         (notice_id,),
     ).fetchone()
     if row is None:
         return None
+    office_code = row[23].rsplit(".", 1)[-1] if row[23] else None
+    history = awards(conn, office_code=office_code, naics=row[4], limit=10) if office_code else []
     attachments = tuple(
         AttachmentInfo(*item)
         for item in conn.execute(
@@ -295,18 +378,104 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         _chain(conn, row[17]),
         attachments,
         row[18],
+        *row[19:23],
+        _incumbent(conn, row[1], row[19], office_code),
+        tuple(history),
+        _officials(conn, notice_id, row[17]),
     )
+
+
+def _incumbent(
+    conn: sqlite3.Connection, solicitation: str | None, award_number: str | None, office: str | None
+) -> ContractRef | None:
+    """The award with this solicitation identifier, else with this PIID; the same office and the
+    latest action break ties."""
+    for column, value in (("solicitation_identifier", solicitation), ("piid", award_number)):
+        if not value:
+            continue
+        row = conn.execute(
+            f"SELECT {CONTRACT_COLUMNS} FROM v_contracts WHERE {column} = :value"
+            " ORDER BY awarding_office_code = :office DESC, last_action_date DESC, contract_id DESC"
+            " LIMIT 1",
+            {"value": value, "office": office},
+        ).fetchone()
+        if row is not None:
+            return ContractRef(*row)
+    return None
+
+
+def _officials(
+    conn: sqlite3.Connection, notice_id: str, agency_entity_id: int | None
+) -> tuple[Official, ...]:
+    """The notice's points of contact, from the API's list or the extract's columns."""
+    (raw,) = conn.execute(
+        "SELECT raw_json FROM notices WHERE notice_id = ?", (notice_id,)
+    ).fetchone()
+    record = json.loads(raw)
+    contacts: list[tuple[str, str | None, str | None, str | None, str | None, str | None]] = []
+    if "pointOfContact" in record:
+        address = record.get("officeAddress") or {}
+        office = _address(address.get("city"), address.get("state"), address.get("zipcode"))
+        for poc in record.get("pointOfContact") or []:
+            if poc.get("fullName"):
+                contacts.append(
+                    (poc["fullName"], poc.get("type") or "primary", poc.get("title"),
+                     poc.get("email"), poc.get("phone"), poc.get("fax"))
+                )  # fmt: skip
+    else:
+        office = _address(record.get("City"), record.get("State"), record.get("ZipCode"))
+        for prefix, kind in (("PrimaryContact", "primary"), ("SecondaryContact", "secondary")):
+            name = (record.get(f"{prefix}Fullname") or "").strip()
+            if name:
+                contacts.append(
+                    (name, kind, *(record.get(f"{prefix}{f}") or None
+                                   for f in ("Title", "Email", "Phone", "Fax")))
+                )  # fmt: skip
+    officials = []
+    for name, kind, title, email, phone, fax in contacts:
+        (others,) = conn.execute(
+            "SELECT count(*) FROM notices AS n WHERE n.agency_entity_id = :agency"
+            " AND n.notice_id <> :notice_id AND ("
+            " EXISTS (SELECT 1 FROM json_each(n.raw_json, '$.pointOfContact')"
+            "         WHERE json_extract(value, '$.fullName') = :name)"
+            " OR json_extract(n.raw_json, '$.PrimaryContactFullname') = :name"
+            " OR json_extract(n.raw_json, '$.SecondaryContactFullname') = :name)",
+            {"agency": agency_entity_id, "notice_id": notice_id, "name": name},
+        ).fetchone()
+        officials.append(Official(name, kind, title or None, email or None, phone or None,
+                                  fax or None, office, others))  # fmt: skip
+    return tuple(officials)
+
+
+def _address(city: str | None, state: str | None, zipcode: str | None) -> str | None:
+    parts = [part for part in (city, state, zipcode) if part]
+    return " ".join(parts) if parts else None
 
 
 def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> EntityDetail | None:
     """One agency or office with its place in the hierarchy and its recent notices."""
     row = conn.execute(
-        "SELECT entity_id, kind, name, agency_path_code, parent_entity_id, parent, notices"
-        " FROM v_entities WHERE entity_id = ?",
+        "SELECT entity_id, kind, name, agency_path_code, parent_entity_id, parent, notices,"
+        " uei, cage FROM v_entities WHERE entity_id = ?",
         (entity_id,),
     ).fetchone()
     if row is None:
         return None
+    side = "vendor_entity_id" if row[1] == "contractor" else "awarding_entity_id"
+    (awards_count, awards_value) = conn.execute(
+        f"SELECT count(*), coalesce(sum(value_usd), 0) FROM contracts WHERE {side} = ?",
+        (entity_id,),
+    ).fetchone()
+    won_or_made = awards(conn, **{side: entity_id}, limit=recent)
+    facts = tuple(
+        Fact(*item)
+        for item in conn.execute(
+            "SELECT predicate, value, value_type, observed_at, source_id, source_ref FROM facts"
+            " WHERE subject_type = 'entity' AND subject_id = ?"
+            " ORDER BY observed_at DESC, fact_id DESC",
+            (str(entity_id),),
+        ).fetchall()
+    )
     children = tuple(
         EntityRef(*item)
         for item in conn.execute(
@@ -325,8 +494,51 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     parent = chain[-2] if len(chain) > 1 else None
     hits = list_notices(conn, Filters(agency_prefixes=(row[3],)), limit=recent) if row[3] else []
     return EntityDetail(
-        row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits)
-    )
+        row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits),
+        row[7], row[8], tuple(won_or_made), awards_count, awards_value, facts,
+    )  # fmt: skip
+
+
+def contractor(conn: sqlite3.Connection, uei: str, *, recent: int = 20) -> EntityDetail | None:
+    """The contractor registered under this UEI, with the awards the store knows."""
+    row = conn.execute(
+        "SELECT entity_id FROM entities WHERE uei = ? AND kind = 'contractor'", (uei,)
+    ).fetchone()
+    return entity(conn, row[0], recent=recent) if row else None
+
+
+def awards(
+    conn: sqlite3.Connection,
+    *,
+    office_code: str | None = None,
+    awarding_entity_id: int | None = None,
+    vendor_entity_id: int | None = None,
+    uei: str | None = None,
+    naics: str | None = None,
+    solicitation: str | None = None,
+    limit: int = 20,
+) -> list[ContractRef]:
+    """Awards matching every given predicate, newest action first."""
+    rows = conn.execute(
+        f"SELECT {CONTRACT_COLUMNS} FROM v_contracts WHERE 1 = 1"
+        " AND (:office_code IS NULL OR awarding_office_code = :office_code)"
+        " AND (:awarding_entity_id IS NULL OR awarding_entity_id = :awarding_entity_id)"
+        " AND (:vendor_entity_id IS NULL OR vendor_entity_id = :vendor_entity_id)"
+        " AND (:uei IS NULL OR vendor_uei = :uei)"
+        " AND (:naics IS NULL OR naics_code = :naics)"
+        " AND (:solicitation IS NULL OR solicitation_identifier = :solicitation)"
+        " ORDER BY last_action_date DESC, contract_id DESC LIMIT :limit",
+        {
+            "office_code": office_code,
+            "awarding_entity_id": awarding_entity_id,
+            "vendor_entity_id": vendor_entity_id,
+            "uei": uei,
+            "naics": naics,
+            "solicitation": solicitation,
+            "limit": limit,
+        },  # fmt: skip
+    ).fetchall()
+    return [ContractRef(*row) for row in rows]
 
 
 def upcoming(conn: sqlite3.Connection, *, days: int = 7, limit: int = 50) -> list[SearchHit]:
