@@ -4,6 +4,7 @@ import dataclasses
 import json
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -15,7 +16,7 @@ from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
 from mentor.fetch import queue
-from mentor.ingest import notices
+from mentor.ingest import bulk, notices
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import SamError
 
@@ -239,6 +240,47 @@ def ingest_notices_command(
             f" {result.versions_added} versions, {result.attachments_added} attachments,"
             f" {result.requests_spent} requests"
         )
+
+
+@ingest_app.command("bulk")
+def ingest_bulk_command(
+    archived: Annotated[
+        int | None, typer.Option("--archived", help="Fiscal year of an archived extract.")
+    ] = None,
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Ingest a local extract instead of downloading.")
+    ] = None,
+    limit: Annotated[int | None, typer.Option(help="Cap rows in the slice this run.")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Backfill from the SAM.gov bulk extract: no key, no quota, filtered to your NAICS codes."""
+    settings = Settings()
+    if not settings.naics:
+        typer.echo("MENTOR_NAICS is empty; nothing to ingest", err=True)
+        raise typer.Exit(2)
+    if archived is not None and file is not None:
+        typer.echo("--archived and --file are mutually exclusive", err=True)
+        raise typer.Exit(2)
+    try:
+        path = file or bulk.fetch_extract(settings.data_dir / "extracts", fiscal_year=archived)
+        typer.echo(f"extract: {path}", err=True)
+        with closing(db.connect(settings.db_path)) as conn:
+            result = bulk.ingest_bulk(
+                conn, settings, path, mark_inactive=(file is None and archived is None), limit=limit
+            )
+    except (bulk.BulkError, ValueError) as exc:
+        typer.echo(f"bulk ingest stopped: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+        return
+    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
+    typer.echo(
+        f"run {result.run_id}: {result.rows_read} rows read, {result.rows_matched} in slice,"
+        f" {result.notices_new} new, {result.notices_updated} updated,"
+        f" {result.descriptions_filled} descriptions filled, {result.versions_added} versions,"
+        f" {result.notices_deactivated} marked inactive{resumed}"
+    )
 
 
 @db_app.command()

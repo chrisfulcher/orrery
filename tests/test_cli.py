@@ -6,12 +6,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import EMBED_URL, register_fake_embeddings
+from conftest import EMBED_URL, make_extract, register_fake_embeddings
 from pytest_httpx import HTTPXMock
 from typer.testing import CliRunner
 
 from mentor import __version__, db, runs
 from mentor.cli import app
+from mentor.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, archive_name
 
 runner = CliRunner()
 
@@ -325,3 +326,33 @@ def test_semantic_search_command(
     result = runner.invoke(app, ["search", "--semantic", "xylophone", "--json"], env=env)
     payload = json.loads(result.output)
     assert payload[0]["page"] == 1 and payload[0]["source"] == "sow.pdf"
+
+
+def test_ingest_bulk_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = {**FETCH_ENV, "MENTOR_DATA_DIR": str(tmp_path)}
+    assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
+    local = tmp_path / "local.csv"
+    local.write_bytes(make_extract([{}, {"NaicsCode": "236220"}]))
+
+    result = runner.invoke(app, ["ingest", "bulk", "--file", str(local)], env=env)
+    assert result.exit_code == 0, result.output
+    assert "2 rows read, 1 in slice, 1 new" in result.output
+
+    result = runner.invoke(app, ["ingest", "bulk", "--file", str(local), "--json"], env=env)
+    payload = json.loads(
+        result.output.split("\n", 1)[1] if result.output.startswith("extract:") else result.output
+    )
+    assert payload["rows_read"] == 0 and payload["resumed_from"] == 2
+
+    httpx_mock.add_response(url=EXTRACT_URL.format(name=ACTIVE_NAME), content=make_extract([{}]))
+    result = runner.invoke(app, ["ingest", "bulk"], env=env)
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "extracts" / "ContractOpportunitiesFullCSV.csv").exists()
+
+    assert runner.invoke(app, ["ingest", "bulk"], env={**env, "MENTOR_NAICS": ""}).exit_code == 2
+    httpx_mock.add_response(url=EXTRACT_URL.format(name=archive_name(2025)), status_code=500)
+    result = runner.invoke(app, ["ingest", "bulk", "--archived", "2025"], env=env)
+    assert result.exit_code == 1 and "bulk ingest stopped" in result.output

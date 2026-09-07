@@ -1,4 +1,6 @@
+import csv
 import hashlib
+import io
 import json
 import re
 import sqlite3
@@ -12,6 +14,7 @@ from pytest_httpx import HTTPXMock
 
 from mentor import db, runs
 from mentor.config import Settings
+from mentor.ingest.bulk import COLUMNS
 from mentor.ingest.notices import ingest_notices
 from mentor.sam.client import SamClient
 
@@ -162,3 +165,55 @@ def fake_embeddings(httpx_mock: HTTPXMock) -> list[list[str]]:
     batches: list[list[str]] = []
     register_fake_embeddings(httpx_mock, batches)
     return batches
+
+
+EXTRACT_DEFAULTS = {
+    "Title": "Custodial Service",
+    "Sol#": "75R60226Q00001",
+    "Department/Ind.Agency": "HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+    "CGAC": "075",
+    "Sub-Tier": "HEALTH RESOURCES AND SERVICES ADMINISTRATION",
+    "FPDS Code": "7526",
+    "Office": "HRSA HEADQUARTERS",
+    "AAC Code": "75R602",
+    "PostedDate": "2026-09-05",
+    "Type": "Solicitation",
+    "BaseType": "Solicitation",
+    "ArchiveType": "auto15",
+    "ArchiveDate": "2026-09-30",
+    "SetASideCode": "SBA",
+    "SetASide": "Small Business Set Aside - Total",
+    "ResponseDeadLine": "2026-09-15T15:00:00-04:00",
+    "NaicsCode": "541512",
+    "ClassificationCode": "S201",
+    "PopState": "CO",
+    "PopZip": "80503",
+    "PopCountry": "USA",
+    "Active": "Yes",
+    "PrimaryContactFullname": "Point of Contact 1",
+    "PrimaryContactEmail": "poc1@example.gov",
+    "OrganizationType": "OFFICE",
+    "State": "MD",
+    "City": "ROCKVILLE",
+    "ZipCode": "20852",
+    "CountryCode": "USA",
+    "Link": "https://sam.gov/workspace/contract/opp/x/view",
+    "Description": "Section L \u2013 instructions\nline two",
+}
+_extract_counter = iter(range(1, 10_000))
+
+
+def make_extract(rows: list[dict], columns: list[str] = COLUMNS) -> bytes:
+    """A cp1252 extract with the real 47 headers; unspecified cells take defaults."""
+    out = io.StringIO(newline="")
+    writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        full = {column: "" for column in columns}
+        full.update({k: v for k, v in EXTRACT_DEFAULTS.items() if k in full})
+        full.setdefault("NoticeId", "")
+        if "NoticeId" in full and not full["NoticeId"]:
+            full["NoticeId"] = f"{next(_extract_counter):032x}"
+        full.update(row)
+        writer.writerow(full)
+    return out.getvalue().encode("cp1252")

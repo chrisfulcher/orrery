@@ -43,6 +43,7 @@ ON CONFLICT(notice_id) DO UPDATE SET
     active = excluded.active,
     last_seen_at = excluded.last_seen_at,
     description_url = excluded.description_url,
+    source_id = excluded.source_id,
     raw_json = excluded.raw_json
 """
 
@@ -171,11 +172,23 @@ def resolve_agency_path(
         return None
     codes = code.split(".")
     names = name.split(".") if name else []
-    aligned = len(names) == len(codes)
+    if len(names) == len(codes):
+        return resolve_agency_segments(conn, codes, names, source_id, now)
+    leaf = resolve_agency_segments(conn, codes, [], source_id, now)
+    if name and leaf is not None:
+        _record_alias(conn, leaf, name, source_id, now)
+    return leaf
+
+
+def resolve_agency_segments(
+    conn: sqlite3.Connection, codes: list[str], names: list[str], source_id: str, now: str
+) -> int | None:
+    """One entity per prefix of ``codes``. ``names`` is parallel to ``codes`` or empty, in
+    which case each entity is named by its code prefix. Returns the leaf entity id."""
     parent: int | None = None
-    for depth in range(len(codes)):
+    for depth, _ in enumerate(codes):
         prefix = ".".join(codes[: depth + 1])
-        label = names[depth] if aligned else prefix
+        label = names[depth] if names else prefix
         (entity_id,) = conn.execute(
             "INSERT INTO entities (kind, name, agency_path_code, parent_entity_id, source_id,"
             " first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -183,11 +196,9 @@ def resolve_agency_path(
             " RETURNING entity_id",
             ("agency" if depth == 0 else "office", label, prefix, parent, source_id, now, now),
         ).fetchone()
-        if aligned:
+        if names:
             _record_alias(conn, entity_id, label, source_id, now)
         parent = entity_id
-    if not aligned and name and parent is not None:
-        _record_alias(conn, parent, name, source_id, now)
     return parent
 
 

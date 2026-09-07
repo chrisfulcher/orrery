@@ -6,7 +6,7 @@
 
 Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. The Dockerfile and compose file are new.
 
-Not there yet: backfill from the bulk extracts, saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+Not there yet: saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -64,6 +64,7 @@ Requires Python 3.13 and uv; `mise install` provides both from `.mise.toml`.
 uv sync
 uv run mentor db migrate
 uv run mentor ingest notices      # yesterday's notices for your NAICS codes; one request per page
+uv run mentor ingest bulk         # today's full extract (~250 MB, no key, no quota), your NAICS codes only
 uv run mentor fetch --dry-run     # what would be fetched, and today's remaining budget
 uv run mentor fetch               # descriptions within the budget, then attachments (free)
 uv run mentor extract             # PDF text; spends no quota
@@ -82,6 +83,7 @@ mkdir -p data                     # mounted at /data inside the container
 docker compose build
 docker compose run --rm mentor db migrate
 docker compose run --rm mentor ingest notices
+docker compose run --rm mentor ingest bulk
 docker compose run --rm mentor fetch --dry-run
 docker compose run --rm mentor fetch
 docker compose run --rm mentor extract
@@ -93,7 +95,7 @@ docker compose run --rm mentor quota
 
 The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
-Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
+`mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 
 ## Contributing
 
