@@ -15,6 +15,9 @@ from mentor.tui.app import (
     EntityScreen,
     MentorTop,
     OpportunitiesScreen,
+    PursueModal,
+    PursuitScreen,
+    PursuitsScreen,
 )
 
 Seed = Callable[[dict | None], None]
@@ -29,6 +32,10 @@ def app(
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     seed()
     workspace.track(conn, HRSA, stage="pursuing", pwin=40)
+    pursued = workspace.pursuit_for_notice(conn, HRSA)
+    assert pursued is not None
+    workspace.add_task(conn, pursued.pursuit_id, "Call the COR", due="2026-09-07")
+    workspace.add_task(conn, pursued.pursuit_id, "Draft the capture plan", due="2026-09-08")
     conn.close()
     return MentorTop(settings)
 
@@ -43,12 +50,10 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
         assert isinstance(app.screen, DashboardScreen)
         assert "5 notices, 5 active" in text(app, "#activity_text")
         assert "spent 1 of 10" in text(app, "#quota_text")
-        deadlines = app.screen.query_one("#deadlines", DataTable)
-        assert deadlines.row_count == 2
-        assert max(row.height for row in deadlines.rows.values()) >= 2  # long titles wrap
-        assert (
-            app.screen.query_one("#pipeline", DataTable).row_count == 1
-        )  # one stage row, one notice
+        work = app.screen.query_one("#work", DataTable)
+        assert work.row_count == 2 and "2 item(s)" in work.border_title
+        assert app.screen.query_one("#attention", DataTable).row_count == 0
+        assert "qualify 1" in app.screen.query_one("#attention", DataTable).border_title
 
         await pilot.press("2")
         await pilot.pause()
@@ -65,11 +70,19 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
         await pilot.pause()
         assert isinstance(app.screen, ContextScreen)
         assert "Microsoft" in text(app, "#header")
-        assert "not tracked" in text(app, "#tracking")
+        assert "not pursued" in text(app, "#pursuit")
 
         await pilot.press("t")
         await pilot.pause()
-        assert text(app, "#tracking").startswith("identify")
+        assert isinstance(app.screen, PursueModal)
+        await pilot.press("enter")  # new pursuit from this notice
+        await pilot.pause()
+        assert isinstance(app.screen, PursuitScreen)
+        assert "identify → Pursuit Gate" in text(app, "#pursuit_header")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ContextScreen)
+        assert text(app, "#pursuit").startswith("#2 ") and "identify" in text(app, "#pursuit")
 
         await pilot.press("a")
         await pilot.pause()
@@ -82,11 +95,11 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
         await pilot.pause()
         assert isinstance(app.screen, OpportunitiesScreen)
 
-        await pilot.press("1")
+        await pilot.press("3")
         await pilot.pause()
-        assert (
-            app.screen.query_one("#pipeline", DataTable).row_count == 2
-        )  # two stages, two notices
+        assert isinstance(app.screen, PursuitsScreen)
+        board = app.screen.query_one("#board", DataTable)
+        assert board.row_count == 2 and "identify 1, qualify 1" in board.border_title
 
         await pilot.press("q")
     assert not app.is_running
@@ -95,25 +108,21 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
 async def test_dashboard_refresh_keeps_the_selected_row(app: MentorTop) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        deadlines = app.screen.query_one("#deadlines", DataTable)
-        deadlines.focus()
+        work = app.screen.query_one("#work", DataTable)
+        work.focus()
         await pilot.press("down")
         await pilot.pause()
-        assert deadlines.cursor_row == 1
-        selected = deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value
+        assert work.cursor_row == 1
+        selected = work.coordinate_to_cell_key(work.cursor_coordinate).row_key.value
 
         app.screen.refresh_panels()  # what the five-second timer does
         await pilot.pause()
-        assert deadlines.cursor_row == 1
-        assert (
-            deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value == selected
-        )
+        assert work.cursor_row == 1
+        assert work.coordinate_to_cell_key(work.cursor_coordinate).row_key.value == selected
 
         await pilot.resize_terminal(100, 40)  # a rebuild with new widths keeps the row too
         await pilot.pause()
-        assert (
-            deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value == selected
-        )
+        assert work.coordinate_to_cell_key(work.cursor_coordinate).row_key.value == selected
 
 
 async def test_screenshot(app: MentorTop, tmp_path: Path) -> None:
@@ -175,3 +184,47 @@ async def test_context_view_awards_panels_and_contractor_screen(app_with_awards:
         await pilot.pause()
         assert text(app, "#incumbent").startswith("none known")
         assert "none in the store" in app.screen.query_one("#awards", DataTable).border_title
+
+
+async def test_pursuit_screen_drives_the_lifecycle(app: MentorTop) -> None:
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(PursuitScreen(1))
+        await pilot.pause()
+        header = text(app, "#pursuit_header")
+        assert "qualify → Capture Gate" in header and "pwin 40" in header
+        tasks = app.screen.query_one("#tasks", DataTable)
+        assert tasks.row_count == 9  # identify and qualify templates plus the two dated ones
+
+        await pilot.press("d")  # the selected task is done
+        await pilot.pause()
+        tasks = app.screen.query_one("#tasks", DataTable)
+        assert tasks.get_row_at(tasks.row_count - 1)[0] == "x"  # done tasks sort last
+
+        await pilot.press("p")
+        await pilot.press(*"60")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "pwin 60" in text(app, "#pursuit_header")
+
+        await pilot.press("t")
+        await pilot.press(*"Price to win")
+        await pilot.press("enter")
+        await pilot.press(*"2026-09-09")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#tasks", DataTable).row_count == 10
+
+        await pilot.press("g")  # go, with a reason
+        await pilot.press("enter")
+        await pilot.press(*"fits the profile")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "capture → Bid Gate" in text(app, "#pursuit_header")
+        events = app.screen.query_one("#events", DataTable)
+        assert events.get_row_at(0)[1] == "stage" and "(Capture Gate)" in events.get_row_at(0)[2]
+
+        await pilot.press("escape")  # back to the dashboard, which refreshes on resume
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+        assert app.screen.query_one("#work", DataTable).row_count == 2  # one done, one added

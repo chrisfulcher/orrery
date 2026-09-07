@@ -1,13 +1,15 @@
 """mentor top: a full-screen terminal UI in the idiom of system monitors (DESIGN.md §3, §4).
 
-Two modes switched with number keys, each keeping its own screen stack: the dashboard and the
-opportunities table. The context view and the entity view are pushed on top and popped with
-Escape. Every read goes through the query and workspace modules over one SQLite connection
-opened on mount; every query is milliseconds, so nothing runs off the event loop.
+Modes switched with number keys, each keeping its own screen stack: the dashboard (this week's
+work), the opportunities table, and the pursuits board. The context view, the pursuit screen,
+and the entity view are pushed on top and popped with Escape. Every read goes through the
+query and workspace modules over one SQLite connection opened on mount; every query is
+milliseconds, so nothing runs off the event loop.
 """
 
 import webbrowser
 from collections import Counter
+from collections.abc import Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -128,6 +130,46 @@ def _notice_row(hit: query.SearchHit) -> Row:
     return (_day(hit.response_deadline), hit.agency or "-", hit.title), hit.notice_id
 
 
+WORK_COLUMNS: list[tuple[str, int | None]] = [("due", 10), ("pursuit", 30), ("task", None)]
+PURSUIT_COLUMNS: list[tuple[str, int | None]] = [
+    ("stage", 11), ("pwin", 4), ("next due", 10), ("office", 24), ("title", None)
+]  # fmt: skip
+TASK_COLUMNS: list[tuple[str, int | None]] = [
+    ("done", 4),
+    ("due", 10),
+    ("stage", 10),
+    ("task", None),
+]
+LINKED_COLUMNS: list[tuple[str, int | None]] = [("due", 10), ("role", 15), ("notice", None)]
+EVENT_COLUMNS: list[tuple[str, int | None]] = [("when", 20), ("field", 8), ("change", None)]
+
+
+def _work_row(item: workspace.WorkItem, index: int) -> Row:
+    due = ("! " if item.overdue else "") + item.due
+    return (due, item.pursuit_title, item.what), _pursuit_key(item.pursuit_id, index)
+
+
+def _pursuit_key(pursuit_id: int, index: int) -> str:
+    """A unique row key that still names the pursuit: one pursuit may fill several rows."""
+    return f"{pursuit_id}:{index}"
+
+
+def _pursuit_id(key: str | None) -> int | None:
+    return int(key.split(":")[0]) if key else None
+
+
+def _pursuit_row(p: workspace.Pursuit) -> Row:
+    stage = p.stage + (" ⏸" if p.held_until else "") + (f" {p.outcome}" if p.outcome else "")
+    cells = (
+        stage,
+        "-" if p.pwin is None else str(p.pwin),
+        p.next_due or (p.next_response_deadline or "")[:10] or "-",
+        p.office or p.office_code or "-",
+        p.title,
+    )
+    return cells, str(p.pursuit_id)
+
+
 class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         with Grid(id="panels"):
@@ -138,10 +180,16 @@ class DashboardScreen(Screen):
             with Vertical(id="activity", classes="panel"):
                 yield Static(id="activity_text")
                 yield Sparkline([], id="activity_spark", summary_function=max)
-            yield WrapTable(NOTICE_COLUMNS, id="deadlines", classes="panel", cursor_type="row")
+            yield WrapTable(WORK_COLUMNS, id="work", classes="panel", cursor_type="row")
             yield WrapTable(
-                [("deadline", 10), ("stage", 9), ("pwin", 4), ("title", None)],
-                id="pipeline",
+                [("why", 11), ("stage", 10), ("pursuit", None)],
+                id="attention",
+                classes="panel",
+                cursor_type="row",
+            )
+            yield WrapTable(
+                [("date", 10), ("kind", 9), ("pursuit", 30), ("what", None)],
+                id="dates",
                 classes="panel",
                 cursor_type="row",
             )
@@ -151,7 +199,6 @@ class DashboardScreen(Screen):
         self.query_one("#quota").border_title = "quota"
         self.query_one("#queues").border_title = "queues"
         self.query_one("#activity").border_title = "activity"
-        self.query_one("#deadlines").border_title = "deadlines, next 7 days"
         self.refresh_panels()
         self.set_interval(REFRESH_SECONDS, self.refresh_panels)
 
@@ -181,36 +228,43 @@ class DashboardScreen(Screen):
         self.query_one("#activity_spark", Sparkline).data = [
             float(n) for _, n in query.activity(conn, days=14)
         ]
-        self.query_one("#deadlines", WrapTable).set_rows(
-            [_notice_row(hit) for hit in query.upcoming(conn, days=7, limit=20)]
+        board = workspace.dashboard(conn, days=7, stall_days=14, horizon_days=60)
+        work = self.query_one("#work", WrapTable)
+        overdue = sum(1 for w in board.work if w.overdue)
+        work.border_title = (
+            f"work this week · {len(board.work)} item(s)"
+            + (f", {overdue} overdue" if overdue else "")
+            if board.work
+            else "work this week · nothing due (3 for pursuits)"
         )
-        pipeline = self.query_one("#pipeline", WrapTable)
-        rows = workspace.pipeline(conn)
-        by_stage = Counter(row.stage for row in rows)
-        summary = ", ".join(
-            f"{stage} {by_stage[stage]}"
-            for stage in workspace.workflow(conn).keys()
-            if by_stage[stage]
+        work.set_rows([_work_row(item, i) for i, item in enumerate(board.work)])
+        attention = self.query_one("#attention", WrapTable)
+        stages = ", ".join(f"{key} {n}" for key, n in board.by_stage if n)
+        attention.border_title = (
+            f"attention · {stages}" if stages else "attention · no open pursuits"
         )
-        pipeline.border_title = f"pipeline · {summary}" if summary else "pipeline · nothing tracked"
-        pipeline.set_rows(
+        attention.set_rows(
             [
                 (
-                    (
-                        _day(tracked.response_deadline),
-                        tracked.stage,
-                        "-" if tracked.pwin is None else str(tracked.pwin),
-                        tracked.title,
-                    ),
-                    tracked.notice_id,
+                    (item.reason, item.stage, f"{item.pursuit_title} · {item.detail}"),
+                    _pursuit_key(item.pursuit_id, i),
                 )
-                for tracked in rows[:10]
+                for i, item in enumerate(board.attention)
+            ]
+        )
+        dates = self.query_one("#dates", WrapTable)
+        dates.border_title = f"government dates, next 60 days · {len(board.dates)}"
+        dates.set_rows(
+            [
+                ((d.date[:10], d.kind, d.pursuit_title, d.label), _pursuit_key(d.pursuit_id, i))
+                for i, d in enumerate(board.dates)
             ]
         )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.row_key.value:
-            self.app.push_screen(ContextScreen(event.row_key.value))
+        pursuit_id = _pursuit_id(event.row_key.value)
+        if pursuit_id is not None:
+            self.app.push_screen(PursuitScreen(pursuit_id))
 
 
 class OpportunitiesScreen(Screen):
@@ -266,7 +320,7 @@ class ContextScreen(Screen):
     incumbent, the office's award history, and the government contacts."""
 
     BINDINGS = [
-        Binding("t", "track", "Track / stage"),
+        Binding("t", "pursue", "Pursue"),
         Binding("a", "agency", "Agency"),
         Binding("i", "incumbent", "Incumbent"),
         Binding("o", "open", "Open in SAM.gov"),
@@ -280,7 +334,7 @@ class ContextScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(id="header", classes="panel")
-        yield Static(id="tracking", classes="panel")
+        yield Static(id="pursuit", classes="panel")
         yield Static(id="incumbent", classes="panel")
         with VerticalScroll(id="description_scroll", classes="panel"):
             yield Static(id="description")
@@ -295,7 +349,7 @@ class ContextScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#header").border_title = "notice"
-        self.query_one("#tracking").border_title = "pipeline"
+        self.query_one("#pursuit").border_title = "pursuit"
         self.query_one("#incumbent").border_title = "incumbent"
         self.query_one("#description_scroll").border_title = "description"
         self.query_one("#awards").border_title = "award history"
@@ -324,12 +378,14 @@ class ContextScreen(Screen):
             f" · source {detail.source_id}\n"
             f"{detail.url or ''}"
         )
-        tracked = self._tracked()
-        self.query_one("#tracking", Static).update(
-            "not tracked (t to watch)"
-            if tracked is None
-            else f"{tracked.stage} · pwin {tracked.pwin if tracked.pwin is not None else '-'}"
-            f" · updated {tracked.updated_at} (t to change stage)"
+        current = self._pursuit()
+        self.query_one("#pursuit", Static).update(
+            "not pursued (t to pursue)"
+            if current is None
+            else f"#{current.pursuit_id} {current.title} · {current.stage}"
+            f"{' · ' + current.outcome if current.outcome else ''}"
+            f" · pwin {current.pwin if current.pwin is not None else '-'}"
+            f" · {current.open_tasks} open task(s) (t to open)"
         )
         incumbent = detail.incumbent
         self.query_one("#incumbent", Static).update(
@@ -377,22 +433,39 @@ class ContextScreen(Screen):
             ]
         )
 
-    def _tracked(self) -> workspace.Tracked | None:
-        rows = workspace.pipeline(self.app.conn)
-        return next((row for row in rows if row.notice_id == self.notice_id), None)
+    def _pursuit(self) -> workspace.Pursuit | None:
+        return workspace.pursuit_for_notice(self.app.conn, self.notice_id)
 
-    def action_track(self) -> None:
-        tracked = self._tracked()
-        if tracked is None:
-            workspace.track(self.app.conn, self.notice_id)
-            self.load()
+    def action_pursue(self) -> None:
+        """Open the pursuit this notice belongs to, or attach the notice to one."""
+        current = self._pursuit()
+        if current is not None and current.open:
+            self.app.push_screen(PursuitScreen(current.pursuit_id))
+            return
+        office = (
+            self.detail.agency_chain[-1].entity_id
+            if self.detail and self.detail.agency_chain
+            else None
+        )
+        candidates = sorted(
+            workspace.pursuits(self.app.conn),
+            key=lambda p: (p.office_entity_id != office, p.title.lower()),
+        )
+        self.app.push_screen(PursueModal(candidates), self._pursued)
+
+    def _pursued(self, choice: int | str | None) -> None:
+        if choice is None or self.detail is None:
+            return
+        if choice == "new":
+            opened = workspace.new_pursuit(
+                self.app.conn, self.detail.title, notice_id=self.notice_id
+            )
+            pursuit_id = opened.pursuit_id
         else:
-            self.app.push_screen(StageModal(tracked.stage), self._set_stage)
-
-    def _set_stage(self, stage: str | None) -> None:
-        if stage:
-            workspace.track(self.app.conn, self.notice_id, stage=stage)
-            self.load()
+            workspace.link_notice(self.app.conn, int(choice), self.notice_id)
+            pursuit_id = int(choice)
+        self.load()
+        self.app.push_screen(PursuitScreen(pursuit_id))
 
     def action_agency(self) -> None:
         if self.detail and self.detail.agency_chain:
@@ -416,30 +489,429 @@ class ContextScreen(Screen):
                 self.app.push_screen(EntityScreen(award.vendor_entity_id))
 
 
-class StageModal(ModalScreen[str | None]):
+class PromptModal(ModalScreen[str | None]):
+    """One line of text; Enter returns it, Escape returns None."""
+
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, current: str) -> None:
+    def __init__(self, label: str, initial: str = "", *, placeholder: str = "") -> None:
         super().__init__()
-        self.current = current
+        self.label = label
+        self.initial = initial
+        self.placeholder = placeholder
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="stage_box"):
-            yield Label("stage (Enter to set, Escape to cancel)")
-            yield ListView(
-                *[ListItem(Label(stage), name=stage) for stage in workspace.STAGES], id="stages"
-            )
+        with Vertical(classes="modal_box"):
+            yield Label(self.label)
+            yield Input(value=self.initial, placeholder=self.placeholder, id="prompt")
 
     def on_mount(self) -> None:
-        stages = self.query_one("#stages", ListView)
-        stages.index = workspace.STAGES.index(self.current)
-        stages.focus()
+        self.query_one("#prompt", Input).focus()
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.dismiss(event.item.name)
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class DecisionModal(ModalScreen[dict | None]):
+    """A choice plus its rationale (and a date when the choice is a hold): Enter on the
+    choice moves to the rationale, Enter there records the decision."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, choices: list[str], *, date_for: str | None = None) -> None:
+        super().__init__()
+        self.title_text = title
+        self.choices = choices
+        self.date_for = date_for
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal_box"):
+            yield Label(self.title_text)
+            yield ListView(*[ListItem(Label(c), name=c) for c in self.choices], id="choices")
+            yield Input(placeholder="why (recorded with the decision)", id="why")
+            if self.date_for:
+                yield Input(
+                    placeholder=f"revisit date for a {self.date_for}, YYYY-MM-DD", id="until"
+                )
+
+    def on_mount(self) -> None:
+        self.query_one("#choices", ListView).focus()
+
+    def _choice(self) -> str:
+        choices = self.query_one("#choices", ListView)
+        index = choices.index if choices.index is not None else 0
+        return self.choices[index]
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.query_one("#why", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        choice = self._choice()
+        why = self.query_one("#why", Input).value.strip()
+        until = self.query_one("#until", Input).value.strip() if self.date_for else ""
+        if not why:
+            self.query_one("#why", Input).focus()
+            return
+        if event.input.id == "why" and self.date_for and choice == self.date_for and not until:
+            self.query_one("#until", Input).focus()
+            return
+        self.dismiss({"choice": choice, "why": why, "until": until or None})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class TaskModal(ModalScreen[dict | None]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal_box"):
+            yield Label("new task (Enter on the date to add, Escape to cancel)")
+            yield Input(placeholder="what", id="title")
+            yield Input(placeholder="due YYYY-MM-DD (optional)", id="due")
+
+    def on_mount(self) -> None:
+        self.query_one("#title", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        title = self.query_one("#title", Input).value.strip()
+        if not title:
+            self.query_one("#title", Input).focus()
+            return
+        if event.input.id == "title":
+            self.query_one("#due", Input).focus()
+            return
+        self.dismiss({"title": title, "due": self.query_one("#due", Input).value.strip() or None})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PursueModal(ModalScreen[int | str | None]):
+    """Attach a notice to an open pursuit, or start a new one from it."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, candidates: list[workspace.Pursuit]) -> None:
+        super().__init__()
+        self.candidates = candidates
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal_box"):
+            yield Label("pursue (Enter to choose, Escape to cancel)")
+            items = [ListItem(Label("new pursuit from this notice"), name="new")]
+            items += [
+                ListItem(
+                    Label(f"#{p.pursuit_id} {p.title} · {p.stage} @ {p.office or '-'}"),
+                    name=str(p.pursuit_id),
+                )
+                for p in self.candidates
+            ]
+            yield ListView(*items, id="pursue_choices")
+
+    def on_mount(self) -> None:
+        self.query_one("#pursue_choices", ListView).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        name = event.item.name
+        self.dismiss("new" if name == "new" else int(name))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class PursuitsScreen(Screen):
+    """The board: open pursuits by stage."""
+
+    BINDINGS = [
+        Binding("n", "new", "New pursuit"),
+        Binding("c", "toggle_closed", "Closed"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.include_closed = False
+
+    def compose(self) -> ComposeResult:
+        yield WrapTable(PURSUIT_COLUMNS, id="board", classes="panel", cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.refresh_board()
+        self.query_one("#board", WrapTable).focus()
+
+    def on_screen_resume(self) -> None:
+        self.refresh_board()
+
+    def refresh_board(self) -> None:
+        conn = self.app.conn
+        rows = workspace.pursuits(conn, include_closed=self.include_closed)
+        board = self.query_one("#board", WrapTable)
+        counts = Counter(p.stage for p in rows if p.open)
+        stages = ", ".join(f"{k} {counts[k]}" for k in workspace.workflow(conn).keys() if counts[k])
+        board.border_title = f"pursuits · {stages or 'none open'}" + (
+            " · closed shown" if self.include_closed else ""
+        )
+        board.set_rows([_pursuit_row(p) for p in rows])
+
+    def action_toggle_closed(self) -> None:
+        self.include_closed = not self.include_closed
+        self.refresh_board()
+
+    def action_new(self) -> None:
+        self.app.push_screen(
+            PromptModal("new pursuit: title", placeholder="the requirement"), self._new
+        )
+
+    def _new(self, title: str | None) -> None:
+        if title and title.strip():
+            opened = workspace.new_pursuit(self.app.conn, title.strip())
+            self.refresh_board()
+            self.app.push_screen(PursuitScreen(opened.pursuit_id))
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key.value:
+            self.app.push_screen(PursuitScreen(int(event.row_key.value)))
+
+
+class PursuitScreen(Screen):
+    """One pursuit: where it stands, its tasks, its notices, and every decision."""
+
+    BINDINGS = [
+        Binding("d", "done", "Done"),
+        Binding("t", "task", "Task"),
+        Binding("g", "gate", "Gate"),
+        Binding("b", "back", "Back a stage"),
+        Binding("w", "outcome", "Outcome"),
+        Binding("p", "pwin", "PWin"),
+        Binding("n", "notes", "Notes"),
+        Binding("a", "office", "Office"),
+        Binding("i", "incumbent", "Incumbent"),
+        Binding("escape", "app.pop_screen", "Back"),
+    ]
+
+    def __init__(self, pursuit_id: int) -> None:
+        super().__init__()
+        self.pursuit_id = pursuit_id
+        self.detail: workspace.PursuitDetail | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="pursuit_header", classes="panel")
+        yield WrapTable(TASK_COLUMNS, id="tasks", classes="panel", cursor_type="row")
+        yield WrapTable(LINKED_COLUMNS, id="pursuit_notices", classes="panel", cursor_type="row")
+        yield WrapTable(EVENT_COLUMNS, id="events", classes="panel")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#pursuit_header").border_title = "pursuit"
+        self.query_one("#tasks").border_title = "tasks"
+        self.query_one("#pursuit_notices").border_title = "notices"
+        self.query_one("#events").border_title = "decisions and changes"
+        self.load()
+        self.query_one("#tasks", WrapTable).focus()
+
+    def load(self) -> None:
+        try:
+            detail = workspace.pursuit(self.app.conn, self.pursuit_id)
+        except workspace.NotFound:
+            self.notify(f"no pursuit {self.pursuit_id}", severity="error")
+            self.app.pop_screen()
+            return
+        self.detail = detail
+        p = detail.pursuit
+        state = f"{p.stage}" + (f" → {detail.gate}" if detail.gate else "")
+        if p.held_until:
+            state += f" · held until {p.held_until}"
+        if p.outcome:
+            state += f" · {p.outcome}"
+        if not p.open:
+            state += " · closed"
+        if detail.gate_ready:
+            state += " · gate ready (g)"
+        incumbent = ""
+        if detail.incumbent:
+            i = detail.incumbent
+            incumbent = (
+                f"\nincumbent {i.vendor or '-'} · {i.piid} · {_money(i.value_usd)}"
+                f" · ends {i.pop_end or '-'} (i to open)"
+            )
+        dates = " · ".join(f"{d.date[:10]} {d.kind} {d.label}" for d in detail.dates)
+        self.query_one("#pursuit_header", Static).update(
+            f"#{p.pursuit_id} {p.title}\n{state}\n"
+            f"office {p.office or '-'} ({p.office_code or '-'}) · NAICS {p.naics_code or '-'}"
+            f" · pwin {p.pwin if p.pwin is not None else '-'}{incumbent}"
+            + (f"\nsummary: {p.summary}" if p.summary else "")
+            + (f"\nnotes: {p.notes}" if p.notes else "")
+            + (f"\ngovernment dates: {dates}" if dates else "")
+        )
+        self.query_one("#tasks", WrapTable).set_rows(
+            [
+                (
+                    ("x" if task.done_at else " ", task.due or "-", task.stage, task.title),
+                    str(task.task_id),
+                )
+                for task in detail.tasks
+            ]
+        )
+        self.query_one("#pursuit_notices", WrapTable).set_rows(
+            [((_day(n.response_deadline), n.role, n.title), n.notice_id) for n in detail.notices]
+        )
+        self.query_one("#events", WrapTable).set_rows(
+            [
+                (
+                    (
+                        e.changed_at,
+                        e.field,
+                        (
+                            e.new_value or "-"
+                            if e.field == "task"
+                            else f"{e.old_value or '-'} → {e.new_value or '-'}"
+                        )
+                        + (f" ({e.note})" if e.note else ""),
+                    ),
+                    str(e.event_id),
+                )
+                for e in reversed(detail.events)
+            ]
+        )
+
+    def _selected_task(self) -> workspace.Task | None:
+        table = self.query_one("#tasks", WrapTable)
+        if not self.detail or not table.row_count:
+            return None
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        return next((t for t in self.detail.tasks if str(t.task_id) == key), None)
+
+    def _apply(self, action: Callable[[], object]) -> None:
+        try:
+            action()
+        except (ValueError, workspace.NotFound) as exc:
+            self.notify(str(exc), severity="error")
+        self.load()
+
+    def action_done(self) -> None:
+        task = self._selected_task()
+        if task is not None and task.done_at is None:
+            self._apply(lambda: workspace.complete_task(self.app.conn, task.task_id))
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "tasks":
+            self.action_done()
+        elif event.data_table.id == "pursuit_notices" and event.row_key.value:
+            self.app.push_screen(ContextScreen(event.row_key.value))
+
+    def action_task(self) -> None:
+        self.app.push_screen(TaskModal(), self._task_added)
+
+    def _task_added(self, result: dict | None) -> None:
+        if result:
+            self._apply(
+                lambda: workspace.add_task(
+                    self.app.conn, self.pursuit_id, result["title"], due=result["due"]
+                )
+            )
+
+    def action_gate(self) -> None:
+        if self.detail and self.detail.gate:
+            self.app.push_screen(
+                DecisionModal(
+                    f"{self.detail.gate}: decision", ["go", "no-go", "hold"], date_for="hold"
+                ),
+                self._gated,
+            )
+        else:
+            self.notify("this stage has no gate", severity="warning")
+
+    def _gated(self, result: dict | None) -> None:
+        if result:
+            self._apply(
+                lambda: workspace.gate(
+                    self.app.conn,
+                    self.pursuit_id,
+                    result["choice"],
+                    result["why"],
+                    until=result["until"],
+                )
+            )
+
+    def action_back(self) -> None:
+        if not self.detail:
+            return
+        earlier = (
+            workspace.workflow(self.app.conn).previous_keys(self.detail.pursuit.stage)
+            if self.detail.pursuit.stage in workspace.workflow(self.app.conn).keys()
+            else []
+        )
+        if not earlier:
+            self.notify("already at the first stage", severity="warning")
+            return
+        self.app.push_screen(
+            DecisionModal("move back to", list(reversed(earlier))), self._moved_back
+        )
+
+    def _moved_back(self, result: dict | None) -> None:
+        if result:
+            self._apply(
+                lambda: workspace.move_back(
+                    self.app.conn, self.pursuit_id, result["choice"], result["why"]
+                )
+            )
+
+    def action_outcome(self) -> None:
+        if self.detail and not self.detail.pursuit.open:
+            self.app.push_screen(DecisionModal("reopen", ["reopen"]), self._reopened)
+        else:
+            self.app.push_screen(DecisionModal("outcome", ["won", "lost", "no-bid"]), self._outcome)
+
+    def _reopened(self, result: dict | None) -> None:
+        if result:
+            self._apply(lambda: workspace.reopen(self.app.conn, self.pursuit_id, result["why"]))
+
+    def _outcome(self, result: dict | None) -> None:
+        if result:
+            self._apply(
+                lambda: workspace.set_outcome(
+                    self.app.conn, self.pursuit_id, result["choice"], result["why"]
+                )
+            )
+
+    def action_pwin(self) -> None:
+        current = self.detail.pursuit.pwin if self.detail else None
+        self.app.push_screen(
+            PromptModal("win probability, 0 to 100", "" if current is None else str(current)),
+            self._pwin,
+        )
+
+    def _pwin(self, value: str | None) -> None:
+        if value is None or not value.strip():
+            return
+        try:
+            pwin = int(value)
+        except ValueError:
+            self.notify("pwin must be a whole number", severity="error")
+            return
+        self._apply(lambda: workspace.update_pursuit(self.app.conn, self.pursuit_id, pwin=pwin))
+
+    def action_notes(self) -> None:
+        current = self.detail.pursuit.notes if self.detail else None
+        self.app.push_screen(PromptModal("notes", current or ""), self._notes)
+
+    def _notes(self, value: str | None) -> None:
+        if value is not None:
+            self._apply(
+                lambda: workspace.update_pursuit(self.app.conn, self.pursuit_id, notes=value)
+            )
+
+    def action_office(self) -> None:
+        if self.detail and self.detail.pursuit.office_entity_id:
+            self.app.push_screen(EntityScreen(self.detail.pursuit.office_entity_id))
+
+    def action_incumbent(self) -> None:
+        if self.detail and self.detail.incumbent and self.detail.incumbent.vendor_entity_id:
+            self.app.push_screen(EntityScreen(self.detail.incumbent.vendor_entity_id))
 
 
 class EntityScreen(Screen):
@@ -511,10 +983,15 @@ class EntityScreen(Screen):
 class MentorTop(App):
     TITLE = "mentor"
     CSS_PATH = "top.tcss"
-    MODES = {"dashboard": DashboardScreen, "opportunities": OpportunitiesScreen}
+    MODES = {
+        "dashboard": DashboardScreen,
+        "opportunities": OpportunitiesScreen,
+        "pursuits": PursuitsScreen,
+    }
     BINDINGS = [
         Binding("1", "switch_mode('dashboard')", "Dashboard"),
         Binding("2", "switch_mode('opportunities')", "Opportunities"),
+        Binding("3", "switch_mode('pursuits')", "Pursuits"),
         Binding("slash", "search", "Search"),
         Binding("q", "quit", "Quit"),
     ]

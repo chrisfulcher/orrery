@@ -3,13 +3,16 @@ Screen {
 }
 #panels {
     layout: grid;
-    grid-size: 3 2;
-    grid-rows: 9 1fr;
+    grid-size: 3 3;
+    grid-rows: 9 1fr 9;
     grid-gutter: 0 1;
     height: 1fr;
 }
-#deadlines {
+#work {
     column-span: 2;
+}
+#dates {
+    column-span: 3;
 }
 .panel {
     border: round $primary;
@@ -22,7 +25,7 @@ Sparkline {
 #query {
     border: round $primary;
 }
-#header, #tracking, #incumbent, #officials, #entity_header {
+#header, #pursuit, #incumbent, #officials, #entity_header, #pursuit_header {
     height: auto;
 }
 #description_scroll {
@@ -37,16 +40,29 @@ Sparkline {
 #entity_awards {
     height: 10;
 }
-#entity_notices {
+#board, #entity_notices {
     height: 1fr;
 }
-StageModal {
+#tasks {
+    height: 1fr;
+}
+#pursuit_notices {
+    height: 7;
+}
+#events {
+    height: 9;
+}
+PromptModal, DecisionModal, TaskModal, PursueModal {
     align: center middle;
 }
-#stage_box {
-    width: 32;
+.modal_box {
+    width: 72;
     height: auto;
     border: round $primary;
     background: $surface;
     padding: 0 1;
+}
+.modal_box ListView {
+    height: auto;
+    max-height: 8;
 }
