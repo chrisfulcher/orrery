@@ -1,0 +1,611 @@
+{
+  "totalRecords": 1,
+  "entityData": [
+    {
+      "entityRegistration": {
+        "samRegistered": "Yes",
+        "ueiSAM": "UE9QJD4KK1L6",
+        "entityEFTIndicator": null,
+        "cageCode": "5UTE1",
+        "dodaac": null,
+        "legalBusinessName": "LEIDOS, INC.",
+        "dbaName": null,
+        "purposeOfRegistrationCode": "Z2",
+        "purposeOfRegistrationDesc": "All Awards",
+        "registrationStatus": "Active",
+        "evsSource": null,
+        "registrationDate": "2010-01-05",
+        "lastUpdateDate": "2026-07-22",
+        "registrationExpirationDate": "2027-04-17",
+        "activationDate": "2026-04-27",
+        "ueiStatus": "Active",
+        "ueiExpirationDate": null,
+        "ueiCreationDate": null,
+        "publicDisplayFlag": "Y",
+        "exclusionStatusFlag": "N",
+        "exclusionURL": null,
+        "dnbOpenData": null
+      },
+      "coreData": {
+        "entityInformation": {
+          "entityURL": "http://www.leidos.com",
+          "entityDivisionName": "Leidos Integration Operating Segment",
+          "entityDivisionNumber": null,
+          "entityStartDate": "1969-02-03",
+          "fiscalYearEndCloseDate": "12/31",
+          "submissionDate": "2026-04-17"
+        },
+        "physicalAddress": {
+          "addressLine1": "1750 PRESIDENTS ST FL 10",
+          "addressLine2": null,
+          "city": "RESTON",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": "5617",
+          "countryCode": "USA"
+        },
+        "mailingAddress": {
+          "addressLine1": "1750 Presidents St",
+          "addressLine2": null,
+          "city": "Reston",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": null,
+          "countryCode": "USA"
+        },
+        "congressionalDistrict": "11",
+        "generalInformation": {
+          "entityStructureCode": "2L",
+          "entityStructureDesc": "Corporate Entity (Not Tax Exempt)",
+          "entityTypeCode": "F",
+          "entityTypeDesc": "Business or Organization",
+          "profitStructureCode": "2X",
+          "profitStructureDesc": "For Profit Organization",
+          "organizationStructureCode": "MF",
+          "organizationStructureDesc": "Manufacturer of Goods",
+          "stateOfIncorporationCode": "DE",
+          "stateOfIncorporationDesc": "DELAWARE",
+          "countryOfIncorporationCode": "USA",
+          "countryOfIncorporationDesc": "UNITED STATES"
+        },
+        "businessTypes": {
+          "businessTypeList": [
+            {
+              "businessTypeCode": "2X",
+              "businessTypeDesc": "For Profit Organization"
+            },
+            {
+              "businessTypeCode": "F",
+              "businessTypeDesc": "Business or Organization"
+            },
+            {
+              "businessTypeCode": "MF",
+              "businessTypeDesc": "Manufacturer of Goods"
+            }
+          ],
+          "sbaBusinessTypeList": [
+            {
+              "sbaBusinessTypeCode": null,
+              "sbaBusinessTypeDesc": null,
+              "certificationEntryDate": null,
+              "certificationExitDate": null
+            }
+          ]
+        },
+        "financialInformation": {
+          "creditCardUsage": "Y",
+          "debtSubjectToOffset": "N"
+        }
+      },
+      "assertions": {
+        "goodsAndServices": {
+          "primaryNaics": "541715",
+          "naicsList": [
+            {
+              "naicsCode": "236220",
+              "naicsDescription": "Commercial and Institutional Building Construction ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "332311",
+              "naicsDescription": "Prefabricated Metal Building and Component Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334111",
+              "naicsDescription": "Electronic Computer Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334112",
+              "naicsDescription": "Computer Storage Device Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334118",
+              "naicsDescription": "Computer Terminal and Other Computer Peripheral Equipment Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334290",
+              "naicsDescription": "Other Communications Equipment Manufacturing",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334511",
+              "naicsDescription": "Search, Detection, Navigation, Guidance, Aeronautical, and Nautical System and Instrument Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334512",
+              "naicsDescription": "Automatic Environmental Control Manufacturing for Residential, Commercial, and Appliance Use ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334516",
+              "naicsDescription": "Analytical Laboratory Instrument Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334517",
+              "naicsDescription": "Irradiation Apparatus Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "334519",
+              "naicsDescription": "Other Measuring and Controlling Device Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "336411",
+              "naicsDescription": "Aircraft Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "336992",
+              "naicsDescription": "Military Armored Vehicle, Tank, and Tank Component Manufacturing ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "481211",
+              "naicsDescription": "Nonscheduled Chartered Passenger Air Transportation ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "488190",
+              "naicsDescription": "Other Support Activities for Air Transportation",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "488999",
+              "naicsDescription": "All Other Support Activities for Transportation ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "493110",
+              "naicsDescription": "General Warehousing and Storage ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "512110",
+              "naicsDescription": "Motion Picture and Video Production ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "517121",
+              "naicsDescription": "Telecommunications Resellers",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541330",
+              "naicsDescription": "Engineering Services",
+              "sbaSmallBusiness": "E",
+              "naicsException": "NNNN"
+            },
+            {
+              "naicsCode": "541360",
+              "naicsDescription": "Geophysical Surveying and Mapping Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541370",
+              "naicsDescription": "Surveying and Mapping (except Geophysical) Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541380",
+              "naicsDescription": "Testing Laboratories and Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541420",
+              "naicsDescription": "Industrial Design Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541430",
+              "naicsDescription": "Graphic Design Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541511",
+              "naicsDescription": "Custom Computer Programming Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541512",
+              "naicsDescription": "Computer Systems Design Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541513",
+              "naicsDescription": "Computer Facilities Management Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541519",
+              "naicsDescription": "Other Computer Related Services",
+              "sbaSmallBusiness": "E",
+              "naicsException": "NN"
+            },
+            {
+              "naicsCode": "541611",
+              "naicsDescription": "Administrative Management and General Management Consulting Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541613",
+              "naicsDescription": "Marketing Consulting Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541614",
+              "naicsDescription": "Process, Physical Distribution, and Logistics Consulting Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541618",
+              "naicsDescription": "Other Management Consulting Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541620",
+              "naicsDescription": "Environmental Consulting Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541690",
+              "naicsDescription": "Other Scientific and Technical Consulting Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541715",
+              "naicsDescription": "Research and Development in the Physical, Engineering, and Life Sciences (except Nanotechnology and Biotechnology) ",
+              "sbaSmallBusiness": "E",
+              "naicsException": "NNNN"
+            },
+            {
+              "naicsCode": "541720",
+              "naicsDescription": "Research and Development in the Social Sciences and Humanities ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541810",
+              "naicsDescription": "Advertising Agencies",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541820",
+              "naicsDescription": "Public Relations Agencies",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541850",
+              "naicsDescription": "Indoor and Outdoor Display Advertising",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541910",
+              "naicsDescription": "Marketing Research and Public Opinion Polling",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541922",
+              "naicsDescription": "Commercial Photography ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541930",
+              "naicsDescription": "Translation and Interpretation Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "541990",
+              "naicsDescription": "All Other Professional, Scientific, and Technical Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "561210",
+              "naicsDescription": "Facilities Support Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "561422",
+              "naicsDescription": "Telemarketing Bureaus and Other Contact Centers ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "561621",
+              "naicsDescription": "Security Systems Services (except Locksmiths) ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "561920",
+              "naicsDescription": "Convention and Trade Show Organizers",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "561990",
+              "naicsDescription": "All Other Support Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "562112",
+              "naicsDescription": "Hazardous Waste Collection ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "562211",
+              "naicsDescription": "Hazardous Waste Treatment and Disposal ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "562910",
+              "naicsDescription": "Remediation Services ",
+              "sbaSmallBusiness": "E",
+              "naicsException": "NN"
+            },
+            {
+              "naicsCode": "611420",
+              "naicsDescription": "Computer Training ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "611430",
+              "naicsDescription": "Professional and Management Development Training ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "611519",
+              "naicsDescription": "Other Technical and Trade Schools ",
+              "sbaSmallBusiness": "E",
+              "naicsException": "NN"
+            },
+            {
+              "naicsCode": "611630",
+              "naicsDescription": "Language Schools ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "611699",
+              "naicsDescription": "All Other Miscellaneous Schools and Instruction ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "611710",
+              "naicsDescription": "Educational Support Services",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "621330",
+              "naicsDescription": "Offices of Mental Health Practitioners (except Physicians) ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "624110",
+              "naicsDescription": "Child and Youth Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "624190",
+              "naicsDescription": "Other Individual and Family Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "624221",
+              "naicsDescription": "Temporary Shelters ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "624310",
+              "naicsDescription": "Vocational Rehabilitation Services ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "811111",
+              "naicsDescription": "General Automotive Repair ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "811210",
+              "naicsDescription": "Electronic and Precision Equipment Repair and Maintenance ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            },
+            {
+              "naicsCode": "811310",
+              "naicsDescription": "Commercial and Industrial Machinery and Equipment (except Automotive and Electronic) Repair and Maintenance ",
+              "sbaSmallBusiness": "N",
+              "naicsException": null
+            }
+          ],
+          "pscList": [
+            {
+              "pscCode": null,
+              "pscDescription": null
+            }
+          ]
+        },
+        "disasterReliefData": {
+          "disasterRegistryFlag": "NO",
+          "bondingFlag": "NO",
+          "geographicalAreaServed": [
+            {
+              "geographicalAreaServedStateCode": null,
+              "geographicalAreaServedStateName": null,
+              "geographicalAreaServedCountyCode": null,
+              "geographicalAreaServedCountyName": null,
+              "geographicalAreaServedmetropolitanStatisticalAreaCode": null,
+              "geographicalAreaServedmetropolitanStatisticalAreaName": null
+            }
+          ]
+        },
+        "ediInformation": {
+          "ediInformationFlag": "N"
+        }
+      },
+      "pointsOfContact": {
+        "governmentBusinessPOC": {
+          "firstName": "Point of Contact 1",
+          "middleInitial": null,
+          "lastName": "Placeholder",
+          "title": null,
+          "addressLine1": "1750 Presidents St",
+          "addressLine2": null,
+          "city": "Reston",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": null,
+          "countryCode": "USA"
+        },
+        "electronicBusinessPOC": {
+          "firstName": "Point of Contact 2",
+          "middleInitial": null,
+          "lastName": "Placeholder",
+          "title": null,
+          "addressLine1": "1750 Presidents St",
+          "addressLine2": null,
+          "city": "Reston",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": null,
+          "countryCode": "USA"
+        },
+        "governmentBusinessAlternatePOC": {
+          "firstName": "Point of Contact 3",
+          "middleInitial": null,
+          "lastName": "Placeholder",
+          "title": null,
+          "addressLine1": "1750 Presidents Street",
+          "addressLine2": null,
+          "city": "Reston",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": null,
+          "countryCode": "USA"
+        },
+        "electronicBusinessAlternatePOC": {
+          "firstName": "Point of Contact 4",
+          "middleInitial": null,
+          "lastName": "Placeholder",
+          "title": null,
+          "addressLine1": "1750 Presidents Street",
+          "addressLine2": null,
+          "city": "Reston",
+          "stateOrProvinceCode": "VA",
+          "zipCode": "20190",
+          "zipCodePlus4": null,
+          "countryCode": "USA"
+        },
+        "pastPerformancePOC": {
+          "firstName": null,
+          "middleInitial": null,
+          "lastName": null,
+          "title": null,
+          "addressLine1": null,
+          "addressLine2": null,
+          "city": null,
+          "stateOrProvinceCode": null,
+          "zipCode": null,
+          "zipCodePlus4": null,
+          "countryCode": null
+        },
+        "pastPerformanceAlternatePOC": {
+          "firstName": null,
+          "middleInitial": null,
+          "lastName": null,
+          "title": null,
+          "addressLine1": null,
+          "addressLine2": null,
+          "city": null,
+          "stateOrProvinceCode": null,
+          "zipCode": null,
+          "zipCodePlus4": null,
+          "countryCode": null
+        }
+      }
+    }
+  ],
+  "links": {
+    "selfLink": "https://api.sam.gov/entity-information/v3/entities?api_key=REPLACE_WITH_API_KEY&ueiSAM=UE9QJD4KK1L6&includeSections=entityRegistration%2CcoreData%2Cassertions%2CpointsOfContact&page=0&size=10"
+  }
+}
