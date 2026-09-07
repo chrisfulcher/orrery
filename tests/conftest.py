@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -19,6 +20,11 @@ from mentor.ingest.bulk import COLUMNS
 from mentor.ingest.entities import EntitiesResult
 from mentor.ingest.notices import ingest_notices
 from mentor.sam.client import SamClient
+
+# The Anthropic SDK talks httpx2, which pytest-httpx does not intercept: a stray real call
+# must fail fast rather than reach the network.
+os.environ.setdefault("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+os.environ.pop("ANTHROPIC_API_KEY", None)
 
 SEARCH_FIXTURE = json.loads(
     (Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text()
