@@ -31,6 +31,10 @@ EXPECTED_TABLES = {
     "company_profiles",
     "entity_registrations",
     "workspace_documents",
+    "pursuits",
+    "pursuit_notices",
+    "pursuit_tasks",
+    "pursuit_events",
 }
 
 MIGRATIONS = [
@@ -43,6 +47,7 @@ MIGRATIONS = [
     "0007_awards.sql",
     "0008_registrations.sql",
     "0009_documents.sql",
+    "0010_pursuits.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
@@ -221,3 +226,70 @@ def test_tracked_events_are_append_only(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM tracked_opportunity_events")
     columns = [row[1] for row in conn.execute("PRAGMA table_info(attachments)").fetchall()]
     assert "priority" not in columns
+
+
+def test_pursuits_migration_converts_tracked_opportunities(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0010 turns every tracked row into a pursuit with the same id, its notice, and its events."""
+    real = db.MIGRATIONS_DIR
+    staged = tmp_path / "migrations"
+    staged.mkdir()
+    for name in MIGRATIONS[:9]:
+        shutil.copy(real / name, staged / name)
+    monkeypatch.setattr(db, "MIGRATIONS_DIR", staged)
+    conn = db.connect(db_path)
+    db.migrate(conn)
+    for notice_id, kind, path in (
+        ("n1", "Sources Sought", "075.7526.75R602"),
+        ("n2", "Solicitation", "021.2100.AMC.W91QF0"),
+        ("n3", "Award Notice", None),
+    ):
+        insert_notice(conn, notice_id, f"Title {notice_id}")
+        conn.execute(
+            "UPDATE notices SET notice_type = ?, full_parent_path_code = ?, naics_code = '541512'"
+            " WHERE notice_id = ?",
+            (kind, path, notice_id),
+        )
+    rows = [
+        ("n1", "watching", None, NOW),
+        ("n2", "won", 80, NOW),
+        ("n3", "no-bid", 10, "2026-02-02T00:00:00Z"),
+    ]
+    for notice_id, stage, pwin, updated in rows:
+        conn.execute(
+            "INSERT INTO tracked_opportunities (user_id, notice_id, stage, pwin, created_at,"
+            " updated_at) VALUES (1, ?, ?, ?, ?, ?)",
+            (notice_id, stage, pwin, NOW, updated),
+        )
+    conn.execute(
+        "INSERT INTO tracked_opportunity_events (tracked_id, user_id, changed_at, field, old_value,"
+        " new_value) VALUES (2, 1, ?, 'stage', 'pursuing', 'won'), (2, 1, ?, 'pwin', '40', '80')",
+        (NOW, NOW),
+    )
+
+    shutil.copy(real / MIGRATIONS[9], staged / MIGRATIONS[9])
+    db.migrate(conn)
+
+    pursuits = conn.execute(
+        "SELECT pursuit_id, stage, outcome, closed_at, office_code, pwin, notices, last_event_at"
+        " FROM v_pursuits ORDER BY pursuit_id"
+    ).fetchall()
+    assert pursuits == [
+        (1, "identify", None, None, "75R602", None, 1, None),
+        (2, "post-award", "won", None, "W91QF0", 80, 1, NOW),
+        (3, "identify", "no-bid", "2026-02-02T00:00:00Z", None, 10, 1, None),
+    ]
+    roles = conn.execute(
+        "SELECT pursuit_id, role FROM pursuit_notices ORDER BY pursuit_id"
+    ).fetchall()
+    assert roles == [(1, "sources-sought"), (2, "solicitation"), (3, "award")]
+    events = conn.execute(
+        "SELECT pursuit_id, field, old_value, new_value FROM pursuit_events ORDER BY event_id"
+    ).fetchall()
+    assert events == [(2, "stage", "pursuing", "won"), (2, "pwin", "40", "80")]
+    assert conn.execute("SELECT count(*) FROM v_pipeline").fetchone() == (3,)  # legacy view intact
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE pursuit_events SET note = 'x'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM pursuit_events")

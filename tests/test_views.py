@@ -33,6 +33,16 @@ V1_COLUMNS = {
         "awards_value_usd", "last_award_date", "registration_status", "registration_expires",
         "naics_primary",
     },
+    "v_pursuits": {
+        "user_id", "pursuit_id", "title", "summary", "stage", "pwin", "notes", "held_until",
+        "outcome", "closed_at", "office_entity_id", "office", "office_code", "naics_code",
+        "incumbent_contract_id", "incumbent", "incumbent_pop_end", "notices", "open_tasks",
+        "next_due", "next_response_deadline", "last_event_at", "created_at", "updated_at",
+    },
+    "v_pursuit_tasks": {
+        "user_id", "task_id", "pursuit_id", "pursuit_title", "pursuit_stage", "outcome",
+        "closed_at", "stage", "title", "origin", "due", "done_at", "created_at",
+    },
     "v_pipeline": {
         "user_id", "tracked_id", "notice_id", "stage", "stage_order", "pwin", "notes",
         "created_at", "updated_at", "title", "agency", "response_deadline", "active",
