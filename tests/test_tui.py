@@ -43,7 +43,9 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
         assert isinstance(app.screen, DashboardScreen)
         assert "5 notices, 5 active" in text(app, "#activity_text")
         assert "spent 1 of 10" in text(app, "#quota_text")
-        assert app.screen.query_one("#deadlines", DataTable).row_count == 2
+        deadlines = app.screen.query_one("#deadlines", DataTable)
+        assert deadlines.row_count == 2
+        assert max(row.height for row in deadlines.rows.values()) >= 2  # long titles wrap
         assert (
             app.screen.query_one("#pipeline", DataTable).row_count == 1
         )  # one stage row, one notice

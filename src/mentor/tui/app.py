@@ -30,20 +30,77 @@ def _money(value: float | None) -> str:
     return f"${value:,.0f}" if value is not None else "-"
 
 
-def _award_columns(table: DataTable) -> None:
-    table.add_columns("action", "vendor", "office", "value", "set-aside", "piid")
+Row = tuple[tuple[str, ...], str | None]
+"""Cells and the row key."""
 
 
-def _award_row(table: DataTable, award: query.ContractRef) -> None:
-    table.add_row(
+class WrapTable(DataTable):
+    """A table whose text wraps instead of truncating: every column has a declared width
+    except one, which takes the width that is left, and rows grow to fit their text. The
+    table keeps its rows and lays them out again whenever it is resized."""
+
+    MIN_FLEX = 12
+    COMFORTABLE_FLEX = 32
+    MIN_SHRINK = 12
+    """Fixed columns wider than this give width back, down to this, before the flexible
+    column drops below COMFORTABLE_FLEX."""
+
+    def __init__(self, columns: list[tuple[str, int | None]], **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.columns_spec = columns
+        self.rows_data: list[Row] = []
+
+    def set_rows(self, rows: list[Row]) -> None:
+        self.rows_data = rows
+        self._layout_rows()
+
+    def on_resize(self) -> None:
+        self._layout_rows()
+
+    def _layout_rows(self) -> None:
+        pad = 2 * self.cell_padding
+        widths = [width for _, width in self.columns_spec]
+        available = self.content_size.width - pad * len(widths)
+
+        def flex() -> int:
+            return available - sum(width for width in widths if width is not None)
+
+        while flex() < self.COMFORTABLE_FLEX:
+            widest = max(
+                (i for i, w in enumerate(widths) if w is not None and w > self.MIN_SHRINK),
+                key=lambda i: widths[i],
+                default=None,
+            )
+            if widest is None:
+                break
+            widths[widest] -= 1
+        self.clear(columns=True)
+        for (label, _), width in zip(self.columns_spec, widths, strict=True):
+            self.add_column(label, width=max(flex(), self.MIN_FLEX) if width is None else width)
+        for cells, key in self.rows_data:
+            self.add_row(*cells, height=None, key=key)
+
+
+AWARD_COLUMNS: list[tuple[str, int | None]] = [
+    ("action", 10), ("vendor", None), ("office", 30), ("value", 14), ("set-aside", 9), ("piid", 18)
+]  # fmt: skip
+NOTICE_COLUMNS: list[tuple[str, int | None]] = [("deadline", 10), ("agency", 28), ("title", None)]
+
+
+def _award_row(award: query.ContractRef) -> Row:
+    cells = (
         _day(award.last_action_date),
-        (award.vendor or "-")[:28],
-        (award.awarding_office or "-")[:28],
+        award.vendor or "-",
+        award.awarding_office or "-",
         _money(award.value_usd),
         award.set_aside_code or "-",
         award.piid,
-        key=str(award.contract_id),
     )
+    return cells, str(award.contract_id)
+
+
+def _notice_row(hit: query.SearchHit) -> Row:
+    return (_day(hit.response_deadline), hit.agency or "-", hit.title), hit.notice_id
 
 
 class DashboardScreen(Screen):
@@ -56,20 +113,20 @@ class DashboardScreen(Screen):
             with Vertical(id="activity", classes="panel"):
                 yield Static(id="activity_text")
                 yield Sparkline([], id="activity_spark", summary_function=max)
-            yield DataTable(id="deadlines", classes="panel", cursor_type="row")
-            yield DataTable(id="pipeline", classes="panel", cursor_type="row")
+            yield WrapTable(NOTICE_COLUMNS, id="deadlines", classes="panel", cursor_type="row")
+            yield WrapTable(
+                [("deadline", 10), ("stage", 9), ("pwin", 4), ("title", None)],
+                id="pipeline",
+                classes="panel",
+                cursor_type="row",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#quota").border_title = "quota"
         self.query_one("#queues").border_title = "queues"
         self.query_one("#activity").border_title = "activity"
-        deadlines = self.query_one("#deadlines", DataTable)
-        deadlines.border_title = "deadlines, next 7 days"
-        deadlines.add_columns("deadline", "agency", "title")
-        pipeline = self.query_one("#pipeline", DataTable)
-        pipeline.border_title = "pipeline"
-        pipeline.add_columns("deadline", "stage", "pwin", "title")
+        self.query_one("#deadlines").border_title = "deadlines, next 7 days"
         self.refresh_panels()
         self.set_interval(REFRESH_SECONDS, self.refresh_panels)
 
@@ -99,31 +156,30 @@ class DashboardScreen(Screen):
         self.query_one("#activity_spark", Sparkline).data = [
             float(n) for _, n in query.activity(conn, days=14)
         ]
-        deadlines = self.query_one("#deadlines", DataTable)
-        deadlines.clear()
-        for hit in query.upcoming(conn, days=7, limit=20):
-            deadlines.add_row(
-                _day(hit.response_deadline),
-                (hit.agency or "-")[:28],
-                hit.title[:70],
-                key=hit.notice_id,
-            )
-        pipeline = self.query_one("#pipeline", DataTable)
-        pipeline.clear()
+        self.query_one("#deadlines", WrapTable).set_rows(
+            [_notice_row(hit) for hit in query.upcoming(conn, days=7, limit=20)]
+        )
+        pipeline = self.query_one("#pipeline", WrapTable)
         rows = workspace.pipeline(conn)
         by_stage = Counter(row.stage for row in rows)
         summary = ", ".join(
             f"{stage} {by_stage[stage]}" for stage in workspace.STAGES if by_stage[stage]
         )
         pipeline.border_title = f"pipeline · {summary}" if summary else "pipeline · nothing tracked"
-        for tracked in rows[:10]:
-            pipeline.add_row(
-                _day(tracked.response_deadline),
-                tracked.stage,
-                "-" if tracked.pwin is None else str(tracked.pwin),
-                tracked.title[:40],
-                key=tracked.notice_id,
-            )
+        pipeline.set_rows(
+            [
+                (
+                    (
+                        _day(tracked.response_deadline),
+                        tracked.stage,
+                        "-" if tracked.pwin is None else str(tracked.pwin),
+                        tracked.title,
+                    ),
+                    tracked.notice_id,
+                )
+                for tracked in rows[:10]
+            ]
+        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.row_key.value:
@@ -135,26 +191,27 @@ class OpportunitiesScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="search notice and attachment text, Enter to run", id="query")
-        yield DataTable(id="hits", cursor_type="row")
+        yield WrapTable(
+            [("deadline", 10), ("agency", 28), ("title", None), ("source", 24)],
+            id="hits",
+            cursor_type="row",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one("#hits", DataTable)
-        table.add_columns("deadline", "agency", "title", "source")
         self.fill(query.upcoming(self.app.conn, days=30, limit=200))
-        table.focus()
+        self.query_one("#hits", WrapTable).focus()
 
     def fill(self, hits: list[query.SearchHit]) -> None:
-        table = self.query_one("#hits", DataTable)
-        table.clear()
-        for hit in hits:
-            table.add_row(
-                _day(hit.response_deadline),
-                (hit.agency or "-")[:28],
-                hit.title[:70],
-                hit.source[:24],
-                key=hit.notice_id,
-            )
+        self.query_one("#hits", WrapTable).set_rows(
+            [
+                (
+                    (_day(hit.response_deadline), hit.agency or "-", hit.title, hit.source),
+                    hit.notice_id,
+                )
+                for hit in hits
+            ]
+        )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -200,9 +257,13 @@ class ContextScreen(Screen):
         yield Static(id="incumbent", classes="panel")
         with VerticalScroll(id="description_scroll", classes="panel"):
             yield Static(id="description")
-        yield DataTable(id="awards", classes="panel", cursor_type="row")
+        yield WrapTable(AWARD_COLUMNS, id="awards", classes="panel", cursor_type="row")
         yield Static(id="officials", classes="panel")
-        yield DataTable(id="attachments", classes="panel")
+        yield WrapTable(
+            [("file", None), ("fetch", 8), ("extract", 8), ("chars", 7)],
+            id="attachments",
+            classes="panel",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -210,13 +271,9 @@ class ContextScreen(Screen):
         self.query_one("#tracking").border_title = "pipeline"
         self.query_one("#incumbent").border_title = "incumbent"
         self.query_one("#description_scroll").border_title = "description"
-        awards = self.query_one("#awards", DataTable)
-        awards.border_title = "award history"
-        _award_columns(awards)
+        self.query_one("#awards").border_title = "award history"
         self.query_one("#officials").border_title = "officials"
-        attachments = self.query_one("#attachments", DataTable)
-        attachments.border_title = "documents"
-        attachments.add_columns("file", "fetch", "extract", "chars")
+        self.query_one("#attachments").border_title = "documents"
         self.load()
 
     def load(self) -> None:
@@ -258,16 +315,14 @@ class ContextScreen(Screen):
         self.query_one("#description", Static).update(
             detail.description or f"description {detail.description_status}"
         )
-        awards = self.query_one("#awards", DataTable)
-        awards.clear()
+        awards = self.query_one("#awards", WrapTable)
         office = detail.agency_chain[-1].name if detail.agency_chain else "this office"
         awards.border_title = (
             f"award history · {office} · NAICS {detail.naics_code or '-'}"
             if detail.award_history
             else "award history · none in the store (mentor ingest awards)"
         )
-        for award in detail.award_history:
-            _award_row(awards, award)
+        awards.set_rows([_award_row(award) for award in detail.award_history])
         self.query_one("#officials", Static).update(
             "\n".join(
                 f"{official.name} ({official.kind}"
@@ -280,15 +335,20 @@ class ContextScreen(Screen):
             )
             or "none named"
         )
-        attachments = self.query_one("#attachments", DataTable)
-        attachments.clear()
-        for item in detail.attachments:
-            attachments.add_row(
-                (item.filename or item.url.rsplit("/", 2)[-2])[:50],
-                item.fetch_status,
-                item.extract_status,
-                str(item.text_chars),
-            )
+        self.query_one("#attachments", WrapTable).set_rows(
+            [
+                (
+                    (
+                        item.filename or item.url.rsplit("/", 2)[-2],
+                        item.fetch_status,
+                        item.extract_status,
+                        str(item.text_chars),
+                    ),
+                    str(item.attachment_id),
+                )
+                for item in detail.attachments
+            ]
+        )
 
     def _tracked(self) -> workspace.Tracked | None:
         rows = workspace.pipeline(self.app.conn)
@@ -365,8 +425,8 @@ class EntityScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(id="entity_header", classes="panel")
-        yield DataTable(id="entity_awards", classes="panel", cursor_type="row")
-        yield DataTable(id="entity_notices", classes="panel", cursor_type="row")
+        yield WrapTable(AWARD_COLUMNS, id="entity_awards", classes="panel", cursor_type="row")
+        yield WrapTable(NOTICE_COLUMNS, id="entity_notices", classes="panel", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -374,11 +434,9 @@ class EntityScreen(Screen):
         self.detail = detail
         header = self.query_one("#entity_header", Static)
         header.border_title = "entity"
-        awards = self.query_one("#entity_awards", DataTable)
-        _award_columns(awards)
-        table = self.query_one("#entity_notices", DataTable)
+        awards = self.query_one("#entity_awards", WrapTable)
+        table = self.query_one("#entity_notices", WrapTable)
         table.border_title = "recent notices"
-        table.add_columns("deadline", "agency", "title")
         if detail is None:
             header.update(f"no entity {self.entity_id}")
             return
@@ -401,15 +459,8 @@ class EntityScreen(Screen):
             f"{second}" + (f"\n{facts}" if facts else "")
         )
         awards.border_title = "awards won" if contractor else "awards made"
-        for award in detail.awards:
-            _award_row(awards, award)
-        for hit in detail.recent:
-            table.add_row(
-                _day(hit.response_deadline),
-                (hit.agency or "-")[:28],
-                hit.title[:70],
-                key=hit.notice_id,
-            )
+        awards.set_rows([_award_row(award) for award in detail.awards])
+        table.set_rows([_notice_row(hit) for hit in detail.recent])
         (awards if contractor and detail.awards else table).focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
