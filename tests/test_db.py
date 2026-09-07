@@ -30,6 +30,7 @@ EXPECTED_TABLES = {
     "tracked_opportunity_events",
     "company_profiles",
     "entity_registrations",
+    "workspace_documents",
 }
 
 MIGRATIONS = [
@@ -41,6 +42,7 @@ MIGRATIONS = [
     "0006_views.sql",
     "0007_awards.sql",
     "0008_registrations.sql",
+    "0009_documents.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"

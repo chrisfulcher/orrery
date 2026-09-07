@@ -167,3 +167,27 @@ def test_profile_links_to_the_companys_entity_by_uei(
         "SELECT uei FROM entities WHERE entity_id = ?", (profile.entity_id,)
     ).fetchone()
     assert uei == "UE9QJD4KK1L6"
+
+
+def test_documents_are_versioned_per_user_and_append_only(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-07T00:00:00Z")
+    assert workspace.latest_document(conn, "profile") is None
+    first = workspace.save_document(conn, "profile", "[company]\nname = 'A'\n")
+    second = workspace.save_document(conn, "profile", "[company]\nname = 'B'\n")
+    assert (first.version, second.version) == (1, 2)
+    assert workspace.latest_document(conn, "profile") == second
+    assert [d.version for d in workspace.document_versions(conn, "profile")] == [1, 2]
+    assert workspace.latest_document(conn, "workflow") is None
+    conn.execute("INSERT INTO users (user_id, name) VALUES (2, 'other')")
+    assert workspace.latest_document(conn, "profile", user_id=2) is None
+    assert workspace.save_document(conn, "profile", "x = 1\n", user_id=2).version == 1
+    with pytest.raises(ValueError):
+        workspace.save_document(conn, "diary", "x = 1\n")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE workspace_documents SET body = 'z' WHERE document_id = ?", (first.document_id,)
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM workspace_documents WHERE document_id = ?", (first.document_id,))

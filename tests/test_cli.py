@@ -43,6 +43,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0006_views.sql",
         "applied 0007_awards.sql",
         "applied 0008_registrations.sql",
+        "applied 0009_documents.sql",
     ]
     assert (tmp_path / "mentor.sqlite").exists()
 
@@ -62,6 +63,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0006_views.sql",
         "applied  0007_awards.sql",
         "applied  0008_registrations.sql",
+        "applied  0009_documents.sql",
     ]
 
 

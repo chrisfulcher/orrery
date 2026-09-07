@@ -1,9 +1,10 @@
-"""The workspace layer: the user's saved searches, pipeline, and company profile.
+"""The workspace layer: the user's documents, saved searches, pipeline, and company profile.
 
 Private data: every row carries ``user_id`` and every query filters by it (DESIGN.md §3, §8).
 v1 is single-user, so ``user_id`` defaults to the seeded ``local`` user. Workspace rows are
 the user's own and may be updated or deleted, except that tracked opportunities are never
-deleted (a dropped pursuit is ``no-bid``) and their event log is append-only.
+deleted (a dropped pursuit is ``no-bid``), their event log is append-only, and documents are
+versioned: every save is a new version and old versions are never touched.
 """
 
 import json
@@ -29,6 +30,68 @@ class Stage(StrEnum):
 
 class NotFound(LookupError):
     """No such notice, saved search, or tracked opportunity for this user."""
+
+
+DOCUMENT_KINDS = ("profile", "workflow")
+
+
+@dataclass(frozen=True)
+class Document:
+    """One version of a workspace document: the body as the user wrote it."""
+
+    document_id: int
+    kind: str
+    version: int
+    body: str
+    created_at: str
+
+
+def save_document(
+    conn: sqlite3.Connection, kind: str, body: str, *, user_id: int = USER_ID
+) -> Document:
+    """Store ``body`` as the next version of the user's ``kind`` document."""
+    if kind not in DOCUMENT_KINDS:
+        raise ValueError(f"unknown document kind {kind!r}")
+    conn.execute("BEGIN")
+    try:
+        (version,) = conn.execute(
+            "SELECT coalesce(max(version), 0) + 1 FROM workspace_documents"
+            " WHERE user_id = ? AND kind = ?",
+            (user_id, kind),
+        ).fetchone()
+        row = conn.execute(
+            "INSERT INTO workspace_documents (user_id, kind, version, body, created_at)"
+            " VALUES (?, ?, ?, ?, ?) RETURNING document_id, kind, version, body, created_at",
+            (user_id, kind, version, body, db.utcnow()),
+        ).fetchone()
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return Document(*row)
+
+
+def latest_document(
+    conn: sqlite3.Connection, kind: str, *, user_id: int = USER_ID
+) -> Document | None:
+    row = conn.execute(
+        "SELECT document_id, kind, version, body, created_at FROM workspace_documents"
+        " WHERE user_id = ? AND kind = ? ORDER BY version DESC LIMIT 1",
+        (user_id, kind),
+    ).fetchone()
+    return Document(*row) if row else None
+
+
+def document_versions(
+    conn: sqlite3.Connection, kind: str, *, user_id: int = USER_ID
+) -> list[Document]:
+    """Every version, oldest first."""
+    rows = conn.execute(
+        "SELECT document_id, kind, version, body, created_at FROM workspace_documents"
+        " WHERE user_id = ? AND kind = ? ORDER BY version",
+        (user_id, kind),
+    ).fetchall()
+    return [Document(*row) for row in rows]
 
 
 @dataclass(frozen=True)
