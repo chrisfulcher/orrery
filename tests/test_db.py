@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "tracked_opportunities",
     "tracked_opportunity_events",
     "company_profiles",
+    "entity_registrations",
 }
 
 MIGRATIONS = [
@@ -39,6 +40,7 @@ MIGRATIONS = [
     "0005_workspace.sql",
     "0006_views.sql",
     "0007_awards.sql",
+    "0008_registrations.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
@@ -90,7 +92,12 @@ def test_wal_and_foreign_keys_enabled(conn: sqlite3.Connection) -> None:
 
 def test_seed_rows(conn: sqlite3.Connection) -> None:
     sources = conn.execute("SELECT source_id FROM sources ORDER BY source_id").fetchall()
-    assert sources == [("sam_bulk_csv",), ("sam_opportunities_api",), ("usaspending_awards",)]
+    assert sources == [
+        ("sam_bulk_csv",),
+        ("sam_entities",),
+        ("sam_opportunities_api",),
+        ("usaspending_awards",),
+    ]
     assert conn.execute("SELECT user_id, name FROM users").fetchall() == [(1, "local")]
 
 

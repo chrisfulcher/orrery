@@ -1,7 +1,10 @@
 import sqlite3
 from collections.abc import Callable
 
+from mentor.ingest.awards import AwardsResult
+
 Seed = Callable[[dict | None], None]
+SeedAwards = Callable[[list[dict] | None], AwardsResult]
 
 # Interface version 1. A view may gain columns; it must never lose or rename one.
 V1_COLUMNS = {
@@ -24,6 +27,11 @@ V1_COLUMNS = {
     "v_entities": {
         "entity_id", "kind", "name", "agency_path_code", "uei", "cage", "parent_entity_id",
         "parent", "first_seen_at", "last_seen_at", "notices",
+    },
+    "v_contractors": {
+        "entity_id", "name", "uei", "cage", "first_seen_at", "last_seen_at", "awards",
+        "awards_value_usd", "last_award_date", "registration_status", "registration_expires",
+        "naics_primary",
     },
     "v_pipeline": {
         "user_id", "tracked_id", "notice_id", "stage", "stage_order", "pwin", "notes",
@@ -74,3 +82,28 @@ def test_v_notices_award_columns(conn: sqlite3.Connection, seed: Seed) -> None:
         " WHERE award_number IS NOT NULL"
     ).fetchall()
     assert rows == [("75S20326F80003", "2026-08-21", None, None)]
+
+
+def test_v_contractors_sums_awards_and_reads_latest_facts(
+    conn: sqlite3.Connection, seed_awards: SeedAwards
+) -> None:
+    seed_awards()
+    (leidos,) = conn.execute("SELECT entity_id FROM entities WHERE uei = 'UE9QJD4KK1L6'").fetchone()
+    for observed, status in (
+        ("2026-01-01T00:00:00Z", "Active"),
+        ("2026-06-01T00:00:00Z", "Expired"),
+    ):
+        conn.execute(
+            "INSERT INTO facts (subject_type, subject_id, predicate, value_type, value, source_id,"
+            " observed_at, confidence, extraction_method) VALUES ('entity', ?,"
+            " 'sam.registration_status', 'text', ?, 'sam_entities', ?, 1.0, 'parse')",
+            (str(leidos), status, observed),
+        )
+    rows = conn.execute(
+        "SELECT name, awards, awards_value_usd, last_award_date, registration_status,"
+        " registration_expires FROM v_contractors ORDER BY name"
+    ).fetchall()
+    assert rows == [
+        ("CDW GOVERNMENT LLC", 1, 48000.0, "2024-01-15", None, None),
+        ("LEIDOS, INC.", 1, 125000.5, "2025-08-01", "Expired", None),
+    ]
