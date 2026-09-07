@@ -92,6 +92,30 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
     assert not app.is_running
 
 
+async def test_dashboard_refresh_keeps_the_selected_row(app: MentorTop) -> None:
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        deadlines = app.screen.query_one("#deadlines", DataTable)
+        deadlines.focus()
+        await pilot.press("down")
+        await pilot.pause()
+        assert deadlines.cursor_row == 1
+        selected = deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value
+
+        app.screen.refresh_panels()  # what the five-second timer does
+        await pilot.pause()
+        assert deadlines.cursor_row == 1
+        assert (
+            deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value == selected
+        )
+
+        await pilot.resize_terminal(100, 40)  # a rebuild with new widths keeps the row too
+        await pilot.pause()
+        assert (
+            deadlines.coordinate_to_cell_key(deadlines.cursor_coordinate).row_key.value == selected
+        )
+
+
 async def test_screenshot(app: MentorTop, tmp_path: Path) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()

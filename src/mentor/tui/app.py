@@ -51,6 +51,10 @@ class WrapTable(DataTable):
         self.rows_data: list[Row] = []
 
     def set_rows(self, rows: list[Row]) -> None:
+        """Show these rows. Unchanged rows leave the table, its cursor, and its scroll alone,
+        so a periodic refresh never disturbs what the user is looking at."""
+        if rows == self.rows_data and self.columns:
+            return
         self.rows_data = rows
         self._layout_rows()
 
@@ -58,6 +62,27 @@ class WrapTable(DataTable):
         self._layout_rows()
 
     def _layout_rows(self) -> None:
+        selected = self._selected_key()
+        self._rebuild()
+        if selected is not None:
+            self._select(selected)
+
+    def _selected_key(self) -> str | None:
+        if not self.row_count:
+            return None
+        try:
+            return self.coordinate_to_cell_key(self.cursor_coordinate).row_key.value
+        except Exception:  # no cell under the cursor
+            return None
+
+    def _select(self, key: str) -> None:
+        try:
+            index = self.get_row_index(key)
+        except Exception:  # the row is gone; the cursor stays at the top
+            return
+        self.move_cursor(row=index, animate=False, scroll=True)
+
+    def _rebuild(self) -> None:
         pad = 2 * self.cell_padding
         widths = [width for _, width in self.columns_spec]
         available = self.content_size.width - pad * len(widths)
