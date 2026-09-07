@@ -103,6 +103,15 @@ def awards(
 
 
 @server.tool()
+def assessments(pursuit_id: int) -> list[workspace.AssessmentRecord]:
+    """Stored AI assessments of a pursuit, newest first, each with its provenance (slot,
+    provider, model, prompt and profile versions, tokens). Running one is a CLI command:
+    this server never contacts a model."""
+    with _conn() as conn:
+        return workspace.assessments(conn, pursuit_id)
+
+
+@server.tool()
 def recompetes(
     months: int = 18,
     naics: list[str] | None = None,

@@ -16,7 +16,7 @@ EXPECTED_TOOLS = {
     "search", "notice", "entity", "upcoming", "pipeline", "track", "history", "saved_searches",
     "run_saved_search", "save_search", "queue_status", "quota_today", "profile", "awards",
     "contractor", "pursuits", "pursuit", "new_pursuit", "link_notice", "gate", "task_done",
-    "update_pursuit", "recompetes",
+    "update_pursuit", "recompetes", "assessments",
 }  # fmt: skip
 
 
@@ -122,3 +122,21 @@ async def test_pursuit_tools(
     async with Client(mcp_server.server) as client:
         result = await client.call_tool("pursuit", {"pursuit_id": opened.pursuit_id})
     assert not result.is_error and result.structured_content["pursuit"]["stage"] == "qualify"
+
+
+def test_assessments_are_read_only(
+    seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_awards()
+    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    opened = mcp_server.new_pursuit("X")
+    assert mcp_server.assessments(opened.pursuit_id) == []
+    with mcp_server._conn() as conn:
+        workspace.save_assessment(
+            conn, opened.pursuit_id, slot="fast", provider="openai", model="m", prompt_version=1,
+            profile_version=None, inputs_hash="h", input_tokens=1, output_tokens=1,
+            raw_response="{}", result={"fit": 10},
+        )  # fmt: skip
+    assert [a.result["fit"] for a in mcp_server.assessments(opened.pursuit_id)] == [10]
+    with pytest.raises(workspace.NotFound):
+        mcp_server.assessments(999)
