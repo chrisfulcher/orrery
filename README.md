@@ -4,9 +4,9 @@
 
 ## Status
 
-Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. The Dockerfile and compose file are new.
+Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
 
-Not there yet: saved searches and the pipeline, the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+Not there yet: the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -96,6 +96,19 @@ docker compose run --rm mentor quota
 The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
 `mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
+
+### Working the pipeline
+
+```
+uv run mentor searches add sdvosb-it --naics 541512 --set-aside SDVOSBC --deadline-days 30
+uv run mentor searches run sdvosb-it
+uv run mentor track NOTICE_ID --stage pursuing --pwin 40
+uv run mentor pipeline
+uv run mentor history NOTICE_ID
+uv run mentor profile set --name "Example LLC" --naics 541512 --cert SB
+```
+
+A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadline window); the same filters work on `mentor search`. Notices matching any saved search move to the front of `mentor fetch`. Every stage and PWin change is kept, so `history` shows the trajectory; nothing is untracked, a dropped pursuit is `--stage no-bid`.
 
 ## Contributing
 

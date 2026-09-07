@@ -9,7 +9,7 @@ from typing import Annotated
 
 import typer
 
-from mentor import __version__, db, query
+from mentor import __version__, db, query, workspace
 from mentor import quota as quota_module
 from mentor.config import Settings
 from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
@@ -28,6 +28,10 @@ db_app = typer.Typer(no_args_is_help=True, help="Database schema and index maint
 app.add_typer(db_app, name="db")
 ingest_app = typer.Typer(no_args_is_help=True, help="Pull SAM.gov data into the local store.")
 app.add_typer(ingest_app, name="ingest")
+searches_app = typer.Typer(no_args_is_help=True, help="Saved searches.")
+app.add_typer(searches_app, name="searches")
+profile_app = typer.Typer(no_args_is_help=True, help="Your company profile.")
+app.add_typer(profile_app, name="profile")
 
 JsonFlag = Annotated[bool, typer.Option("--json", help="Print as JSON.")]
 DateOption = Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], metavar="YYYY-MM-DD")]
@@ -159,26 +163,35 @@ def embed(
         )
 
 
-@app.command()
-def search(
-    text: Annotated[str, typer.Argument(metavar="QUERY", help="Words, phrases, or FTS5 syntax.")],
-    limit: Annotated[int, typer.Option(help="Maximum notices to show.")] = 20,
-    semantic: Annotated[
-        bool, typer.Option("--semantic", help="Rank by meaning via the embedding endpoint.")
-    ] = False,
-    json_output: JsonFlag = False,
-) -> None:
-    """Search notice text and attachment text; one best hit per notice."""
-    settings = Settings()
-    with closing(db.connect(settings.db_path)) as conn:
-        if semantic:
-            hits = _semantic_hits(conn, settings, text, limit)
-        else:
-            try:
-                hits = query.search(conn, text, limit=limit)
-            except query.InvalidQuery as exc:
-                typer.echo(f"invalid query: {exc}", err=True)
-                raise typer.Exit(1) from exc
+NaicsOption = Annotated[str | None, typer.Option("--naics", help="NAICS codes, comma-separated.")]
+SetAsideOption = Annotated[
+    str | None, typer.Option("--set-aside", help="Set-aside codes, comma-separated.")
+]
+AgencyOption = Annotated[
+    str | None, typer.Option("--agency", help="Agency path code prefixes, comma-separated.")
+]
+DeadlineOption = Annotated[
+    int | None, typer.Option("--deadline-days", help="Only deadlines within N days.")
+]
+
+
+def _csv(value: str | None) -> tuple[str, ...] | None:
+    items = tuple(item.strip() for item in (value or "").split(",") if item.strip())
+    return items or None
+
+
+def _filters(
+    naics: str | None, set_aside: str | None, agency: str | None, deadline_days: int | None
+) -> query.Filters:
+    return query.Filters(
+        naics=_csv(naics),
+        set_asides=_csv(set_aside),
+        agency_prefixes=_csv(agency),
+        deadline_within_days=deadline_days,
+    )
+
+
+def _print_hits(hits: list[query.SearchHit], json_output: bool) -> None:
     if json_output:
         print_json([dataclasses.asdict(hit) for hit in hits])
         return
@@ -194,6 +207,37 @@ def search(
         typer.echo(f"  {hit.source}{page}: {hit.snippet}")
 
 
+@app.command()
+def search(
+    text: Annotated[str, typer.Argument(metavar="QUERY", help="Words, phrases, or FTS5 syntax.")],
+    limit: Annotated[int, typer.Option(help="Maximum notices to show.")] = 20,
+    semantic: Annotated[
+        bool, typer.Option("--semantic", help="Rank by meaning via the embedding endpoint.")
+    ] = False,
+    naics: NaicsOption = None,
+    set_aside: SetAsideOption = None,
+    agency: AgencyOption = None,
+    deadline_days: DeadlineOption = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Search notice text and attachment text; one best hit per notice."""
+    settings = Settings()
+    filters = _filters(naics, set_aside, agency, deadline_days)
+    if semantic and filters != query.NO_FILTERS:
+        typer.echo("filters apply to keyword search only", err=True)
+        raise typer.Exit(2)
+    with closing(db.connect(settings.db_path)) as conn:
+        if semantic:
+            hits = _semantic_hits(conn, settings, text, limit)
+        else:
+            try:
+                hits = query.search(conn, text, limit=limit, filters=filters)
+            except query.InvalidQuery as exc:
+                typer.echo(f"invalid query: {exc}", err=True)
+                raise typer.Exit(1) from exc
+    _print_hits(hits, json_output)
+
+
 def _semantic_hits(conn, settings: Settings, text: str, limit: int) -> list[query.SearchHit]:
     try:
         db.load_vec(conn)
@@ -207,6 +251,211 @@ def _semantic_hits(conn, settings: Settings, text: str, limit: int) -> list[quer
         typer.echo(f"search stopped: {exc}", err=True)
         raise typer.Exit(1) from exc
     return query.semantic_search(conn, pack(vector), model=settings.embed_model, limit=limit)
+
+
+@searches_app.command("add")
+def searches_add(
+    name: Annotated[str, typer.Argument(help="A name unique to you; re-adding replaces it.")],
+    query_text: Annotated[str | None, typer.Option("--query", help="FTS5 text.")] = None,
+    naics: NaicsOption = None,
+    set_aside: SetAsideOption = None,
+    agency: AgencyOption = None,
+    deadline_days: DeadlineOption = None,
+) -> None:
+    """Save a named search: optional text plus filters."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        saved = workspace.save_search(
+            conn,
+            name,
+            query_text=query_text,
+            filters=_filters(naics, set_aside, agency, deadline_days),
+        )
+    typer.echo(f"saved {saved.name}")
+
+
+@searches_app.command("list")
+def searches_list(json_output: JsonFlag = False) -> None:
+    """List saved searches."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        searches = workspace.list_searches(conn)
+    if json_output:
+        print_json([dataclasses.asdict(saved) for saved in searches])
+        return
+    if not searches:
+        typer.echo("no saved searches")
+    for saved in searches:
+        parts = [f"query={saved.query!r}"] if saved.query else []
+        parts += [
+            f"{field}={value}"
+            for field, value in dataclasses.asdict(saved.filters).items()
+            if value not in (None, False)
+        ]
+        typer.echo(f"{saved.name}  {' '.join(parts) or '(everything)'}")
+
+
+@searches_app.command("run")
+def searches_run(
+    name: Annotated[str, typer.Argument()],
+    limit: Annotated[int, typer.Option(help="Maximum notices to show.")] = 50,
+    json_output: JsonFlag = False,
+) -> None:
+    """Run a saved search over active notices."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            hits = workspace.run_search(conn, name, limit=limit)
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+        except query.InvalidQuery as exc:
+            typer.echo(f"invalid query: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    _print_hits(hits, json_output)
+
+
+@searches_app.command("rm")
+def searches_rm(name: Annotated[str, typer.Argument()]) -> None:
+    """Delete a saved search."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            workspace.delete_search(conn, name)
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+    typer.echo(f"deleted {name}")
+
+
+def _print_tracked(tracked: workspace.Tracked) -> None:
+    pwin = f"pwin {tracked.pwin}" if tracked.pwin is not None else "pwin -"
+    typer.echo(f"{tracked.notice_id}  {tracked.response_deadline or '-'}  {pwin}  {tracked.title}")
+
+
+@app.command()
+def track(
+    notice_id: Annotated[str, typer.Argument(metavar="NOTICE_ID")],
+    stage: Annotated[workspace.Stage | None, typer.Option(help="Pipeline stage.")] = None,
+    pwin: Annotated[int | None, typer.Option(min=0, max=100, help="Win probability.")] = None,
+    notes: Annotated[str | None, typer.Option(help="Replace the notes.")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Track a notice in your pipeline (default stage: watching) or update it."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            tracked = workspace.track(
+                conn, notice_id, stage=stage.value if stage else None, pwin=pwin, notes=notes
+            )
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json(dataclasses.asdict(tracked))
+    else:
+        typer.echo(f"{tracked.stage}:")
+        _print_tracked(tracked)
+
+
+@app.command()
+def pipeline(json_output: JsonFlag = False) -> None:
+    """Your tracked opportunities, grouped by stage."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        rows = workspace.pipeline(conn)
+    if json_output:
+        print_json([dataclasses.asdict(row) for row in rows])
+        return
+    if not rows:
+        typer.echo("nothing tracked")
+    current = None
+    for tracked in rows:
+        if tracked.stage != current:
+            current = tracked.stage
+            count = sum(1 for row in rows if row.stage == current)
+            typer.echo(f"{current} ({count})")
+        typer.echo("  ", nl=False)
+        _print_tracked(tracked)
+
+
+@app.command()
+def history(
+    notice_id: Annotated[str, typer.Argument(metavar="NOTICE_ID")], json_output: JsonFlag = False
+) -> None:
+    """The change log of a tracked opportunity."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            events = workspace.history(conn, notice_id)
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+    if json_output:
+        print_json([dataclasses.asdict(event) for event in events])
+        return
+    for event in events:
+        typer.echo(
+            f"{event.changed_at}  {event.field}  {event.old_value or '-'} -> {event.new_value}"
+        )
+
+
+@profile_app.command("show")
+def profile_show(json_output: JsonFlag = False) -> None:
+    """Show your company profile."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        profile = workspace.get_profile(conn)
+    if profile is None:
+        typer.echo("no profile yet; set one with `mentor profile set`")
+        return
+    _print_profile(profile, json_output)
+
+
+@profile_app.command("set")
+def profile_set(
+    name: Annotated[str | None, typer.Option()] = None,
+    uei: Annotated[str | None, typer.Option()] = None,
+    cage: Annotated[str | None, typer.Option()] = None,
+    naics: NaicsOption = None,
+    cert: Annotated[
+        str | None, typer.Option("--cert", help="Certification codes, comma-separated.")
+    ] = None,
+    capability_file: Annotated[
+        Path | None, typer.Option("--capability-file", help="Capability statement text file.")
+    ] = None,
+    target_agency: Annotated[
+        str | None, typer.Option("--target-agency", help="Agency path prefixes, comma-separated.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Set profile fields; fields not given keep their values."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        profile = workspace.set_profile(
+            conn,
+            name=name,
+            uei=uei,
+            cage=cage,
+            naics=_csv(naics),
+            certifications=_csv(cert),
+            capability_statement=capability_file.read_text() if capability_file else None,
+            target_agency_prefixes=_csv(target_agency),
+        )
+    _print_profile(profile, json_output)
+
+
+def _print_profile(profile: workspace.Profile, json_output: bool) -> None:
+    if json_output:
+        print_json(dataclasses.asdict(profile))
+        return
+    typer.echo(f"name: {profile.name or '-'}")
+    typer.echo(f"uei: {profile.uei or '-'}  cage: {profile.cage or '-'}")
+    typer.echo(f"naics: {', '.join(profile.naics) or '-'}")
+    typer.echo(f"certifications: {', '.join(profile.certifications) or '-'}")
+    typer.echo(f"target agencies: {', '.join(profile.target_agency_prefixes) or '-'}")
+    statement = profile.capability_statement or ""
+    typer.echo(f"capability statement: {len(statement)} characters")
 
 
 @ingest_app.command("notices")

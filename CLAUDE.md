@@ -25,6 +25,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 - `notices.description` is plain text from every source. Attachment paths are stored relative to `MENTOR_DATA_DIR`. Fetch failures are recorded, never retried automatically.
 - `embeddings` rows record the model that produced them and are rebuilt by deleting a model's rows and re-running `mentor embed`. Embedding and semantic search send text only to `MENTOR_EMBED_BASE_URL`; notice and attachment text is public, the user's query text is not, and the README says so.
 - Bulk-extract rows never overwrite an API-sourced notice; they confirm it and fill an unfetched description. `notices.source_id` is the source that last wrote the typed columns. `active` is cleared only by a complete pass of the active extract, only within the configured NAICS slice.
+- Workspace rows are the user's own and may be updated and deleted, except that tracked opportunities are never deleted (a dropped pursuit is `no-bid`) and `tracked_opportunity_events` is append-only. Every workspace query filters by `user_id`.
 
 ## Workflow
 

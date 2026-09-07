@@ -358,3 +358,59 @@ def test_ingest_bulk_command(
     httpx_mock.add_response(url=EXTRACT_URL.format(name=archive_name(2025)), status_code=500)
     result = runner.invoke(app, ["ingest", "bulk", "--archived", "2025"], env=env)
     assert result.exit_code == 1 and "bulk ingest stopped" in result.output
+
+
+def test_workspace_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
+    hrsa = fixture["opportunitiesData"][0]["noticeId"]
+
+    def run(*args: str) -> object:
+        return runner.invoke(app, list(args), env=env)
+
+    result = run(
+        "searches",
+        "add",
+        "sba",
+        "--naics",
+        "541512",
+        "--set-aside",
+        "SBA",
+        "--deadline-days",
+        "3650",
+    )
+    assert result.exit_code == 0 and result.output.strip() == "saved sba"
+    assert len(json.loads(run("searches", "run", "sba", "--json").output)) == 2
+    assert "sba" in run("searches", "list").output
+    assert run("searches", "rm", "sba").exit_code == 0
+    assert run("searches", "rm", "sba").exit_code == 1
+    assert run("searches", "run", "sba").exit_code == 1
+
+    result = run("track", hrsa, "--stage", "pursuing", "--pwin", "40")
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("pursuing:")
+    assert run("track", hrsa, "--pwin", "55").exit_code == 0
+    assert run("track", "nope").exit_code == 1
+    events = json.loads(run("history", hrsa, "--json").output)
+    assert [(e["field"], e["new_value"]) for e in events] == [
+        ("stage", "pursuing"),
+        ("pwin", "40"),
+        ("pwin", "55"),
+    ]
+    assert run("history", "nope").exit_code == 1
+    assert run("pipeline").output.startswith("pursuing (1)")
+    assert len(json.loads(run("pipeline", "--json").output)) == 1
+
+    assert run("profile", "show").output.startswith("no profile yet")
+    result = run(
+        "profile", "set", "--name", "Example LLC", "--naics", "541512,541511", "--cert", "SB"
+    )
+    assert result.exit_code == 0 and "name: Example LLC" in result.output
+    profile = json.loads(run("profile", "show", "--json").output)
+    assert profile["naics"] == ["541512", "541511"] and profile["certifications"] == ["SB"]
+
+    assert run("search", "xylophone", "--naics", "999999").output.strip() == "no matches"
+    assert run("search", "x", "--semantic", "--naics", "1").exit_code == 2

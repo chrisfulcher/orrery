@@ -17,28 +17,49 @@ import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
-from mentor import db, runs
+from mentor import db, query, runs
 from mentor.config import Settings
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import AttachmentTooLarge, SamClient, SamError
 
 SOURCE_ID = "sam_opportunities_api"
 
-# LIMIT -1 is unbounded in SQLite.
-PENDING_DESCRIPTIONS = """
-SELECT notice_id, description_url, response_deadline, title FROM notices
-WHERE description_status = 'pending'
-ORDER BY response_deadline IS NULL, response_deadline, posted_at DESC, id
-LIMIT ?
+# Notices matching any saved search's structured filters go first: the store is shared
+# public data, so a notice any user wants is worth fetching before the rest.
+_WANTED = f"""
+WITH wanted AS (
+    SELECT DISTINCT n.notice_id FROM notices AS n, saved_searches AS s
+    WHERE n.active = 1 {query.notice_filter_sql("s.")}
+)
 """
 
-PENDING_ATTACHMENTS = """
+# LIMIT -1 is unbounded in SQLite.
+PENDING_DESCRIPTIONS = (
+    _WANTED
+    + """
+SELECT notice_id, description_url, response_deadline, title FROM notices
+WHERE description_status = 'pending'
+ORDER BY notice_id NOT IN (SELECT notice_id FROM wanted),
+         response_deadline IS NULL, response_deadline, posted_at DESC, id
+LIMIT :limit
+"""
+)
+
+PENDING_ATTACHMENTS = (
+    _WANTED
+    + """
 SELECT a.attachment_id, a.notice_id, a.url
 FROM attachments AS a JOIN notices AS n USING (notice_id)
 WHERE a.fetch_status = 'pending'
-ORDER BY n.response_deadline IS NULL, n.response_deadline, n.posted_at DESC, a.attachment_id
-LIMIT ?
+ORDER BY a.notice_id NOT IN (SELECT notice_id FROM wanted),
+         n.response_deadline IS NULL, n.response_deadline, n.posted_at DESC, a.attachment_id
+LIMIT :limit
 """
+)
+
+
+def _pending(conn: sqlite3.Connection, sql: str, limit: int) -> list[tuple]:
+    return conn.execute(sql, {"limit": limit, "now": db.utcnow()}).fetchall()
 
 
 @dataclass(frozen=True)
@@ -75,7 +96,7 @@ def queue_status(conn: sqlite3.Connection, *, limit: int = 5) -> QueueStatus:
     (attachments,) = conn.execute(
         "SELECT count(*) FROM attachments WHERE fetch_status = 'pending'"
     ).fetchone()
-    rows = conn.execute(PENDING_DESCRIPTIONS, (limit,)).fetchall()
+    rows = _pending(conn, PENDING_DESCRIPTIONS, limit)
     return QueueStatus(
         descriptions_pending=descriptions,
         attachments_pending=attachments,
@@ -127,7 +148,7 @@ def _fetch_descriptions(
 ) -> tuple[int, int, bool]:
     """Returns (fetched, failed, budget_exhausted)."""
     fetched = failed = 0
-    rows = conn.execute(PENDING_DESCRIPTIONS, (limit,)).fetchall()
+    rows = _pending(conn, PENDING_DESCRIPTIONS, limit)
     for notice_id, url, _deadline, _title in rows:
         try:
             text = _html_to_text(client.get_description(url, notice_id=notice_id) or "")
@@ -154,7 +175,7 @@ def _fetch_attachments(
 ) -> tuple[int, int, int]:
     """Returns (fetched, failed, skipped). Pauses ``settings.fetch_delay`` between downloads."""
     fetched = failed = skipped = 0
-    rows = conn.execute(PENDING_ATTACHMENTS, (limit,)).fetchall()
+    rows = _pending(conn, PENDING_ATTACHMENTS, limit)
     for index, (attachment_id, notice_id, url) in enumerate(rows):
         if index:
             time.sleep(settings.fetch_delay)

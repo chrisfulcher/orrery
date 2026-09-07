@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
+from mentor import workspace
 from mentor.config import Settings
 from mentor.fetch.queue import _html_to_text, fetch_pending, queue_status
 from mentor.ingest.notices import _deadline_utc
+from mentor.query import Filters
 
 FIXTURE = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
 DESC_BODY = json.loads(
@@ -247,3 +249,28 @@ def test_queue_status_lists_next_descriptions(conn: sqlite3.Connection, seed: Se
 )
 def test_html_to_text(html: str, expected: str) -> None:
     assert _html_to_text(html) == expected
+
+
+def test_saved_search_leads_the_queue(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    seed()
+    (dod,) = conn.execute(
+        "SELECT notice_id FROM notices WHERE full_parent_path_code = '097'"
+    ).fetchone()
+    assert dod != priority_order(FIXTURE["opportunitiesData"])[0]["noticeId"]
+    workspace.save_search(conn, "dod", filters=Filters(agency_prefixes=("097",)))
+    httpx_mock.add_response(url=NOTICEDESC, json=DESC_BODY)
+    httpx_mock.add_response(url=FILES, content=PDF, headers=PDF_HEADERS)
+
+    assert queue_status(conn).next_descriptions[0].notice_id == dod
+    fetch_pending(conn, settings, budget=1, max_attachments=1)
+
+    (requested,) = conn.execute(
+        "SELECT notice_id FROM api_requests WHERE notice_id IS NOT NULL"
+    ).fetchone()
+    assert requested == dod
+    (fetched,) = conn.execute(
+        "SELECT notice_id FROM attachments WHERE fetch_status = 'fetched'"
+    ).fetchone()
+    assert fetched == dod
