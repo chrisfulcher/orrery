@@ -74,6 +74,8 @@ class Profile:
     capability_statement: str | None
     target_agency_prefixes: tuple[str, ...]
     updated_at: str
+    entity_id: int | None = None
+    """The company's own contractor entity, once its UEI is in the graph (source 3)."""
 
 
 PIPELINE = """
@@ -303,9 +305,15 @@ def get_profile(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> Profile 
     ).fetchone()
     if row is None:
         return None
-    return Profile(
-        row[0], row[1], row[2], _tuple(row[3]), _tuple(row[4]), row[5], _tuple(row[6]), row[7]
+    entity = (
+        conn.execute("SELECT entity_id FROM entities WHERE uei = ?", (row[1],)).fetchone()
+        if row[1]
+        else None
     )
+    return Profile(
+        row[0], row[1], row[2], _tuple(row[3]), _tuple(row[4]), row[5], _tuple(row[6]), row[7],
+        entity[0] if entity else None,
+    )  # fmt: skip
 
 
 def _saved_search(row: tuple) -> SavedSearch:

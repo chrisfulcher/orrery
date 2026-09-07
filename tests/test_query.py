@@ -337,3 +337,24 @@ def test_contractor_and_office_award_summaries(
     assert office is not None and office.uei is None
     assert (office.awards_count, office.awards_value_usd) == (2, 173000.5)
     assert [c.vendor for c in office.awards] == ["LEIDOS, INC.", "CDW GOVERNMENT LLC"]
+
+
+def test_contractor_facts_and_their_summary(
+    conn: sqlite3.Connection, seed_registrations: Callable[[], object]
+) -> None:
+    seed_registrations()
+    detail = query.contractor(conn, "UE9QJD4KK1L6")
+    assert detail is not None and detail.facts and detail.facts[0].source_id == "sam_entities"
+    summary = dict(query.summarize_facts(detail.facts, max_items=2))
+    assert summary["sam.registration_status"] == "Active"
+    assert summary["sam.registration_expires"] == "2027-04-17"
+    assert summary["sam.naics"].startswith("236220, 332311, … ") and summary["sam.naics"].endswith(
+        " in all"
+    )
+    assert "sam.dba_name" not in summary
+    older = query.Fact(
+        "sam.registration_status", "Expired", "text", "2020-01-01T00:00:00Z", "sam_entities", None
+    )
+    assert (
+        dict(query.summarize_facts((*detail.facts, older)))["sam.registration_status"] == "Active"
+    )

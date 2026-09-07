@@ -390,7 +390,10 @@ class EntityScreen(Screen):
         else:
             keys = f"path {detail.path_code or '-'} · {detail.notices} notice(s)"
             second = f"offices: {', '.join(child.name for child in detail.children) or '-'}"
-        facts = "\n".join(f"{fact.predicate}: {fact.value}" for fact in detail.facts)
+        facts = "\n".join(
+            f"{predicate}: {value}"
+            for predicate, value in query.summarize_facts(detail.facts, max_items=8)
+        )
         header.update(
             f"{detail.kind}: {detail.name}\n"
             f"{' › '.join(ref.name for ref in detail.chain)}\n"

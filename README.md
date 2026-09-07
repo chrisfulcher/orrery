@@ -6,7 +6,7 @@
 
 Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
 
-The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. Not there yet: the second and third data sources (entity registrations, USAspending awards) and, with them, the incumbent and award history panels of the context view. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. USAspending award history and SAM.gov entity registrations are in too, so the context view of a notice now shows the incumbent, the office's recent awards, and the government contacts, and every vendor is an entity with its registration on record. Not there yet: officials and organizations beyond notice contacts, budget context, and the resolver that merges the duplicate offices the bulk extract creates. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -46,7 +46,7 @@ A personal key with no role is limited to roughly 10 requests per day. A key bac
 
 **An embedding endpoint** (optional; needed only for `mentor embed` and `mentor search --semantic`). Any OpenAI-compatible `/embeddings` endpoint works. The default is a local [Ollama](https://ollama.com): install it, run `ollama pull nomic-embed-text`, and the defaults (`MENTOR_EMBED_BASE_URL=http://localhost:11434/v1`, `MENTOR_EMBED_MODEL=nomic-embed-text`, no key) already point at it. For a cloud endpoint set the base URL, the model name, and `MENTOR_EMBED_API_KEY`.
 
-What leaves your machine: `mentor ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `mentor embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `mentor search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else.
+What leaves your machine: `mentor ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `mentor ingest entities` sends your SAM.gov key to `api.sam.gov` like every other keyed command, and `--uei` sends the UEIs you name. `mentor embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `mentor search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else.
 
 ## Quickstart
 
@@ -131,7 +131,7 @@ uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
 
-For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
+For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
 
 ## Using mentor from an AI agent
 
@@ -141,7 +141,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"mentor": {"command": "uv", "args": ["run", "--directory", "/path/to/mentor", "mentor", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 

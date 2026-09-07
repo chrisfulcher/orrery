@@ -499,6 +499,33 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     )  # fmt: skip
 
 
+LIST_PREDICATES = frozenset({"sam.naics", "sam.psc", "sam.business_type", "sam.sba_business_type"})
+
+
+def summarize_facts(
+    facts: tuple[Fact, ...], *, max_items: int | None = None
+) -> list[tuple[str, str]]:
+    """The latest value of each single-valued predicate and the latest set of each list
+    predicate, as (predicate, text) pairs in first-seen order. ``facts`` is newest first, as
+    ``EntityDetail.facts`` is; ``max_items`` truncates long lists with an ellipsis."""
+    single: dict[str, str] = {}
+    lists: dict[str, tuple[str, list[str]]] = {}
+    for fact in facts:
+        if fact.predicate in LIST_PREDICATES:
+            newest, values = lists.setdefault(fact.predicate, (fact.observed_at, []))
+            if fact.observed_at == newest:
+                values.append(fact.value)
+        else:
+            single.setdefault(fact.predicate, fact.value)
+    summary = list(single.items())
+    for predicate, (_, values) in lists.items():
+        values.reverse()  # newest-first input lists the batch backwards
+        shown = values if max_items is None or len(values) <= max_items else values[:max_items]
+        more = "" if shown is values else f", … {len(values)} in all"
+        summary.append((predicate, ", ".join(shown) + more))
+    return summary
+
+
 def contractor(conn: sqlite3.Connection, uei: str, *, recent: int = 20) -> EntityDetail | None:
     """The contractor registered under this UEI, with the awards the store knows."""
     row = conn.execute(

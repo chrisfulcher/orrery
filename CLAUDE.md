@@ -4,7 +4,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 
 ## Non-negotiables
 
-- **Zero telemetry.** No outbound network calls except to SAM.gov and endpoints the user has configured. No analytics, crash reporting, or update checks, ever.
+- **Zero telemetry.** No outbound network calls except to SAM.gov, USAspending (awards, no key), and endpoints the user has configured. No analytics, crash reporting, or update checks, ever.
 - **Bring your own keys.** Credentials live only in the user's configuration. Never log them, never persist them elsewhere, never send them anywhere but the service they belong to.
 - **Public data and public knowledge only.** Nothing proprietary to any organization enters the repository, including in fixtures, tests, examples, and comments.
 - **People only in their official public capacity,** from government sources. No adapter touches personal social media or profiles individuals beyond their public role.
@@ -25,6 +25,8 @@ mentor is a free, open source, self-hosted business development intelligence too
 - `notices.description` is plain text from every source. Attachment paths are stored relative to `MENTOR_DATA_DIR`. Fetch failures are recorded, never retried automatically.
 - `embeddings` rows record the model that produced them and are rebuilt by deleting a model's rows and re-running `mentor embed`. Embedding and semantic search send text only to `MENTOR_EMBED_BASE_URL`; notice and attachment text is public, the user's query text is not, and the README says so.
 - Bulk-extract rows never overwrite an API-sourced notice; they confirm it and fill an unfetched description. `notices.source_id` is the source that last wrote the typed columns. `active` is cleared only by a complete pass of the active extract, only within the configured NAICS slice.
+- `contracts` rows are keyed by USAspending's award key and overwritten on re-sight; awards resolve to existing offices by office code only (never creating agencies or offices) and to contractors by UEI (created on first sight; the CAGE is set only while no other entity holds it). Vendor phone, fax, and compensated-officer columns are dropped before `raw_json` is stored.
+- Registration attributes are `sam.*` facts on the contractor, never columns; `entity_registrations` gets a row only when the record changed, with every point-of-contact field blanked; an expired registration is a fact, not a deletion. Only the slice is read from the extract: known contractors, configured primary NAICS, and the user's own UEI.
 - Workspace rows are the user's own and may be updated and deleted, except that tracked opportunities are never deleted (a dropped pursuit is `no-bid`) and `tracked_opportunity_events` is append-only. Every workspace query filters by `user_id`.
 
 ## Workflow

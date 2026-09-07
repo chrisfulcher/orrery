@@ -154,3 +154,16 @@ def test_profile_upsert_merges_fields(conn: sqlite3.Connection) -> None:
     assert profile.naics == ("541512", "541511")
     assert profile.certifications == ("SB", "SDVOSB")
     assert profile.target_agency_prefixes == () and profile.uei is None
+
+
+def test_profile_links_to_the_companys_entity_by_uei(
+    conn: sqlite3.Connection, seed_awards: Callable[..., object]
+) -> None:
+    assert workspace.set_profile(conn, name="Example LLC", uei="UE9QJD4KK1L6").entity_id is None
+    seed_awards()
+    profile = workspace.get_profile(conn)
+    assert profile is not None and profile.entity_id is not None
+    (uei,) = conn.execute(
+        "SELECT uei FROM entities WHERE entity_id = ?", (profile.entity_id,)
+    ).fetchone()
+    assert uei == "UE9QJD4KK1L6"

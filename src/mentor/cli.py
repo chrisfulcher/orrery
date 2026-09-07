@@ -312,8 +312,10 @@ def contractor_command(
     typer.echo(f"{detail.name}  uei {detail.uei}  cage {detail.cage or '-'}")
     typer.echo(f"also seen as: {', '.join(a for a in detail.aliases if a != detail.name) or '-'}")
     typer.echo(f"awards: {detail.awards_count}, {_money(detail.awards_value_usd)} current value")
-    for fact in detail.facts:
-        typer.echo(f"  {fact.predicate}: {fact.value}  ({fact.source_id}, {fact.observed_at})")
+    for predicate, value in query.summarize_facts(detail.facts):
+        typer.echo(f"  {predicate}: {value}")
+    if detail.facts:
+        typer.echo(f"  ({detail.facts[0].source_id}, observed {detail.facts[0].observed_at})")
     _print_contracts(list(detail.awards), False)
 
 
@@ -516,6 +518,7 @@ def _print_profile(profile: workspace.Profile, json_output: bool) -> None:
     typer.echo(f"name: {profile.name or '-'}")
     typer.echo(f"uei: {profile.uei or '-'}  cage: {profile.cage or '-'}")
     typer.echo(f"naics: {', '.join(profile.naics) or '-'}")
+    typer.echo(f"entity: {profile.entity_id if profile.entity_id is not None else '-'}")
     typer.echo(f"certifications: {', '.join(profile.certifications) or '-'}")
     typer.echo(f"target agencies: {', '.join(profile.target_agency_prefixes) or '-'}")
     statement = profile.capability_statement or ""
