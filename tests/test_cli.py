@@ -667,3 +667,49 @@ def test_recompetes_command_defaults_to_the_profile_naics(tmp_path: Path) -> Non
     assert runner.invoke(app, ["recompetes", "--naics", "111111"], env=env).output.strip() == (
         "no awards end in the window"
     )
+
+
+def test_pursuit_assess_and_accept_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    from conftest import register_fake_chat
+
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    runner.invoke(app, ["pursuit", "new", "Help desk", "--office", "75R602"], env=env)
+    reply = json.dumps(
+        {
+            "fit": 55, "fit_reasons": ["r"], "gaps": [], "incumbent_standing": "none",
+            "competitive_picture": "open", "decision": "hold", "decision_why": "wait",
+            "open_questions": ["q"],
+            "suggested_tasks": [{"title": "Ask the CO", "stage": "identify"}],
+        }
+    )  # fmt: skip
+    requests: list[dict] = []
+    register_fake_chat(httpx_mock, [reply], requests)
+
+    result = runner.invoke(app, ["pursuit", "assess", "1"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith(
+        "assessed:\nfit 55 · hold · fast qwen3:14b · profile v- · 120 in / 40 out"
+    )
+    assert "suggested tasks (pursuit accept N):\n  1. [identify] Ask the CO" in result.output
+    assert (
+        requests[0]["model"] == "qwen3:14b"
+        and "# Pursuit #1: Help desk" in requests[0]["messages"][1]["content"]
+    )
+
+    payload = json.loads(
+        runner.invoke(app, ["pursuit", "assess", "1", "--slot", "fast", "--json"], env=env).output
+    )
+    assert payload["slot"] == "fast" and payload["result"]["decision"] == "hold"
+    assert (
+        runner.invoke(app, ["pursuit", "assess", "1", "--slot", "medium"], env=env).exit_code == 2
+    )
+    assert "assessment:\n  fit 55" in runner.invoke(app, ["pursuit", "show", "1"], env=env).output
+
+    accepted = runner.invoke(app, ["pursuit", "accept", "1", "1"], env=env)
+    assert accepted.exit_code == 0 and accepted.output.startswith("added: 1\n")
+    assert runner.invoke(app, ["pursuit", "accept", "1"], env=env).output.strip() == "added: 0"
+    assert runner.invoke(app, ["pursuit", "accept", "1", "7"], env=env).exit_code == 1
+    assert runner.invoke(app, ["pursuit", "assess", "99"], env=env).exit_code == 1

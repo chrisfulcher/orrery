@@ -12,8 +12,9 @@ from typing import Annotated
 import click
 import typer
 
-from mentor import __version__, db, documents, query, workspace
+from mentor import __version__, assess, db, documents, query, workspace
 from mentor import quota as quota_module
+from mentor.ai import AIError
 from mentor.config import Settings
 from mentor.documents import DocumentError, ProfileDocument, SearchDocument, WorkflowDocument
 from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
@@ -525,11 +526,23 @@ def _run_pursuit(
     with closing(db.connect(settings.db_path)) as conn:
         try:
             result = action(conn)
-        except (workspace.NotFound, ValueError) as exc:
+        except (workspace.NotFound, ValueError, AIError) as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from exc
     if json_output:
-        print_json(dataclasses.asdict(result))
+        print_json(
+            [dataclasses.asdict(r) for r in result]
+            if isinstance(result, list)
+            else dataclasses.asdict(result)
+        )
+    elif isinstance(result, workspace.AssessmentRecord):
+        typer.echo(f"{done}:")
+        for line in assess.describe(result):
+            typer.echo(line)
+    elif isinstance(result, list):
+        typer.echo(f"{done}: {len(result)}")
+        for task in result:
+            typer.echo(f"  {task.task_id}  {task.stage:<10}  {task.title}")
     elif isinstance(result, workspace.Pursuit):
         typer.echo(f"{done}: " + _pursuit_line(result) + f"  [{result.stage}]")
     else:
@@ -627,6 +640,10 @@ def pursuit_show(pursuit_id: PursuitId, json_output: JsonFlag = False) -> None:
         typer.echo("government dates:")
         for d in detail.dates:
             typer.echo(f"  {d.date[:10]}  {d.kind:<9}  {d.label}")
+    if detail.assessment:
+        typer.echo("assessment:")
+        for line in assess.describe(detail.assessment):
+            typer.echo("  " + line)
     typer.echo("events:")
     for e in detail.events:
         change = (
@@ -765,6 +782,45 @@ def pursuit_outcome(
     """Record the outcome: won moves to the last stage, lost and no-bid close the pursuit."""
     _run_pursuit(
         lambda conn: workspace.set_outcome(conn, pursuit_id, outcome, why), json_output, outcome
+    )
+
+
+@pursuit_app.command("assess")
+def pursuit_assess(
+    pursuit_id: PursuitId,
+    slot: Annotated[
+        str,
+        typer.Option(
+            "--slot", help="deep (the default; the fast slot until one is configured) or fast."
+        ),
+    ] = "deep",
+    json_output: JsonFlag = False,
+) -> None:
+    """Assess the pursuit against your profile with the configured model; stored with provenance."""
+    if slot not in ("fast", "deep"):
+        typer.echo("--slot must be fast or deep", err=True)
+        raise typer.Exit(2)
+    settings = Settings()
+    _run_pursuit(
+        lambda conn: assess.assess(
+            conn, settings, pursuit_id, slot=slot, warn=lambda m: typer.echo(m, err=True)
+        ),
+        json_output,
+        "assessed",
+    )
+
+
+@pursuit_app.command("accept")
+def pursuit_accept(
+    pursuit_id: PursuitId,
+    numbers: Annotated[list[int] | None, typer.Argument(metavar="[N ...]")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Add the latest assessment's suggested tasks (all, or the numbered ones)."""
+    _run_pursuit(
+        lambda conn: assess.accept_tasks(conn, pursuit_id, indices=numbers or None),
+        json_output,
+        "added",
     )
 
 

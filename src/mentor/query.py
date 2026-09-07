@@ -559,6 +559,50 @@ def recompetes(
     return [ContractRef(*row) for row in rows]
 
 
+def rank_attachments(
+    conn: sqlite3.Connection, notice_ids: tuple[str, ...], text: str
+) -> list[tuple[AttachmentInfo, str]]:
+    """Extracted attachments of these notices, best bm25 match to ``text`` first, then the
+    rest by id. Returns (attachment, notice_id) pairs."""
+    if not notice_ids:
+        return []
+    ids = json.dumps(list(notice_ids))
+    columns = (
+        "a.attachment_id, a.filename, a.url, a.fetch_status, a.extract_status, a.path,"
+        " length(coalesce(a.extracted_text, '')), a.notice_id"
+    )
+    ranked: list[tuple] = []
+    tokens = [t for t in text.split() if any(c.isalnum() for c in t)]
+    if tokens:
+        match = " OR ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+        try:
+            ranked = conn.execute(
+                f"SELECT {columns} FROM attachments_fts JOIN attachments AS a"
+                " ON a.attachment_id = attachments_fts.rowid"
+                " WHERE attachments_fts MATCH ? AND a.extract_status = 'done'"
+                " AND a.notice_id IN (SELECT value FROM json_each(?))"
+                " ORDER BY bm25(attachments_fts), a.attachment_id",
+                (match, ids),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            ranked = []
+    seen = {row[0] for row in ranked}
+    rest = conn.execute(
+        f"SELECT {columns} FROM attachments AS a WHERE a.extract_status = 'done'"
+        " AND a.notice_id IN (SELECT value FROM json_each(?)) ORDER BY a.attachment_id",
+        (ids,),
+    ).fetchall()
+    rows = ranked + [row for row in rest if row[0] not in seen]
+    return [(AttachmentInfo(*row[:7]), row[7]) for row in rows]
+
+
+def attachment_text(conn: sqlite3.Connection, attachment_id: int) -> str | None:
+    row = conn.execute(
+        "SELECT extracted_text FROM attachments WHERE attachment_id = ?", (attachment_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 def office_for_code(conn: sqlite3.Connection, code: str) -> EntityRef | None:
     """The office entity whose agency path ends with this code: one candidate, or the
     deepest of twins sharing the same department and sub-tier; otherwise None."""
