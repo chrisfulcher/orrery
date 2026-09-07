@@ -2,7 +2,7 @@ import sqlite3
 from collections.abc import Callable
 
 import pytest
-from conftest import fake_vector
+from conftest import SEARCH_FIXTURE, fake_vector
 
 from mentor import db, query
 from mentor.config import Settings
@@ -166,3 +166,64 @@ def test_list_notices_orders_by_deadline(conn: sqlite3.Connection, seed: Seed) -
     assert deadlines[:-1] == sorted(deadlines[:-1]) and deadlines[-1] is None
     assert all(h.rank == 0.0 and h.source == "notice" for h in hits)
     assert len(query.list_notices(conn, query.Filters(), limit=2)) == 2
+
+
+def test_notice_detail(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
+
+    detail = query.notice(conn, hrsa["noticeId"])
+
+    assert detail is not None
+    assert detail.title == hrsa["title"] and detail.active is True
+    assert [ref.name for ref in detail.agency_chain] == [
+        "HEALTH AND HUMAN SERVICES, DEPARTMENT OF",
+        "HEALTH RESOURCES AND SERVICES ADMINISTRATION",
+        "HRSA HEADQUARTERS",
+    ]
+    assert detail.agency == "HRSA HEADQUARTERS" and detail.url == hrsa["uiLink"]
+    assert detail.versions == 1 and len(detail.attachments) == 1
+    assert detail.attachments[0].fetch_status == "pending" and detail.attachments[0].text_chars == 0
+    assert query.notice(conn, "nope") is None
+
+
+def test_entity_detail(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
+    (root_id,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075'"
+    ).fetchone()
+    (leaf_id,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075.7526.75R602'"
+    ).fetchone()
+
+    root = query.entity(conn, root_id)
+    leaf = query.entity(conn, leaf_id)
+
+    assert root is not None and leaf is not None
+    assert root.kind == "agency" and root.parent is None and len(root.chain) == 1
+    assert [child.path_code for child in root.children] == ["075.7526"]
+    assert root.notices == 1 and root.recent[0].notice_id == hrsa
+    assert len(leaf.chain) == 3 and leaf.parent is not None and leaf.parent.path_code == "075.7526"
+    assert leaf.aliases == ("HRSA HEADQUARTERS",) and leaf.children == ()
+    assert query.entity(conn, 999) is None
+
+
+def test_activity_and_quota_series(
+    conn: sqlite3.Connection, seed: Seed, run_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T12:00:00Z")
+    seed()
+    conn.execute(
+        "INSERT INTO api_requests (run_id, endpoint, requested_at)"
+        " VALUES (?, 'https://api.sam.gov/x', '2026-09-05T01:00:00Z')",
+        (run_id,),
+    )
+
+    activity = query.activity(conn, days=3)
+    quota = query.quota_history(conn, days=3)
+
+    assert activity == [("2026-09-04", 0), ("2026-09-05", 0), ("2026-09-06", 5)]
+    assert quota[:2] == [("2026-09-04", 0), ("2026-09-05", 1)]
+    assert query.upcoming(conn, days=365)[0].response_deadline is not None
+    assert query.counts(conn) == query.StoreCounts(notices=5, active=5, entities=19)

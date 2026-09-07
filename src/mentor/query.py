@@ -8,6 +8,7 @@ not one scale; treating them as comparable is a ranking heuristic, not a measure
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from mentor import db
 
@@ -183,3 +184,189 @@ def _match(conn: sqlite3.Connection, query: str, limit: int, filters: Filters) -
 
 def _quoted(text: str) -> str:
     return " ".join('"' + token.replace('"', '""') + '"' for token in text.split())
+
+
+# Detail reads for the context view, the entity view, the dashboard, and the MCP server.
+# Public data only; tracking lives in mentor.workspace.
+
+
+@dataclass(frozen=True)
+class EntityRef:
+    entity_id: int
+    name: str
+    path_code: str | None
+
+
+@dataclass(frozen=True)
+class AttachmentInfo:
+    attachment_id: int
+    filename: str | None
+    url: str
+    fetch_status: str
+    extract_status: str
+    path: str | None
+    text_chars: int
+
+
+@dataclass(frozen=True)
+class NoticeDetail:
+    notice_id: str
+    solicitation_number: str | None
+    title: str
+    notice_type: str | None
+    naics_code: str | None
+    psc_code: str | None
+    set_aside_code: str | None
+    posted_at: str | None
+    response_deadline: str | None
+    active: bool
+    first_seen_at: str
+    last_seen_at: str
+    source_id: str
+    description_status: str
+    description: str | None
+    url: str | None
+    agency: str | None
+    agency_chain: tuple[EntityRef, ...]
+    """Root first, leaf last."""
+    attachments: tuple[AttachmentInfo, ...]
+    versions: int
+
+
+@dataclass(frozen=True)
+class EntityDetail:
+    entity_id: int
+    kind: str
+    name: str
+    path_code: str | None
+    parent: EntityRef | None
+    chain: tuple[EntityRef, ...]
+    """Root first, this entity last."""
+    children: tuple[EntityRef, ...]
+    aliases: tuple[str, ...]
+    notices: int
+    """Notices under this entity or any office below it."""
+    recent: tuple[SearchHit, ...]
+
+
+@dataclass(frozen=True)
+class StoreCounts:
+    notices: int
+    active: int
+    entities: int
+
+
+CHAIN = """
+WITH RECURSIVE chain(entity_id, name, agency_path_code, parent_entity_id, depth) AS (
+    SELECT entity_id, name, agency_path_code, parent_entity_id, 0
+    FROM entities WHERE entity_id = :id
+    UNION ALL
+    SELECT e.entity_id, e.name, e.agency_path_code, e.parent_entity_id, c.depth + 1
+    FROM entities AS e JOIN chain AS c ON e.entity_id = c.parent_entity_id
+)
+SELECT entity_id, name, agency_path_code FROM chain ORDER BY depth DESC
+"""
+
+
+def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
+    """Everything public about one notice, for the context view."""
+    row = conn.execute(
+        "SELECT notice_id, solicitation_number, title, notice_type, naics_code, psc_code,"
+        " set_aside_code, posted_at, response_deadline, active, first_seen_at, last_seen_at,"
+        " source_id, description_status, description, url, agency, agency_entity_id, versions"
+        " FROM v_notices WHERE notice_id = ?",
+        (notice_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    attachments = tuple(
+        AttachmentInfo(*item)
+        for item in conn.execute(
+            "SELECT attachment_id, filename, url, fetch_status, extract_status, path,"
+            " length(coalesce(extracted_text, '')) FROM attachments"
+            " WHERE notice_id = ? ORDER BY attachment_id",
+            (notice_id,),
+        ).fetchall()
+    )
+    return NoticeDetail(
+        *row[:9],
+        bool(row[9]),
+        *row[10:17],
+        _chain(conn, row[17]),
+        attachments,
+        row[18],
+    )
+
+
+def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> EntityDetail | None:
+    """One agency or office with its place in the hierarchy and its recent notices."""
+    row = conn.execute(
+        "SELECT entity_id, kind, name, agency_path_code, parent_entity_id, parent, notices"
+        " FROM v_entities WHERE entity_id = ?",
+        (entity_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    children = tuple(
+        EntityRef(*item)
+        for item in conn.execute(
+            "SELECT entity_id, name, agency_path_code FROM entities"
+            " WHERE parent_entity_id = ? ORDER BY name",
+            (entity_id,),
+        ).fetchall()
+    )
+    aliases = tuple(
+        alias
+        for (alias,) in conn.execute(
+            "SELECT alias FROM entity_aliases WHERE entity_id = ? ORDER BY alias", (entity_id,)
+        ).fetchall()
+    )
+    chain = _chain(conn, entity_id)
+    parent = chain[-2] if len(chain) > 1 else None
+    hits = list_notices(conn, Filters(agency_prefixes=(row[3],)), limit=recent) if row[3] else []
+    return EntityDetail(
+        row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits)
+    )
+
+
+def upcoming(conn: sqlite3.Connection, *, days: int = 7, limit: int = 50) -> list[SearchHit]:
+    """Active notices due within ``days``, soonest first."""
+    return list_notices(conn, Filters(deadline_within_days=days, active_only=True), limit=limit)
+
+
+def activity(conn: sqlite3.Connection, *, days: int = 14) -> list[tuple[str, int]]:
+    """Notices first seen per UTC day, one entry per day ending today, oldest first."""
+    return _daily(
+        conn,
+        "SELECT date(first_seen_at) AS day, count(*) FROM notices"
+        " WHERE date(first_seen_at) >= :start GROUP BY day",
+        days,
+    )
+
+
+def quota_history(conn: sqlite3.Connection, *, days: int = 30) -> list[tuple[str, int]]:
+    """Keyed SAM.gov requests per UTC day, one entry per day ending today, oldest first."""
+    return _daily(conn, "SELECT day, requests FROM v_quota_daily WHERE day >= :start", days)
+
+
+def counts(conn: sqlite3.Connection) -> StoreCounts:
+    (notices, active) = conn.execute("SELECT count(*), sum(active) FROM notices").fetchone()
+    (entities,) = conn.execute("SELECT count(*) FROM entities").fetchone()
+    return StoreCounts(notices, active or 0, entities)
+
+
+def _chain(conn: sqlite3.Connection, entity_id: int | None) -> tuple[EntityRef, ...]:
+    if entity_id is None:
+        return ()
+    return tuple(EntityRef(*row) for row in conn.execute(CHAIN, {"id": entity_id}).fetchall())
+
+
+def _daily(conn: sqlite3.Connection, sql: str, days: int) -> list[tuple[str, int]]:
+    today = datetime.strptime(db.utcnow(), db.TIMESTAMP_FORMAT).date()
+    start = today - timedelta(days=days - 1)
+    found = dict(conn.execute(sql, {"start": start.isoformat()}).fetchall())
+    series = []
+    for offset in range(days):
+        day = (start + timedelta(days=offset)).isoformat()
+        series.append((day, found.get(day, 0)))
+    return series

@@ -37,6 +37,7 @@ MIGRATIONS = [
     "0003_extraction_and_search.sql",
     "0004_embeddings.sql",
     "0005_workspace.sql",
+    "0006_views.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
