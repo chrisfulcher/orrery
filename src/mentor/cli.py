@@ -533,6 +533,26 @@ def ingest_bulk_command(
 
 
 @app.command()
+def top(
+    serve: Annotated[bool, typer.Option("--serve", help="Serve the UI in a browser tab.")] = False,
+    port: Annotated[int, typer.Option(help="Port for --serve (localhost only).")] = 8000,
+) -> None:
+    """Full-screen terminal UI: dashboard, opportunities, context view, entity view."""
+    settings = Settings()
+    if serve:
+        try:
+            from textual_serve.server import Server
+        except ImportError as exc:
+            typer.echo("textual-serve is not installed: uv sync --extra serve", err=True)
+            raise typer.Exit(2) from exc
+        Server("mentor top", port=port).serve()
+        return
+    from mentor.tui.app import MentorTop
+
+    MentorTop(settings).run()
+
+
+@app.command()
 def mcp() -> None:
     """Serve the store to an MCP client over standard input and output."""
     from mentor.mcp_server import main  # heavy import; only when asked for

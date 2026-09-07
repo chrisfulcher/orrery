@@ -1,0 +1,46 @@
+Screen {
+    layout: vertical;
+}
+#panels {
+    layout: grid;
+    grid-size: 3 2;
+    grid-rows: 9 1fr;
+    grid-gutter: 0 1;
+    height: 1fr;
+}
+#deadlines {
+    column-span: 2;
+}
+.panel {
+    border: round $primary;
+    padding: 0 1;
+    height: 100%;
+}
+Sparkline {
+    height: 3;
+}
+#query {
+    border: round $primary;
+}
+#header, #tracking, #entity_header {
+    height: auto;
+}
+#description_scroll {
+    height: 1fr;
+}
+#attachments {
+    height: 10;
+}
+#entity_notices {
+    height: 1fr;
+}
+StageModal {
+    align: center middle;
+}
+#stage_box {
+    width: 32;
+    height: auto;
+    border: round $primary;
+    background: $surface;
+    padding: 0 1;
+}

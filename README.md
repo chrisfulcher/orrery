@@ -6,7 +6,7 @@
 
 Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
 
-Not there yet: the terminal UI, the MCP server, and the SQL views. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. Not there yet: the second and third data sources (entity registrations, USAspending awards) and, with them, the incumbent and award history panels of the context view. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -109,6 +109,23 @@ uv run mentor profile set --name "Example LLC" --naics 541512 --cert SB
 ```
 
 A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadline window); the same filters work on `mentor search`. Notices matching any saved search move to the front of `mentor fetch`. Every stage and PWin change is kept, so `history` shows the trajectory; nothing is untracked, a dropped pursuit is `--stage no-bid`.
+
+## Terminal UI
+
+```
+uv run mentor top
+```
+
+`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, deadlines in the next 7 days, and your pipeline by stage. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, description, documents, and tracking. There, `t` tracks it or changes its stage, `a` opens the agency's entity view, `o` opens the SAM.gov page in your browser, and Escape goes back. `q` quits. The app draws in your terminal's own colours.
+
+To use it from a browser tab instead, on the same machine or a home server:
+
+```
+uv sync --extra serve
+uv run mentor top --serve          # then open http://localhost:8000
+```
+
+For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
 
 ## Using mentor from an AI agent
 
