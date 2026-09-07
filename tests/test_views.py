@@ -11,6 +11,15 @@ V1_COLUMNS = {
         "last_seen_at", "source_id", "agency_path_code", "agency_path_name", "agency_entity_id",
         "agency", "description_status", "description", "url", "attachments",
         "attachments_fetched", "attachments_extracted", "versions",
+        "award_number", "award_date", "award_amount", "awardee",
+    },
+    "v_contracts": {
+        "contract_id", "award_key", "piid", "parent_piid", "awarding_entity_id",
+        "awarding_office_code", "awarding_office", "vendor_entity_id", "vendor", "vendor_uei",
+        "cage", "solicitation_identifier", "award_date", "last_action_date", "pop_start",
+        "pop_end", "value_usd", "potential_value_usd", "naics_code", "psc_code",
+        "award_type_code", "set_aside_code", "extent_competed_code", "source_id",
+        "first_seen_at", "last_seen_at", "url",
     },
     "v_entities": {
         "entity_id", "kind", "name", "agency_path_code", "uei", "cage", "parent_entity_id",
@@ -56,3 +65,12 @@ def test_v_entities_counts_offices_below(conn: sqlite3.Connection, seed: Seed) -
         "SELECT parent FROM v_entities WHERE agency_path_code = '075.7526'"
     ).fetchone()
     assert parent == "HEALTH AND HUMAN SERVICES, DEPARTMENT OF"
+
+
+def test_v_notices_award_columns(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    rows = conn.execute(
+        "SELECT award_number, award_date, award_amount, awardee FROM v_notices"
+        " WHERE award_number IS NOT NULL"
+    ).fetchall()
+    assert rows == [("75S20326F80003", "2026-08-21", None, None)]
