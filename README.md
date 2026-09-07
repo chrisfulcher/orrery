@@ -120,7 +120,7 @@ A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadl
 uv run mentor top
 ```
 
-`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, deadlines in the next 7 days, and your pipeline by stage. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, description, documents, and tracking. There, `t` tracks it or changes its stage, `a` opens the agency's entity view, `o` opens the SAM.gov page in your browser, and Escape goes back. `q` quits. The app draws in your terminal's own colours.
+`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, deadlines in the next 7 days, and your pipeline by stage. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, tracking, the incumbent (the award that shares its solicitation or award number), description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` tracks it or changes its stage, `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `q` quits. The app draws in your terminal's own colours.
 
 To use it from a browser tab instead, on the same machine or a home server:
 

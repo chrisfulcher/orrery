@@ -8,6 +8,7 @@ from textual.widgets import DataTable, Static
 
 from mentor import db, workspace
 from mentor.config import Settings
+from mentor.ingest.awards import AwardsResult
 from mentor.tui.app import (
     ContextScreen,
     DashboardScreen,
@@ -17,6 +18,7 @@ from mentor.tui.app import (
 )
 
 Seed = Callable[[dict | None], None]
+SeedAwards = Callable[[list[dict] | None], AwardsResult]
 HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
 
 
@@ -94,3 +96,56 @@ async def test_screenshot(app: MentorTop, tmp_path: Path) -> None:
         saved = app.save_screenshot("top.svg", path=str(tmp_path))
     assert Path(saved).stat().st_size > 1000
     print(f"screenshot: {saved}")
+
+
+@pytest.fixture
+def app_with_awards(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed_awards: SeedAwards,
+    monkeypatch: pytest.MonkeyPatch,
+) -> MentorTop:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
+    seed_awards()
+    conn.close()
+    return MentorTop(settings)
+
+
+async def test_context_view_awards_panels_and_contractor_screen(app_with_awards: MentorTop) -> None:
+    app = app_with_awards
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(ContextScreen(HRSA))
+        await pilot.pause()
+        assert isinstance(app.screen, ContextScreen)
+        assert text(app, "#incumbent").startswith("LEIDOS, INC. · 75R60222F00009 · $125,000")
+        awards = app.screen.query_one("#awards", DataTable)
+        assert awards.row_count == 2 and "HRSA HEADQUARTERS" in awards.border_title
+        assert text(app, "#officials").startswith(
+            "Point of Contact 1 (primary) · poc1@example.gov · - · ROCKVILLE MD 20852 · 0 other"
+        )
+
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, EntityScreen)
+        header = text(app, "#entity_header")
+        assert header.startswith("contractor: LEIDOS, INC.")
+        assert "uei UE9QJD4KK1L6 · cage 5UTE1 · 1 award(s), $125,000" in header
+        assert app.screen.query_one("#entity_awards", DataTable).row_count == 1
+
+        await pilot.press("enter")  # the award row opens the awarding office
+        await pilot.pause()
+        assert isinstance(app.screen, EntityScreen)
+        header = text(app, "#entity_header")
+        assert header.startswith("office: HRSA HEADQUARTERS") and "2 award(s), $173,000" in header
+        assert app.screen.query_one("#entity_awards", DataTable).row_count == 2
+
+        await pilot.press("escape")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ContextScreen)
+        army = SEARCH_FIXTURE["opportunitiesData"][1]["noticeId"]
+        app.push_screen(ContextScreen(army))
+        await pilot.pause()
+        assert text(app, "#incumbent").startswith("none known")
+        assert "none in the store" in app.screen.query_one("#awards", DataTable).border_title

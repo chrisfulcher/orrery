@@ -26,6 +26,26 @@ def _day(timestamp: str | None) -> str:
     return timestamp[:10] if timestamp else "-"
 
 
+def _money(value: float | None) -> str:
+    return f"${value:,.0f}" if value is not None else "-"
+
+
+def _award_columns(table: DataTable) -> None:
+    table.add_columns("action", "vendor", "office", "value", "set-aside", "piid")
+
+
+def _award_row(table: DataTable, award: query.ContractRef) -> None:
+    table.add_row(
+        _day(award.last_action_date),
+        (award.vendor or "-")[:28],
+        (award.awarding_office or "-")[:28],
+        _money(award.value_usd),
+        award.set_aside_code or "-",
+        award.piid,
+        key=str(award.contract_id),
+    )
+
+
 class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         with Grid(id="panels"):
@@ -158,11 +178,13 @@ class OpportunitiesScreen(Screen):
 
 
 class ContextScreen(Screen):
-    """The context view: one notice, its agency chain, text, documents, and tracking."""
+    """The context view: one notice, its agency chain, text, documents, tracking, the
+    incumbent, the office's award history, and the government contacts."""
 
     BINDINGS = [
         Binding("t", "track", "Track / stage"),
         Binding("a", "agency", "Agency"),
+        Binding("i", "incumbent", "Incumbent"),
         Binding("o", "open", "Open in SAM.gov"),
         Binding("escape", "app.pop_screen", "Back"),
     ]
@@ -175,15 +197,23 @@ class ContextScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(id="header", classes="panel")
         yield Static(id="tracking", classes="panel")
+        yield Static(id="incumbent", classes="panel")
         with VerticalScroll(id="description_scroll", classes="panel"):
             yield Static(id="description")
+        yield DataTable(id="awards", classes="panel", cursor_type="row")
+        yield Static(id="officials", classes="panel")
         yield DataTable(id="attachments", classes="panel")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#header").border_title = "notice"
         self.query_one("#tracking").border_title = "pipeline"
+        self.query_one("#incumbent").border_title = "incumbent"
         self.query_one("#description_scroll").border_title = "description"
+        awards = self.query_one("#awards", DataTable)
+        awards.border_title = "award history"
+        _award_columns(awards)
+        self.query_one("#officials").border_title = "officials"
         attachments = self.query_one("#attachments", DataTable)
         attachments.border_title = "documents"
         attachments.add_columns("file", "fetch", "extract", "chars")
@@ -217,8 +247,38 @@ class ContextScreen(Screen):
             else f"{tracked.stage} · pwin {tracked.pwin if tracked.pwin is not None else '-'}"
             f" · updated {tracked.updated_at} (t to change stage)"
         )
+        incumbent = detail.incumbent
+        self.query_one("#incumbent", Static).update(
+            "none known (no award shares this solicitation or award number)"
+            if incumbent is None
+            else f"{incumbent.vendor or '-'} · {incumbent.piid} · {_money(incumbent.value_usd)}"
+            f" · {_day(incumbent.award_date)} to {_day(incumbent.pop_end)}"
+            f" · set-aside {incumbent.set_aside_code or '-'} (i to open)"
+        )
         self.query_one("#description", Static).update(
             detail.description or f"description {detail.description_status}"
+        )
+        awards = self.query_one("#awards", DataTable)
+        awards.clear()
+        office = detail.agency_chain[-1].name if detail.agency_chain else "this office"
+        awards.border_title = (
+            f"award history · {office} · NAICS {detail.naics_code or '-'}"
+            if detail.award_history
+            else "award history · none in the store (mentor ingest awards)"
+        )
+        for award in detail.award_history:
+            _award_row(awards, award)
+        self.query_one("#officials", Static).update(
+            "\n".join(
+                f"{official.name} ({official.kind}"
+                f"{', ' + official.title if official.title else ''})"
+                f" · {official.email or '-'} · {official.phone or '-'}"
+                f"{' · fax ' + official.fax if official.fax else ''}"
+                f"{' · ' + official.office_address if official.office_address else ''}"
+                f" · {official.other_notices} other notice(s)"
+                for official in detail.officials
+            )
+            or "none named"
         )
         attachments = self.query_one("#attachments", DataTable)
         attachments.clear()
@@ -251,9 +311,22 @@ class ContextScreen(Screen):
         if self.detail and self.detail.agency_chain:
             self.app.push_screen(EntityScreen(self.detail.agency_chain[-1].entity_id))
 
+    def action_incumbent(self) -> None:
+        if self.detail and self.detail.incumbent and self.detail.incumbent.vendor_entity_id:
+            self.app.push_screen(EntityScreen(self.detail.incumbent.vendor_entity_id))
+
     def action_open(self) -> None:
         if self.detail and self.detail.url:
             webbrowser.open(self.detail.url)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "awards" and self.detail:
+            award = next(
+                (a for a in self.detail.award_history if str(a.contract_id) == event.row_key.value),
+                None,
+            )
+            if award and award.vendor_entity_id:
+                self.app.push_screen(EntityScreen(award.vendor_entity_id))
 
 
 class StageModal(ModalScreen[str | None]):
@@ -288,29 +361,45 @@ class EntityScreen(Screen):
     def __init__(self, entity_id: int) -> None:
         super().__init__()
         self.entity_id = entity_id
+        self.detail: query.EntityDetail | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(id="entity_header", classes="panel")
+        yield DataTable(id="entity_awards", classes="panel", cursor_type="row")
         yield DataTable(id="entity_notices", classes="panel", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:
         detail = query.entity(self.app.conn, self.entity_id, recent=50)
+        self.detail = detail
         header = self.query_one("#entity_header", Static)
         header.border_title = "entity"
+        awards = self.query_one("#entity_awards", DataTable)
+        _award_columns(awards)
         table = self.query_one("#entity_notices", DataTable)
         table.border_title = "recent notices"
         table.add_columns("deadline", "agency", "title")
         if detail is None:
             header.update(f"no entity {self.entity_id}")
             return
-        children = ", ".join(child.name for child in detail.children) or "-"
+        contractor = detail.kind == "contractor"
+        if contractor:
+            keys = f"uei {detail.uei or '-'} · cage {detail.cage or '-'}"
+            others = ", ".join(a for a in detail.aliases if a != detail.name) or "-"
+            second = f"also seen as: {others}"
+        else:
+            keys = f"path {detail.path_code or '-'} · {detail.notices} notice(s)"
+            second = f"offices: {', '.join(child.name for child in detail.children) or '-'}"
+        facts = "\n".join(f"{fact.predicate}: {fact.value}" for fact in detail.facts)
         header.update(
             f"{detail.kind}: {detail.name}\n"
             f"{' › '.join(ref.name for ref in detail.chain)}\n"
-            f"path {detail.path_code or '-'} · {detail.notices} notice(s)\n"
-            f"offices: {children}"
+            f"{keys} · {detail.awards_count} award(s), {_money(detail.awards_value_usd)}\n"
+            f"{second}" + (f"\n{facts}" if facts else "")
         )
+        awards.border_title = "awards won" if contractor else "awards made"
+        for award in detail.awards:
+            _award_row(awards, award)
         for hit in detail.recent:
             table.add_row(
                 _day(hit.response_deadline),
@@ -318,11 +407,24 @@ class EntityScreen(Screen):
                 hit.title[:70],
                 key=hit.notice_id,
             )
-        table.focus()
+        (awards if contractor and detail.awards else table).focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.row_key.value:
+        if event.data_table.id == "entity_notices" and event.row_key.value:
             self.app.push_screen(ContextScreen(event.row_key.value))
+        elif event.data_table.id == "entity_awards" and self.detail:
+            award = next(
+                (a for a in self.detail.awards if str(a.contract_id) == event.row_key.value), None
+            )
+            if award is None:
+                return
+            other = (
+                award.awarding_entity_id
+                if self.detail.kind == "contractor"
+                else award.vendor_entity_id
+            )
+            if other and other != self.entity_id:
+                self.app.push_screen(EntityScreen(other))
 
 
 class MentorTop(App):

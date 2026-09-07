@@ -22,13 +22,19 @@ Sparkline {
 #query {
     border: round $primary;
 }
-#header, #tracking, #entity_header {
+#header, #tracking, #incumbent, #officials, #entity_header {
     height: auto;
 }
 #description_scroll {
     height: 1fr;
 }
+#awards {
+    height: 8;
+}
 #attachments {
+    height: 7;
+}
+#entity_awards {
     height: 10;
 }
 #entity_notices {
