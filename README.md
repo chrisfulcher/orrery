@@ -6,7 +6,7 @@
 
 Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
 
-The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. USAspending award history and SAM.gov entity registrations are in too, so the context view of a notice now shows the incumbent, the office's recent awards, and the government contacts, and every vendor is an entity with its registration on record. Not there yet: officials and organizations beyond notice contacts, budget context, and the resolver that merges the duplicate offices the bulk extract creates. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. USAspending award history and SAM.gov entity registrations are in too, so the context view of a notice now shows the incumbent, the office's recent awards, and the government contacts, and every vendor is an entity with its registration on record. The BD workflow is in: pursuits anchored on a requirement move through your own gated stages (streamlined Shipley by default, editable), the dashboard shows this week's work on your calendar rather than the government's, and a recompete radar surfaces requirements from the award history months before any notice. Your company profile is a versioned TOML document. Not there yet: officials and organizations beyond notice contacts, budget context, AI assessments over the profile, and the resolver that merges the duplicate offices the bulk extract creates. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 
 ## Why
 
@@ -101,23 +101,32 @@ The container runs as uid 1000. If your user has a different uid, run `sudo chow
 
 `mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. `mentor ingest awards` asks USAspending for every contract action in your NAICS codes over the last three years (`--since` and `--until` change the window), waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. Vendors become contractor entities keyed by UEI; awards resolve to offices already in the store by office code, and what cannot resolve is queued as an unresolved alias rather than guessed. `mentor ingest entities` downloads SAM.gov's public monthly entity extract (one keyed request for every registrant in the country, about 150 MB) into `data/extracts/sam/` and keeps only the registrants the store cares about: vendors seen in awards, registrants whose primary NAICS is one of yours, and your own company. Each becomes a contractor entity with its registration status, expiry, structure, business and SBA types, NAICS and PSC lists, and address as sourced facts; registrant contacts are never stored. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. Both count against the same daily budget as notices. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 
-### Working the pipeline
+### Working pursuits
 
 ```
-uv run mentor searches add sdvosb-it --naics 541512 --set-aside SDVOSBC --deadline-days 30
-uv run mentor searches run sdvosb-it
-uv run mentor track NOTICE_ID --stage pursuing --pwin 40
-uv run mentor pipeline
-uv run mentor history NOTICE_ID
 uv run mentor profile edit                  # your company as a TOML document, in $EDITOR; every save is a version
 uv run mentor profile edit --file p.toml    # the same without an editor (Docker, scripts)
 uv run mentor workflow edit                 # your stages, gates, and task templates (Shipley-style by default)
+uv run mentor recompetes                    # awards in your NAICS ending soonest, options included
+uv run mentor pursuit new "Help desk recompete" --office 75R602 --naics 541512 --contract 354
+uv run mentor pursuit show 3
+uv run mentor pursuit done 12               # a task
+uv run mentor pursuit gate 3 go --why "fits the profile; incumbent's options are exhausted"
+uv run mentor pursuit gate 3 hold --why "budget unclear" --until 2026-11-01
+uv run mentor pursuit link 3 NOTICE_ID      # the RFI, the solicitation, an amendment
+uv run mentor pursuit set 3 --pwin 40 --notes "teaming with the incumbent's sub"
+uv run mentor pursuit outcome 3 won --why "award notice received"
+uv run mentor pursuits                      # the board by stage
+uv run mentor searches add sdvosb-it --naics 541512 --set-aside SDVOSBC --deadline-days 30
 uv run mentor searches edit sdvosb-it       # a saved search as TOML
+uv run mentor searches run sdvosb-it
 uv run mentor awards --office 75R602        # who wins at an office, newest first
 uv run mentor contractor UE9QJD4KK1L6      # one vendor: names, awards, facts
 ```
 
-A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadline window); the same filters work on `mentor search`. Notices matching any saved search move to the front of `mentor fetch`. Every stage and PWin change is kept, so `history` shows the trajectory; nothing is untracked, a dropped pursuit is `--stage no-bid`.
+A pursuit is a requirement you intend to win: an office and a need, often a recompete you can see on the radar long before any notice, sometimes a conversation. It moves through the stages of your workflow document only by recorded decisions. The default is streamlined Shipley: Identify feeds the Pursuit Gate, Qualify the Capture Gate, Capture the Bid Gate, Proposal Development the Bid Confirmation Gate, then Submitted and Post Award; `mentor workflow edit` changes the stages, the gates, and the tasks each stage starts with. A gate decision is go, no-go, or hold, always with a rationale; no-go closes the pursuit as no-bid, hold parks it until a date, and any move can be reversed with a reason (`pursuit back`, `pursuit reopen`). Nothing is ever deleted. Notices attach to a pursuit with a role (RFI, sources sought, solicitation, amendment, award), and the government's dates are read from them and from the incumbent award at query time, so an amendment's new deadline shows up without anyone touching the pursuit. `mentor track`, `pipeline`, and `history` still work and now speak in pursuits.
+
+A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadline window); the same filters work on `mentor search`. Notices matching any saved search move to the front of `mentor fetch`.
 
 ## Terminal UI
 
@@ -125,7 +134,7 @@ A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadl
 uv run mentor top
 ```
 
-`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, deadlines in the next 7 days, and your pipeline by stage. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, tracking, the incumbent (the award that shares its solicitation or award number), description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` tracks it or changes its stage, `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `q` quits. The app draws in your terminal's own colours.
+`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, then this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first), what needs attention (a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks) with the open pursuits per stage, and the government's dates for the next 60 days as a strip; Enter on any row opens the pursuit. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, its pursuit, the incumbent (the award that shares its solicitation or award number), description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` opens the notice's pursuit or attaches the notice to one (or starts one), `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. `3` is the board of open pursuits by stage (`n` starts one, `c` shows closed ones); a pursuit's screen carries its tasks, notices, and decision log, with `d` to finish the selected task, `t` to add one, `g` for a gate decision, `b` to move back a stage, `w` for the outcome (or to reopen), `p` and `n` for PWin and notes, `a` and `i` for the office and the incumbent, and Enter on a notice for its context view. `4` is the recompete radar: awards in your profile's NAICS ending soonest with options included, `p` starts a pursuit from one with the award as its incumbent, `m` widens the window. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `q` quits. The app draws in your terminal's own colours.
 
 To use it from a browser tab instead, on the same machine or a home server:
 
@@ -134,7 +143,7 @@ uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
 
-For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
+For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pursuits`, `v_pursuit_tasks`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
 
 ## Using mentor from an AI agent
 
@@ -144,7 +153,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"mentor": {"command": "uv", "args": ["run", "--directory", "/path/to/mentor", "mentor", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `task_done`, `update_pursuit` (the BD workflow), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `task_done`, `update_pursuit` (the BD workflow), `recompetes`, `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 
