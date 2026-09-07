@@ -148,7 +148,7 @@ def test_assess_stores_the_result_with_provenance(
         conn, settings, pursuit_with_everything, backend=backend, warn=warnings.append
     )
     assert (record.slot, record.provider, record.model) == ("fast", "openai", "qwen3:14b")
-    assert (record.prompt_version, record.profile_version) == (1, 1)
+    assert (record.prompt_version, record.profile_version) == (2, 1)
     assert (record.input_tokens, record.output_tokens) == (200, 50)
     assert record.result["fit"] == 72 and record.result["decision"] == "go"
     assert record.result["suggested_tasks"][1]["stage"] == "identify"  # unknown stage mapped
@@ -201,6 +201,7 @@ def test_fit_is_clamped_and_schema_is_strict() -> None:
     assert parsed.fit == 100
     schema = Assessment.model_json_schema()
     assert schema["additionalProperties"] is False and "suggested_tasks" in schema["required"]
+    assert "0 (no fit) to 100 (ideal)" in schema["properties"]["fit"]["description"]
     assert assess.describe(
         workspace.AssessmentRecord(
             1, 1, "deep", "openai", "m", 1, None, "h", None, None, "now", GOOD

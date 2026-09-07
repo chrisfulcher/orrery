@@ -15,13 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from mentor import ai, documents, query, workspace
 from mentor.config import Settings
 from mentor.documents import ProfileDocument
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 SYSTEM_PROMPT = """\
 You are a capture analyst for a U.S. federal government contractor. You judge whether the
@@ -30,9 +30,10 @@ material provided: the profile, the pursuit, the notices and document excerpts, 
 incumbent's registration and award record, and the office's award history. Be specific and
 cite the material (a notice title, a PIID, a NAICS code, a set-aside) in every reason. Say
 what is missing under open_questions rather than guessing. Recommend the gate decision the
-material supports: go, no-go, or hold. Suggested tasks are concrete next actions for the
-pursuit's current or next stage, using the stage keys given. Answer with one JSON object
-matching the schema and nothing else.
+material supports: go, no-go, or hold. Score fit from 0 (no fit) to 100 (ideal) and make the
+score agree with the decision. Suggested tasks are concrete next actions for the pursuit's
+current or next stage, using the stage keys given. Answer with one JSON object matching the
+schema and nothing else.
 """
 
 STATEMENT_CHARS = 4_000
@@ -54,16 +55,25 @@ class SuggestedTask(_Model):
 
 
 class Assessment(_Model):
-    fit: int
-    """0 to 100."""
-    fit_reasons: list[str]
-    gaps: list[str]
-    incumbent_standing: str
-    competitive_picture: str
-    decision: Literal["go", "no-go", "hold"]
-    decision_why: str
-    open_questions: list[str]
-    suggested_tasks: list[SuggestedTask]
+    fit: int = Field(
+        description="How well the company fits this requirement, 0 (no fit) to 100 (ideal)."
+    )
+    fit_reasons: list[str] = Field(
+        description="Specific reasons for the fit score, citing the material."
+    )
+    gaps: list[str] = Field(description="What the company lacks for this requirement.")
+    incumbent_standing: str = Field(description="How strong the incumbent's position is, and why.")
+    competitive_picture: str = Field(
+        description="Who else is likely to compete, from the award history."
+    )
+    decision: Literal["go", "no-go", "hold"] = Field(
+        description="The gate decision the material supports."
+    )
+    decision_why: str = Field(description="The rationale for the decision.")
+    open_questions: list[str] = Field(description="What is unknown or missing from the material.")
+    suggested_tasks: list[SuggestedTask] = Field(
+        description="Concrete next actions for the current or next stage."
+    )
 
     @field_validator("fit")
     @classmethod
