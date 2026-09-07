@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from mentor import db, documents, query
-from mentor.documents import ProfileDocument
+from mentor.documents import ProfileDocument, SearchDocument, WorkflowDocument
 
 USER_ID = 1  # v1 single-user: the seeded 'local' row
 STAGES = ("watching", "pursuing", "bid", "no-bid", "submitted", "won", "lost")
@@ -325,6 +325,54 @@ def run_search(
     if saved.query:
         return query.search(conn, saved.query, limit=limit, filters=filters)
     return query.list_notices(conn, filters, limit=limit)
+
+
+def workflow_document(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> str:
+    """The workflow as TOML: the latest saved document, else the default."""
+    latest = latest_document(conn, "workflow", user_id=user_id)
+    return latest.body if latest is not None else documents.DEFAULT_WORKFLOW
+
+
+def workflow(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> WorkflowDocument:
+    return documents.parse(workflow_document(conn, user_id=user_id), WorkflowDocument)
+
+
+def save_workflow(
+    conn: sqlite3.Connection, body: str, *, user_id: int = USER_ID
+) -> WorkflowDocument:
+    """Validate ``body`` and store it as the next workflow version."""
+    doc = documents.parse(body, WorkflowDocument)
+    save_document(conn, "workflow", body, user_id=user_id)
+    return doc
+
+
+def search_document(saved: SavedSearch) -> str:
+    """A saved search rendered for editing."""
+    filters = saved.filters
+    return documents.render_search(
+        saved.name,
+        SearchDocument(
+            query=saved.query,
+            naics=list(filters.naics or ()),
+            set_asides=list(filters.set_asides or ()),
+            agency_prefixes=list(filters.agency_prefixes or ()),
+            deadline_within_days=filters.deadline_within_days,
+        ),
+    )
+
+
+def save_search_document(
+    conn: sqlite3.Connection, name: str, body: str, *, user_id: int = USER_ID
+) -> SavedSearch:
+    """Replace the named search with the contents of an edited document."""
+    doc = documents.parse(body, SearchDocument)
+    filters = query.Filters(
+        naics=tuple(doc.naics) or None,
+        set_asides=tuple(doc.set_asides) or None,
+        agency_prefixes=tuple(doc.agency_prefixes) or None,
+        deadline_within_days=doc.deadline_within_days,
+    )
+    return save_search(conn, name, query_text=doc.query, filters=filters, user_id=user_id)
 
 
 def profile_document(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> str:

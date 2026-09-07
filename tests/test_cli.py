@@ -392,7 +392,28 @@ def test_workspace_commands(
     )
     assert result.exit_code == 0 and result.output.strip() == "saved sba"
     assert len(json.loads(run("searches", "run", "sba", "--json").output)) == 2
-    assert "sba" in run("searches", "list").output
+    assert run("searches", "list").output.strip() == (
+        "sba  naics=541512 set_asides=SBA deadline_within_days=3650"
+    )
+    search_toml = tmp_path / "search.toml"
+    search_toml.write_text(
+        'query = "Microsoft"\nnaics = ["541512", "541511"]\ndeadline_within_days = 30\n'
+    )
+    assert run("searches", "edit", "sba", "--file", str(search_toml)).output.strip() == "saved sba"
+    assert run("searches", "list").output.strip() == (
+        'sba  query="Microsoft" naics=541512,541511 deadline_within_days=30'
+    )
+    assert run("searches", "edit", "nope", "--file", str(search_toml)).exit_code == 1
+    assert run("workflow", "show").output.startswith("# mentor workflow")
+    assert json.loads(run("workflow", "show", "--json").output)["stages"][0]["key"] == "identify"
+    workflow_toml = tmp_path / "workflow.toml"
+    workflow_toml.write_text('[[stages]]\nkey = "find"\nname = "Find"\ngate = "Go"\n')
+    assert run("workflow", "edit", "--file", str(workflow_toml)).output.strip() == (
+        "saved workflow version 1: find"
+    )
+    assert run("workflow", "history").output.startswith("v1  ")
+    workflow_toml.write_text("stages = []\n")
+    assert run("workflow", "edit", "--file", str(workflow_toml)).exit_code == 1
     assert run("searches", "rm", "sba").exit_code == 0
     assert run("searches", "rm", "sba").exit_code == 1
     assert run("searches", "run", "sba").exit_code == 1

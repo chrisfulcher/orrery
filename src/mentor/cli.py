@@ -14,7 +14,7 @@ import typer
 from mentor import __version__, db, documents, query, workspace
 from mentor import quota as quota_module
 from mentor.config import Settings
-from mentor.documents import DocumentError, ProfileDocument
+from mentor.documents import DocumentError, ProfileDocument, SearchDocument, WorkflowDocument
 from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
 from mentor.embed.pipeline import embed_pending
 from mentor.extract.text import extract_pending
@@ -36,6 +36,8 @@ searches_app = typer.Typer(no_args_is_help=True, help="Saved searches.")
 app.add_typer(searches_app, name="searches")
 profile_app = typer.Typer(no_args_is_help=True, help="Your company profile.")
 app.add_typer(profile_app, name="profile")
+workflow_app = typer.Typer(no_args_is_help=True, help="Your stages, gates, and task templates.")
+app.add_typer(workflow_app, name="workflow")
 
 JsonFlag = Annotated[bool, typer.Option("--json", help="Print as JSON.")]
 DateOption = Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], metavar="YYYY-MM-DD")]
@@ -355,13 +357,51 @@ def searches_list(json_output: JsonFlag = False) -> None:
     if not searches:
         typer.echo("no saved searches")
     for saved in searches:
-        parts = [f"query={saved.query!r}"] if saved.query else []
-        parts += [
-            f"{field}={value}"
-            for field, value in dataclasses.asdict(saved.filters).items()
-            if value not in (None, False)
-        ]
+        parts = [f"query={json.dumps(saved.query)}"] if saved.query else []
+        filters = saved.filters
+        for field, value in (
+            ("naics", filters.naics),
+            ("set_asides", filters.set_asides),
+            ("agency_prefixes", filters.agency_prefixes),
+        ):
+            if value:
+                parts.append(f"{field}={','.join(value)}")
+        if filters.deadline_within_days:
+            parts.append(f"deadline_within_days={filters.deadline_within_days}")
         typer.echo(f"{saved.name}  {' '.join(parts) or '(everything)'}")
+
+
+@searches_app.command("edit")
+def searches_edit(
+    name: Annotated[str, typer.Argument()],
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Save this TOML file instead of opening $EDITOR.")
+    ] = None,
+) -> None:
+    """Edit a saved search's text and filters as TOML in $EDITOR."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            saved = workspace.get_search(conn, name)
+            body = (
+                file.read_text()
+                if file
+                else _edit_until_valid(
+                    workspace.search_document(saved),
+                    lambda text: documents.parse(text, SearchDocument),
+                )
+            )
+            workspace.save_search_document(conn, name, body)
+        except workspace.NotFound as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1) from exc
+        except DocumentError as exc:
+            typer.echo(f"invalid search: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        except _Aborted:
+            typer.echo("aborted, nothing saved", err=True)
+            raise typer.Exit(1) from None
+    typer.echo(f"saved {name}")
 
 
 @searches_app.command("run")
@@ -518,6 +558,55 @@ def profile_edit(
 def profile_history(json_output: JsonFlag = False) -> None:
     """Every saved version of your profile."""
     _document_history("profile", json_output)
+
+
+@workflow_app.command("show")
+def workflow_show(json_output: JsonFlag = False) -> None:
+    """Show your workflow document: stages, gates, and the tasks each stage starts with."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        if json_output:
+            print_json(workspace.workflow(conn).model_dump())
+            return
+        typer.echo(workspace.workflow_document(conn), nl=False)
+
+
+@workflow_app.command("edit")
+def workflow_edit(
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Save this TOML file instead of opening $EDITOR.")
+    ] = None,
+) -> None:
+    """Edit your workflow as TOML in $EDITOR; every save is a new version."""
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        try:
+            body = (
+                file.read_text()
+                if file
+                else _edit_until_valid(
+                    workspace.workflow_document(conn),
+                    lambda text: documents.parse(text, WorkflowDocument),
+                )
+            )
+            doc = workspace.save_workflow(conn, body)
+        except (DocumentError, ValueError) as exc:
+            typer.echo(f"invalid workflow: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        except _Aborted:
+            typer.echo("aborted, nothing saved", err=True)
+            raise typer.Exit(1) from None
+        latest = workspace.latest_document(conn, "workflow")
+    typer.echo(
+        f"saved workflow version {latest.version if latest else '?'}:"
+        f" {' > '.join(stage.key for stage in doc.stages)}"
+    )
+
+
+@workflow_app.command("history")
+def workflow_history(json_output: JsonFlag = False) -> None:
+    """Every saved version of your workflow."""
+    _document_history("workflow", json_output)
 
 
 def _document_history(kind: str, json_output: bool) -> None:

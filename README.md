@@ -111,6 +111,8 @@ uv run mentor pipeline
 uv run mentor history NOTICE_ID
 uv run mentor profile edit                  # your company as a TOML document, in $EDITOR; every save is a version
 uv run mentor profile edit --file p.toml    # the same without an editor (Docker, scripts)
+uv run mentor workflow edit                 # your stages, gates, and task templates (Shipley-style by default)
+uv run mentor searches edit sdvosb-it       # a saved search as TOML
 uv run mentor awards --office 75R602        # who wins at an office, newest first
 uv run mentor contractor UE9QJD4KK1L6      # one vendor: names, awards, facts
 ```

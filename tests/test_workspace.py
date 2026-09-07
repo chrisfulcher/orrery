@@ -219,3 +219,26 @@ def test_documents_are_versioned_per_user_and_append_only(
         )
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("DELETE FROM workspace_documents WHERE document_id = ?", (first.document_id,))
+
+
+def test_workflow_defaults_and_saves(conn: sqlite3.Connection) -> None:
+    assert workspace.workflow(conn).keys()[0] == "identify"
+    doc = workspace.save_workflow(
+        conn,
+        '[[stages]]\nkey = "find"\nname = "Find"\ngate = "Go"\n'
+        '[[stages]]\nkey = "win"\nname = "Win"\n',
+    )
+    assert doc.keys() == ["find", "win"] and workspace.workflow(conn).keys() == ["find", "win"]
+    with pytest.raises(documents.DocumentError):
+        workspace.save_workflow(conn, "stages = []\n")
+    assert len(workspace.document_versions(conn, "workflow")) == 1
+
+
+def test_search_document_edit_replaces_the_search(seeded: sqlite3.Connection) -> None:
+    workspace.save_search(seeded, "sba", filters=Filters(set_asides=("SBA",)))
+    text = workspace.search_document(workspace.get_search(seeded, "sba"))
+    assert 'set_asides = ["SBA"]' in text
+    edited = workspace.save_search_document(
+        seeded, "sba", 'query = "Microsoft"\nnaics = ["541512"]\ndeadline_within_days = 0\n'
+    )
+    assert edited.query == "Microsoft" and edited.filters == Filters(naics=("541512",))

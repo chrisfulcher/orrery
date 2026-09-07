@@ -1,7 +1,17 @@
 import pytest
 
 from mentor import documents
-from mentor.documents import DocumentError, ProfileDocument, parse, render_profile
+from mentor.documents import (
+    DEFAULT_WORKFLOW,
+    DocumentError,
+    ProfileDocument,
+    SearchDocument,
+    WorkflowDocument,
+    parse,
+    render_profile,
+    render_search,
+    render_workflow,
+)
 
 
 def test_empty_template_round_trips() -> None:
@@ -63,3 +73,39 @@ def test_strings_are_escaped_for_toml() -> None:
     assert documents._s('a "b" \\ c') == '"a \\"b\\" \\\\ c"'
     assert documents._list(["x", "y"]) == '["x", "y"]'
     assert documents._text("") == '""'
+
+
+def test_default_workflow_is_the_shipley_style_six() -> None:
+    doc = parse(DEFAULT_WORKFLOW, WorkflowDocument)
+    assert doc.keys() == ["identify", "qualify", "capture", "proposal", "submitted", "post-award"]
+    assert [s.gate for s in doc.stages] == [
+        "Pursuit Gate", "Capture Gate", "Bid Gate", "Bid Confirmation Gate", None, None,
+    ]  # fmt: skip
+    assert doc.gated_keys() == ["identify", "qualify", "capture", "proposal"]
+    assert (doc.first_key(), doc.last_key()) == ("identify", "post-award")
+    assert doc.next_key("proposal") == "submitted" and doc.next_key("post-award") is None
+    assert doc.previous_keys("capture") == ["identify", "qualify"]
+    assert doc.tasks_for("submitted")[0].startswith("Answer evaluation")
+    assert parse(render_workflow(doc), WorkflowDocument) == doc
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("stages = []\n", "at least one stage"),
+        ('[[stages]]\nkey = "a"\nname = "A"\n[[stages]]\nkey = "A"\nname = "B"\n', "duplicate"),
+        ('[[stages]]\nkey = "no spaces"\nname = "A"\n', "letters, digits, and hyphens"),
+        ('[[stages]]\nkey = "a"\nname = "A"\ngates = "x"\n', "Extra inputs"),
+    ],
+)
+def test_workflow_problems(text: str, message: str) -> None:
+    with pytest.raises(DocumentError, match=message):
+        parse(text, WorkflowDocument)
+
+
+def test_search_document_round_trips_and_treats_zero_as_unset() -> None:
+    doc = SearchDocument(query="help desk", naics=["541512"], deadline_within_days=30)
+    text = render_search("it", doc)
+    assert parse(text, SearchDocument) == doc and text.startswith('# saved search "it"')
+    empty = parse(render_search("x", SearchDocument()), SearchDocument)
+    assert empty == SearchDocument() and empty.deadline_within_days is None
