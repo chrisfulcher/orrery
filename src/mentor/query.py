@@ -513,8 +513,8 @@ def summarize_facts(
     for fact in facts:
         if fact.predicate in LIST_PREDICATES:
             newest, values = lists.setdefault(fact.predicate, (fact.observed_at, []))
-            if fact.observed_at == newest:
-                values.append(fact.value)
+            if fact.observed_at == newest and fact.value not in values:
+                values.append(fact.value)  # two sources in one second must not double a list
         else:
             single.setdefault(fact.predicate, fact.value)
     summary = list(single.items())

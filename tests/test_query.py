@@ -358,3 +358,7 @@ def test_contractor_facts_and_their_summary(
     assert (
         dict(query.summarize_facts((*detail.facts, older)))["sam.registration_status"] == "Active"
     )
+    newest = detail.facts[0].observed_at
+    twin = query.Fact("sam.business_type", "2X", "text", newest, "sam_entities", "api:v3")
+    merged = dict(query.summarize_facts((twin, *detail.facts)))["sam.business_type"].split(", ")
+    assert sorted(merged) == ["2X", "MF"]  # no duplicate for the value both sources carry
