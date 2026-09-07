@@ -37,8 +37,14 @@ def test_tools_read_and_write_the_store(store: sqlite3.Connection) -> None:
     assert len(mcp_server.upcoming(days=3650)) == 4
 
     tracked = mcp_server.track(HRSA, stage=workspace.Stage.PURSUING, pwin=40)
-    assert tracked.stage == "pursuing" and [t.notice_id for t in mcp_server.pipeline()] == [HRSA]
-    assert [e.field for e in mcp_server.history(HRSA)] == ["stage", "pwin"]
+    assert tracked.stage == "qualify" and [t.notice_id for t in mcp_server.pipeline()] == [HRSA]
+    assert [e.field for e in mcp_server.history(HRSA)] == [
+        "stage",
+        "notice",
+        "gate",
+        "stage",
+        "pwin",
+    ]
 
     saved = mcp_server.save_search("sba", set_aside=["SBA"])
     assert saved.filters.set_asides == ("SBA",)

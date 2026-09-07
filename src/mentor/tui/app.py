@@ -188,7 +188,9 @@ class DashboardScreen(Screen):
         rows = workspace.pipeline(conn)
         by_stage = Counter(row.stage for row in rows)
         summary = ", ".join(
-            f"{stage} {by_stage[stage]}" for stage in workspace.STAGES if by_stage[stage]
+            f"{stage} {by_stage[stage]}"
+            for stage in workspace.workflow(conn).keys()
+            if by_stage[stage]
         )
         pipeline.border_title = f"pipeline · {summary}" if summary else "pipeline · nothing tracked"
         pipeline.set_rows(

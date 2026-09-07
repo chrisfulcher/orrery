@@ -122,6 +122,8 @@ class Event:
     field: str
     old_value: str | None
     new_value: str | None
+    note: str | None = None
+    """The rationale of a decision, the title of a task, or the role of a notice."""
 
 
 @dataclass(frozen=True)
@@ -150,14 +152,823 @@ class Profile:
     """The latest profile document, parsed; None until one has been saved."""
 
 
-PIPELINE = """
-SELECT t.tracked_id, t.notice_id, t.stage, t.pwin, t.notes, t.created_at, t.updated_at,
-       n.title, e.name, n.response_deadline
-FROM tracked_opportunities AS t
-JOIN notices AS n USING (notice_id)
-LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
-WHERE t.user_id = :user_id
-"""
+LEGACY_STAGES = {
+    "watching": ("identify", None),
+    "pursuing": ("qualify", None),
+    "bid": ("proposal", None),
+    "submitted": ("submitted", None),
+    "won": (None, "won"),
+    "lost": (None, "lost"),
+    "no-bid": (None, "no-bid"),
+}
+"""What `track --stage` meant before pursuits: a workflow key, or an outcome."""
+
+NOTICE_ROLES = {
+    "Sources Sought": "sources-sought",
+    "Presolicitation": "presolicitation",
+    "Award Notice": "award",
+    "Modification/Amendment/Cancel": "amendment",
+    "Solicitation": "solicitation",
+    "Combined Synopsis/Solicitation": "solicitation",
+}
+
+PURSUIT_COLUMNS = (
+    "pursuit_id, title, summary, stage, pwin, notes, held_until, outcome, closed_at,"
+    " office_entity_id, office, office_code, naics_code, incumbent_contract_id, incumbent,"
+    " incumbent_pop_end, notices, open_tasks, next_due, next_response_deadline, last_event_at,"
+    " created_at, updated_at"
+)
+
+
+@dataclass(frozen=True)
+class Pursuit:
+    """One row of ``v_pursuits``."""
+
+    pursuit_id: int
+    title: str
+    summary: str | None
+    stage: str
+    pwin: int | None
+    notes: str | None
+    held_until: str | None
+    outcome: str | None
+    closed_at: str | None
+    office_entity_id: int | None
+    office: str | None
+    office_code: str | None
+    naics_code: str | None
+    incumbent_contract_id: int | None
+    incumbent: str | None
+    incumbent_pop_end: str | None
+    notices: int
+    open_tasks: int
+    next_due: str | None
+    next_response_deadline: str | None
+    last_event_at: str | None
+    created_at: str
+    updated_at: str
+
+    @property
+    def open(self) -> bool:
+        return self.closed_at is None
+
+
+@dataclass(frozen=True)
+class Task:
+    task_id: int
+    pursuit_id: int
+    stage: str
+    title: str
+    origin: str
+    due: str | None
+    done_at: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class LinkedNotice:
+    notice_id: str
+    role: str
+    linked_at: str
+    title: str
+    notice_type: str | None
+    response_deadline: str | None
+    active: bool
+
+
+@dataclass(frozen=True)
+class GovDate:
+    """A government date that constrains a pursuit, read from where it lives."""
+
+    date: str
+    kind: str
+    """'response' (a linked notice's deadline) or 'pop_end' (the incumbent's period ends)."""
+    label: str
+    pursuit_id: int
+    pursuit_title: str
+    notice_id: str | None = None
+    contract_id: int | None = None
+
+
+@dataclass(frozen=True)
+class PursuitDetail:
+    pursuit: Pursuit
+    tasks: tuple[Task, ...]
+    notices: tuple[LinkedNotice, ...]
+    incumbent: query.ContractRef | None
+    related_notices: tuple[query.SearchHit, ...]
+    """Notices carrying the incumbent's solicitation number: the prior competition."""
+    dates: tuple[GovDate, ...]
+    events: tuple["Event", ...]
+    gate: str | None
+    """The gate the current stage feeds, or None for a stage with no decision."""
+    gate_ready: bool
+    """Open, not held, gated, and every task of the current stage done."""
+
+
+@dataclass(frozen=True)
+class WorkItem:
+    due: str
+    kind: str
+    """'task' (the user's) or 'response' (a linked notice's deadline)."""
+    what: str
+    pursuit_id: int
+    pursuit_title: str
+    stage: str
+    overdue: bool
+    task_id: int | None = None
+    notice_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Attention:
+    reason: str
+    """'gate ready', 'hold due', or 'stalled'."""
+    detail: str
+    pursuit_id: int
+    pursuit_title: str
+    stage: str
+
+
+@dataclass(frozen=True)
+class Dashboard:
+    work: tuple[WorkItem, ...]
+    attention: tuple[Attention, ...]
+    dates: tuple[GovDate, ...]
+    by_stage: tuple[tuple[str, int], ...]
+    """Open pursuits per workflow stage, in workflow order."""
+
+
+def _pursuit_row(conn: sqlite3.Connection, pursuit_id: int, user_id: int) -> Pursuit:
+    row = conn.execute(
+        f"SELECT {PURSUIT_COLUMNS} FROM v_pursuits WHERE user_id = ? AND pursuit_id = ?",
+        (user_id, pursuit_id),
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"no pursuit {pursuit_id}")
+    return Pursuit(*row)
+
+
+def _event(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    user_id: int,
+    now: str,
+    field: str,
+    old: object,
+    new: object,
+    note: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO pursuit_events (pursuit_id, user_id, changed_at, field, old_value,"
+        " new_value, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pursuit_id, user_id, now, field, _text(old), _text(new), note),
+    )
+
+
+def _seed_tasks(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    stage: str,
+    workflow_doc: WorkflowDocument,
+    now: str,
+    user_id: int,
+) -> int:
+    """The stage's template tasks, once: a stage re-entered keeps the tasks it already has."""
+    try:
+        titles = workflow_doc.tasks_for(stage)
+    except KeyError:
+        return 0
+    (seeded,) = conn.execute(
+        "SELECT count(*) FROM pursuit_tasks WHERE pursuit_id = ? AND stage = ?"
+        " AND origin = 'template'",
+        (pursuit_id, stage),
+    ).fetchone()
+    if seeded or not titles:
+        return 0
+    conn.executemany(
+        "INSERT INTO pursuit_tasks (pursuit_id, user_id, stage, title, origin, created_at)"
+        " VALUES (?, ?, ?, ?, 'template', ?)",
+        [(pursuit_id, user_id, stage, title, now) for title in titles],
+    )
+    return len(titles)
+
+
+def _office_code(path_code: str | None) -> str | None:
+    return path_code.rsplit(".", 1)[-1] if path_code else None
+
+
+def _transaction(conn: sqlite3.Connection):
+    return _Transaction(conn)
+
+
+class _Transaction:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def __enter__(self) -> None:
+        self.conn.execute("BEGIN")
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.conn.execute("ROLLBACK" if exc_type else "COMMIT")
+
+
+def new_pursuit(
+    conn: sqlite3.Connection,
+    title: str,
+    *,
+    summary: str | None = None,
+    office_entity_id: int | None = None,
+    office_code: str | None = None,
+    naics: str | None = None,
+    notice_id: str | None = None,
+    contract_id: int | None = None,
+    user_id: int = USER_ID,
+) -> Pursuit:
+    """Open a pursuit in the workflow's first stage with that stage's tasks seeded. A notice
+    or an incumbent contract given here fills the office and NAICS the user did not."""
+    if not title.strip():
+        raise ValueError("a pursuit needs a title")
+    if notice_id is not None:
+        notice = conn.execute(
+            "SELECT agency_entity_id, full_parent_path_code, naics_code FROM notices"
+            " WHERE notice_id = ?",
+            (notice_id,),
+        ).fetchone()
+        if notice is None:
+            raise NotFound(f"no notice {notice_id}")
+        office_entity_id = office_entity_id or notice[0]
+        office_code = office_code or _office_code(notice[1])
+        naics = naics or notice[2]
+    if contract_id is not None:
+        award = conn.execute(
+            "SELECT awarding_entity_id, awarding_office_code, naics_code FROM contracts"
+            " WHERE contract_id = ?",
+            (contract_id,),
+        ).fetchone()
+        if award is None:
+            raise NotFound(f"no contract {contract_id}")
+        office_entity_id = office_entity_id or award[0]
+        office_code = office_code or award[1]
+        naics = naics or award[2]
+    workflow_doc = workflow(conn, user_id=user_id)
+    stage = workflow_doc.first_key()
+    now = db.utcnow()
+    with _transaction(conn):
+        (pursuit_id,) = conn.execute(
+            "INSERT INTO pursuits (user_id, title, summary, office_entity_id, office_code,"
+            " naics_code, incumbent_contract_id, stage, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pursuit_id",
+            (
+                user_id,
+                title.strip(),
+                summary,
+                office_entity_id,
+                office_code,
+                naics,
+                contract_id,
+                stage,
+                now,
+                now,
+            ),  # fmt: skip
+        ).fetchone()
+        _event(conn, pursuit_id, user_id, now, "stage", None, stage, "created")
+        _seed_tasks(conn, pursuit_id, stage, workflow_doc, now, user_id)
+        if notice_id is not None:
+            _link(conn, pursuit_id, notice_id, None, now, user_id)
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID) -> PursuitDetail:
+    """Everything about one pursuit, for its screen."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    tasks = tuple(
+        Task(*item)
+        for item in conn.execute(
+            "SELECT task_id, pursuit_id, stage, title, origin, due, done_at, created_at"
+            " FROM pursuit_tasks WHERE pursuit_id = ?"
+            " ORDER BY done_at IS NOT NULL, due IS NULL, due, task_id",
+            (pursuit_id,),
+        ).fetchall()
+    )
+    notices = tuple(
+        LinkedNotice(*item[:6], bool(item[6]))
+        for item in conn.execute(
+            "SELECT pn.notice_id, pn.role, pn.linked_at, n.title, n.notice_type,"
+            " n.response_deadline, n.active FROM pursuit_notices AS pn"
+            " JOIN notices AS n ON n.notice_id = pn.notice_id"
+            " WHERE pn.pursuit_id = ? ORDER BY pn.linked_at, pn.notice_id",
+            (pursuit_id,),
+        ).fetchall()
+    )
+    incumbent = (
+        query.contract(conn, row.incumbent_contract_id) if row.incumbent_contract_id else None
+    )
+    related = (
+        tuple(query.notices_for_solicitation(conn, incumbent.solicitation_identifier))
+        if incumbent and incumbent.solicitation_identifier
+        else ()
+    )
+    events = tuple(
+        Event(*item)
+        for item in conn.execute(
+            "SELECT event_id, changed_at, field, old_value, new_value, note FROM pursuit_events"
+            " WHERE pursuit_id = ? ORDER BY event_id",
+            (pursuit_id,),
+        ).fetchall()
+    )
+    workflow_doc = workflow(conn, user_id=user_id)
+    try:
+        gate_name = workflow_doc.stage(row.stage).gate
+    except KeyError:
+        gate_name = None
+    open_here = any(t.done_at is None and t.stage == row.stage for t in tasks)
+    gate_ready = bool(gate_name) and row.open and row.held_until is None and not open_here
+    return PursuitDetail(
+        row, tasks, notices, incumbent, related, tuple(_dates(row, notices, incumbent)),
+        events, gate_name, gate_ready,
+    )  # fmt: skip
+
+
+def _dates(
+    row: Pursuit, notices: tuple[LinkedNotice, ...], incumbent: query.ContractRef | None
+) -> list[GovDate]:
+    dates = [
+        GovDate(n.response_deadline, "response", n.title, row.pursuit_id, row.title, n.notice_id)
+        for n in notices
+        if n.response_deadline
+    ]
+    if incumbent and incumbent.pop_end:
+        dates.append(
+            GovDate(
+                incumbent.pop_end,
+                "pop_end",
+                f"{incumbent.vendor or '-'} {incumbent.piid} ends",
+                row.pursuit_id,
+                row.title,
+                contract_id=incumbent.contract_id,
+            )  # fmt: skip
+        )
+    return sorted(dates, key=lambda d: d.date)
+
+
+def pursuits(
+    conn: sqlite3.Connection,
+    *,
+    stage: str | None = None,
+    include_closed: bool = False,
+    user_id: int = USER_ID,
+) -> list[Pursuit]:
+    """Pursuits in workflow order, then soonest task due, then title."""
+    rows = [
+        Pursuit(*row)
+        for row in conn.execute(
+            f"SELECT {PURSUIT_COLUMNS} FROM v_pursuits WHERE user_id = :user_id"
+            " AND (:stage IS NULL OR stage = :stage)"
+            " AND (:include_closed OR closed_at IS NULL)",
+            {"user_id": user_id, "stage": stage, "include_closed": int(include_closed)},
+        ).fetchall()
+    ]
+    order = {key: i for i, key in enumerate(workflow(conn, user_id=user_id).keys())}
+    return sorted(
+        rows,
+        key=lambda p: (
+            order.get(p.stage, len(order)),
+            p.next_due is None,
+            p.next_due or "",
+            p.title.lower(),
+        ),
+    )
+
+
+def pursuit_for_notice(
+    conn: sqlite3.Connection, notice_id: str, *, user_id: int = USER_ID
+) -> Pursuit | None:
+    """The open pursuit this notice belongs to, else the latest closed one, else None."""
+    row = conn.execute(
+        "SELECT p.pursuit_id FROM pursuit_notices AS pn JOIN pursuits AS p USING (pursuit_id)"
+        " WHERE pn.user_id = ? AND pn.notice_id = ?"
+        " ORDER BY p.closed_at IS NOT NULL, p.pursuit_id DESC LIMIT 1",
+        (user_id, notice_id),
+    ).fetchone()
+    return _pursuit_row(conn, row[0], user_id) if row else None
+
+
+def _link(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    notice_id: str,
+    role: str | None,
+    now: str,
+    user_id: int,
+) -> str:
+    notice = conn.execute(
+        "SELECT notice_type FROM notices WHERE notice_id = ?", (notice_id,)
+    ).fetchone()
+    if notice is None:
+        raise NotFound(f"no notice {notice_id}")
+    role = role or NOTICE_ROLES.get(notice[0] or "", "other")
+    inserted = conn.execute(
+        "INSERT OR IGNORE INTO pursuit_notices (pursuit_id, user_id, notice_id, role, linked_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (pursuit_id, user_id, notice_id, role, now),
+    ).rowcount
+    if inserted:
+        _event(conn, pursuit_id, user_id, now, "notice", None, notice_id, role)
+    return role
+
+
+def link_notice(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    notice_id: str,
+    *,
+    role: str | None = None,
+    user_id: int = USER_ID,
+) -> LinkedNotice:
+    """Attach a notice to a pursuit; the role defaults from the notice type. Idempotent."""
+    _pursuit_row(conn, pursuit_id, user_id)
+    now = db.utcnow()
+    with _transaction(conn):
+        _link(conn, pursuit_id, notice_id, role, now, user_id)
+        conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, pursuit_id))
+    return next(
+        n for n in pursuit(conn, pursuit_id, user_id=user_id).notices if n.notice_id == notice_id
+    )
+
+
+def gate(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    decision: str,
+    why: str,
+    *,
+    until: str | None = None,
+    user_id: int = USER_ID,
+) -> Pursuit:
+    """Record the decision at the current stage's gate: ``go`` advances and seeds the next
+    stage's tasks, ``no-go`` closes the pursuit as no-bid, ``hold`` parks it until a date."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if not why.strip():
+        raise ValueError("a gate decision needs a rationale (--why)")
+    if not row.open:
+        raise ValueError(f"pursuit {pursuit_id} is closed; reopen it first")
+    workflow_doc = workflow(conn, user_id=user_id)
+    try:
+        spec = workflow_doc.stage(row.stage)
+    except KeyError:
+        raise ValueError(f"stage {row.stage!r} is not in the workflow document") from None
+    if not spec.gate:
+        raise ValueError(f"stage {row.stage} has no gate")
+    now = db.utcnow()
+    with _transaction(conn):
+        if decision == "go":
+            nxt = workflow_doc.next_key(row.stage)
+            if nxt is None:
+                raise ValueError(f"{row.stage} is the last stage")
+            _event(conn, pursuit_id, user_id, now, "gate", spec.gate, "go", why)
+            _event(conn, pursuit_id, user_id, now, "stage", row.stage, nxt, spec.gate)
+            conn.execute(
+                "UPDATE pursuits SET stage = ?, held_until = NULL, updated_at = ?"
+                " WHERE pursuit_id = ?",
+                (nxt, now, pursuit_id),
+            )
+            _seed_tasks(conn, pursuit_id, nxt, workflow_doc, now, user_id)
+        elif decision == "no-go":
+            _event(conn, pursuit_id, user_id, now, "gate", spec.gate, "no-go", why)
+            _event(conn, pursuit_id, user_id, now, "outcome", row.outcome, "no-bid", why)
+            _event(conn, pursuit_id, user_id, now, "closed", None, now, spec.gate)
+            conn.execute(
+                "UPDATE pursuits SET outcome = 'no-bid', closed_at = ?, held_until = NULL,"
+                " updated_at = ? WHERE pursuit_id = ?",
+                (now, now, pursuit_id),
+            )
+        elif decision == "hold":
+            if not until:
+                raise ValueError("a hold needs a revisit date (--until YYYY-MM-DD)")
+            _event(conn, pursuit_id, user_id, now, "gate", spec.gate, "hold", why)
+            _event(conn, pursuit_id, user_id, now, "hold", row.held_until, until, why)
+            conn.execute(
+                "UPDATE pursuits SET held_until = ?, updated_at = ? WHERE pursuit_id = ?",
+                (until, now, pursuit_id),
+            )
+        else:
+            raise ValueError(f"decision must be go, no-go, or hold, not {decision!r}")
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def move_back(
+    conn: sqlite3.Connection, pursuit_id: int, stage: str, why: str, *, user_id: int = USER_ID
+) -> Pursuit:
+    """Return an open pursuit to an earlier stage, with a reason. Its tasks stay."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if not why.strip():
+        raise ValueError("moving back needs a rationale (--why)")
+    if not row.open:
+        raise ValueError(f"pursuit {pursuit_id} is closed; reopen it first")
+    workflow_doc = workflow(conn, user_id=user_id)
+    earlier = workflow_doc.previous_keys(row.stage) if row.stage in workflow_doc.keys() else []
+    if stage not in earlier:
+        raise ValueError(f"{stage!r} is not an earlier stage than {row.stage}")
+    now = db.utcnow()
+    with _transaction(conn):
+        _event(conn, pursuit_id, user_id, now, "stage", row.stage, stage, why)
+        conn.execute(
+            "UPDATE pursuits SET stage = ?, held_until = NULL, updated_at = ? WHERE pursuit_id = ?",
+            (stage, now, pursuit_id),
+        )
+        _seed_tasks(conn, pursuit_id, stage, workflow_doc, now, user_id)
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def reopen(
+    conn: sqlite3.Connection, pursuit_id: int, why: str, *, user_id: int = USER_ID
+) -> Pursuit:
+    """Reopen a closed pursuit at the stage it was in; its outcome is cleared."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if not why.strip():
+        raise ValueError("reopening needs a rationale (--why)")
+    if row.open:
+        raise ValueError(f"pursuit {pursuit_id} is open")
+    now = db.utcnow()
+    with _transaction(conn):
+        _event(conn, pursuit_id, user_id, now, "reopened", row.outcome, None, why)
+        conn.execute(
+            "UPDATE pursuits SET outcome = NULL, closed_at = NULL, updated_at = ?"
+            " WHERE pursuit_id = ?",
+            (now, pursuit_id),
+        )
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def add_task(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    title: str,
+    *,
+    due: str | None = None,
+    stage: str | None = None,
+    user_id: int = USER_ID,
+) -> Task:
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if not title.strip():
+        raise ValueError("a task needs a title")
+    now = db.utcnow()
+    with _transaction(conn):
+        item = conn.execute(
+            "INSERT INTO pursuit_tasks (pursuit_id, user_id, stage, title, origin, due,"
+            " created_at) VALUES (?, ?, ?, ?, 'user', ?, ?)"
+            " RETURNING task_id, pursuit_id, stage, title, origin, due, done_at, created_at",
+            (pursuit_id, user_id, stage or row.stage, title.strip(), due, now),
+        ).fetchone()
+        _event(conn, pursuit_id, user_id, now, "task", None, title.strip(), "added")
+        conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, pursuit_id))
+    return Task(*item)
+
+
+def complete_task(conn: sqlite3.Connection, task_id: int, *, user_id: int = USER_ID) -> Task:
+    row = conn.execute(
+        "SELECT pursuit_id, title, done_at FROM pursuit_tasks WHERE task_id = ? AND user_id = ?",
+        (task_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"no task {task_id}")
+    now = db.utcnow()
+    if row[2] is None:
+        with _transaction(conn):
+            conn.execute("UPDATE pursuit_tasks SET done_at = ? WHERE task_id = ?", (now, task_id))
+            _event(conn, row[0], user_id, now, "task", None, row[1], "done")
+            conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, row[0]))
+    item = conn.execute(
+        "SELECT task_id, pursuit_id, stage, title, origin, due, done_at, created_at"
+        " FROM pursuit_tasks WHERE task_id = ?",
+        (task_id,),
+    ).fetchone()
+    return Task(*item)
+
+
+def update_pursuit(
+    conn: sqlite3.Connection,
+    pursuit_id: int,
+    *,
+    title: str | None = None,
+    summary: str | None = None,
+    pwin: int | None = None,
+    notes: str | None = None,
+    incumbent_contract_id: int | None = None,
+    user_id: int = USER_ID,
+) -> Pursuit:
+    """Change the descriptive fields; PWin and notes changes are events."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if incumbent_contract_id is not None and query.contract(conn, incumbent_contract_id) is None:
+        raise NotFound(f"no contract {incumbent_contract_id}")
+    now = db.utcnow()
+    with _transaction(conn):
+        if pwin is not None and pwin != row.pwin:
+            _event(conn, pursuit_id, user_id, now, "pwin", row.pwin, pwin)
+        if notes is not None and notes != row.notes:
+            _event(conn, pursuit_id, user_id, now, "notes", row.notes, notes)
+        conn.execute(
+            "UPDATE pursuits SET title = coalesce(?, title), summary = coalesce(?, summary),"
+            " pwin = coalesce(?, pwin), notes = coalesce(?, notes),"
+            " incumbent_contract_id = coalesce(?, incumbent_contract_id), updated_at = ?"
+            " WHERE pursuit_id = ?",
+            (title, summary, pwin, notes, incumbent_contract_id, now, pursuit_id),
+        )
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def set_outcome(
+    conn: sqlite3.Connection, pursuit_id: int, outcome: str, why: str, *, user_id: int = USER_ID
+) -> Pursuit:
+    """``won`` moves the pursuit to the last stage and keeps it open for post-award work;
+    ``lost`` and ``no-bid`` close it."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if outcome not in ("won", "lost", "no-bid"):
+        raise ValueError(f"outcome must be won, lost, or no-bid, not {outcome!r}")
+    if not why.strip():
+        raise ValueError("an outcome needs a rationale (--why)")
+    if not row.open:
+        raise ValueError(f"pursuit {pursuit_id} is closed; reopen it first")
+    workflow_doc = workflow(conn, user_id=user_id)
+    now = db.utcnow()
+    with _transaction(conn):
+        _event(conn, pursuit_id, user_id, now, "outcome", row.outcome, outcome, why)
+        if outcome == "won":
+            last = workflow_doc.last_key()
+            if row.stage != last:
+                _event(conn, pursuit_id, user_id, now, "stage", row.stage, last, "won")
+            conn.execute(
+                "UPDATE pursuits SET outcome = 'won', stage = ?, held_until = NULL, updated_at = ?"
+                " WHERE pursuit_id = ?",
+                (last, now, pursuit_id),
+            )
+            _seed_tasks(conn, pursuit_id, last, workflow_doc, now, user_id)
+        else:
+            _event(conn, pursuit_id, user_id, now, "closed", None, now, outcome)
+            conn.execute(
+                "UPDATE pursuits SET outcome = ?, closed_at = ?, held_until = NULL, updated_at = ?"
+                " WHERE pursuit_id = ?",
+                (outcome, now, now, pursuit_id),
+            )
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def close_pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID) -> Pursuit:
+    """Take a pursuit off the board (post-award work done). Never deleted."""
+    row = _pursuit_row(conn, pursuit_id, user_id)
+    if row.open:
+        now = db.utcnow()
+        with _transaction(conn):
+            _event(conn, pursuit_id, user_id, now, "closed", None, now, row.outcome)
+            conn.execute(
+                "UPDATE pursuits SET closed_at = ?, updated_at = ? WHERE pursuit_id = ?",
+                (now, now, pursuit_id),
+            )
+    return _pursuit_row(conn, pursuit_id, user_id)
+
+
+def dashboard(
+    conn: sqlite3.Connection,
+    *,
+    days: int = 7,
+    stall_days: int = 14,
+    horizon_days: int = 60,
+    user_id: int = USER_ID,
+) -> Dashboard:
+    """This week's work on the shop's own calendar, what needs a decision or a look, and
+    the government's dates as a secondary strip."""
+    today = db.utcnow()[:10]
+    soon = _plus_days(today, days)
+    horizon = _plus_days(today, horizon_days)
+    workflow_doc = workflow(conn, user_id=user_id)
+    gated = set(workflow_doc.gated_keys())
+    open_rows = pursuits(conn, user_id=user_id)
+    by_id = {p.pursuit_id: p for p in open_rows}
+
+    work: list[WorkItem] = []
+    for item in conn.execute(
+        "SELECT t.task_id, t.pursuit_id, t.title, t.due FROM pursuit_tasks AS t"
+        " JOIN pursuits AS p USING (pursuit_id) WHERE t.user_id = ? AND t.done_at IS NULL"
+        " AND t.due IS NOT NULL AND t.due <= ? AND p.closed_at IS NULL ORDER BY t.due, t.task_id",
+        (user_id, soon),
+    ).fetchall():
+        p = by_id[item[1]]
+        work.append(
+            WorkItem(
+                item[3], "task", item[2], p.pursuit_id, p.title, p.stage, item[3] < today, item[0]
+            )
+        )
+    for item in conn.execute(
+        "SELECT pn.pursuit_id, pn.notice_id, n.title, substr(n.response_deadline, 1, 10)"
+        " FROM pursuit_notices AS pn JOIN notices AS n ON n.notice_id = pn.notice_id"
+        " JOIN pursuits AS p ON p.pursuit_id = pn.pursuit_id WHERE pn.user_id = ?"
+        " AND p.closed_at IS NULL AND n.response_deadline IS NOT NULL"
+        " AND substr(n.response_deadline, 1, 10) BETWEEN ? AND ?",
+        (user_id, today, soon),
+    ).fetchall():
+        p = by_id[item[0]]
+        if p.stage in gated:
+            work.append(
+                WorkItem(
+                    item[3],
+                    "response",
+                    f"response due: {item[2]}",
+                    p.pursuit_id,
+                    p.title,
+                    p.stage,
+                    False,
+                    notice_id=item[1],
+                )  # fmt: skip
+            )
+    work.sort(key=lambda w: (w.due, w.kind != "response", w.what))
+
+    attention: list[Attention] = []
+    open_by_stage = {
+        (pid, stage): n
+        for pid, stage, n in conn.execute(
+            "SELECT pursuit_id, stage, count(*) FROM pursuit_tasks WHERE user_id = ?"
+            " AND done_at IS NULL GROUP BY pursuit_id, stage",
+            (user_id,),
+        ).fetchall()
+    }
+    stale_before = _plus_days(today, -stall_days)
+    for p in open_rows:
+        if p.held_until is not None:
+            if p.held_until <= soon:
+                attention.append(
+                    Attention("hold due", f"revisit {p.held_until}", p.pursuit_id, p.title, p.stage)
+                )
+            continue
+        if p.stage in gated and not open_by_stage.get((p.pursuit_id, p.stage)):
+            attention.append(
+                Attention(
+                    "gate ready",
+                    f"{workflow_doc.stage(p.stage).gate}: every task done",
+                    p.pursuit_id,
+                    p.title,
+                    p.stage,
+                )  # fmt: skip
+            )
+        elif p.stage in gated and (p.last_event_at or p.created_at)[:10] < stale_before:
+            days_quiet = _days_between((p.last_event_at or p.created_at)[:10], today)
+            attention.append(
+                Attention(
+                    "stalled", f"no activity for {days_quiet} days", p.pursuit_id, p.title, p.stage
+                )
+            )
+
+    priority = {"gate ready": 0, "hold due": 1, "stalled": 2}
+    attention.sort(key=lambda a: (priority[a.reason], a.pursuit_title.lower()))
+
+    dates: list[GovDate] = []
+    for p in open_rows:
+        detail_dates = _dates(
+            p,
+            tuple(
+                LinkedNotice(*item[:6], bool(item[6]))
+                for item in conn.execute(
+                    "SELECT pn.notice_id, pn.role, pn.linked_at, n.title, n.notice_type,"
+                    " n.response_deadline, n.active FROM pursuit_notices AS pn"
+                    " JOIN notices AS n ON n.notice_id = pn.notice_id WHERE pn.pursuit_id = ?",
+                    (p.pursuit_id,),
+                ).fetchall()
+            ),
+            query.contract(conn, p.incumbent_contract_id) if p.incumbent_contract_id else None,
+        )
+        dates += [d for d in detail_dates if today <= d.date[:10] <= horizon]
+    dates.sort(key=lambda d: d.date)
+
+    counts = {key: 0 for key in workflow_doc.keys()}
+    for p in open_rows:
+        counts[p.stage] = counts.get(p.stage, 0) + 1
+    return Dashboard(tuple(work), tuple(attention), tuple(dates), tuple(counts.items()))
+
+
+def _plus_days(day: str, days: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(day) + timedelta(days=days)).isoformat()
+
+
+def _days_between(earlier: str, later: str) -> int:
+    from datetime import date
+
+    return (date.fromisoformat(later) - date.fromisoformat(earlier)).days
+
+
+# The commands that predate pursuits, kept working over them.
+
+
+def _tracked(conn: sqlite3.Connection, p: Pursuit, notice_id: str) -> Tracked:
+    row = conn.execute(
+        "SELECT n.title, e.name, n.response_deadline FROM notices AS n"
+        " LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id WHERE n.notice_id = ?",
+        (notice_id,),
+    ).fetchone()
+    return Tracked(
+        p.pursuit_id, notice_id, p.stage, p.pwin, p.notes, p.created_at, p.updated_at, *row
+    )
 
 
 def track(
@@ -169,68 +980,51 @@ def track(
     notes: str | None = None,
     user_id: int = USER_ID,
 ) -> Tracked:
-    """Start tracking a notice (default stage ``watching``) or update it. ``None`` leaves a
-    field unchanged. Every field that changes appends one event with its old and new
-    values, all in one transaction."""
-    if conn.execute("SELECT 1 FROM notices WHERE notice_id = ?", (notice_id,)).fetchone() is None:
-        raise NotFound(f"no notice {notice_id}")
-    now = db.utcnow()
-    given = {"stage": stage, "pwin": pwin, "notes": notes}
-    conn.execute("BEGIN")
-    try:
-        row = conn.execute(
-            "SELECT tracked_id, stage, pwin, notes FROM tracked_opportunities"
-            " WHERE user_id = ? AND notice_id = ?",
-            (user_id, notice_id),
+    """The pre-pursuit command: start (or update) the pursuit this notice belongs to. A stage
+    given by its old name or a workflow key advances through recorded gate decisions; an
+    outcome name sets the outcome; moving backwards is refused (use ``move_back``)."""
+    p = pursuit_for_notice(conn, notice_id, user_id=user_id)
+    if p is None:
+        title = conn.execute(
+            "SELECT title FROM notices WHERE notice_id = ?", (notice_id,)
         ).fetchone()
-        if row is None:
-            given["stage"] = stage or Stage.WATCHING
-            (tracked_id,) = conn.execute(
-                "INSERT INTO tracked_opportunities (user_id, notice_id, stage, pwin, notes,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING tracked_id",
-                (user_id, notice_id, given["stage"], pwin, notes, now, now),
-            ).fetchone()
-            changes = {field: (None, value) for field, value in given.items() if value is not None}
-        else:
-            tracked_id, *current = row
-            old = dict(zip(("stage", "pwin", "notes"), current, strict=True))
-            changes = {
-                field: (old[field], value)
-                for field, value in given.items()
-                if value is not None and value != old[field]
-            }
-            if changes:
-                assignments = ", ".join(f"{field} = ?" for field in changes)
-                conn.execute(
-                    f"UPDATE tracked_opportunities SET {assignments}, updated_at = ?"
-                    " WHERE tracked_id = ?",
-                    (*(value for _, value in changes.values()), now, tracked_id),
-                )
-        conn.executemany(
-            "INSERT INTO tracked_opportunity_events (tracked_id, user_id, changed_at, field,"
-            " old_value, new_value) VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (tracked_id, user_id, now, field, _text(before), _text(after))
-                for field, (before, after) in changes.items()
-            ],
-        )
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    row = conn.execute(
-        PIPELINE + " AND t.tracked_id = :tracked_id", {"user_id": user_id, "tracked_id": tracked_id}
-    ).fetchone()
-    return Tracked(*row)
+        if title is None:
+            raise NotFound(f"no notice {notice_id}")
+        p = new_pursuit(conn, title[0], notice_id=notice_id, user_id=user_id)
+    if stage is not None:
+        key, outcome = LEGACY_STAGES.get(stage, (stage, None))
+        if outcome is not None:
+            if p.outcome != outcome:
+                p = set_outcome(conn, p.pursuit_id, outcome, "set through track", user_id=user_id)
+        elif key != p.stage:
+            keys = workflow(conn, user_id=user_id).keys()
+            if key not in keys:
+                raise ValueError(f"{key!r} is not a stage of the workflow")
+            if keys.index(key) < keys.index(p.stage):
+                raise ValueError(f"{key} is earlier than {p.stage}; use `mentor pursuit back`")
+            while p.stage != key:
+                p = gate(conn, p.pursuit_id, "go", "set through track", user_id=user_id)
+    if pwin is not None or notes is not None:
+        p = update_pursuit(conn, p.pursuit_id, pwin=pwin, notes=notes, user_id=user_id)
+    return _tracked(conn, p, notice_id)
 
 
 def pipeline(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> list[Tracked]:
-    """Every tracked opportunity, ordered by stage then soonest deadline."""
-    rows = [Tracked(*row) for row in conn.execute(PIPELINE, {"user_id": user_id}).fetchall()]
+    """One row per pursuit and linked notice, closed ones included, in workflow order then
+    soonest deadline: what ``mentor pipeline`` has always shown."""
+    rows = []
+    for p in pursuits(conn, include_closed=True, user_id=user_id):
+        for (notice_id,) in conn.execute(
+            "SELECT notice_id FROM pursuit_notices WHERE pursuit_id = ? ORDER BY linked_at",
+            (p.pursuit_id,),
+        ).fetchall():
+            rows.append(_tracked(conn, p, notice_id))
     return sorted(
         rows,
         key=lambda t: (
-            STAGES.index(t.stage),
+            [p.pursuit_id for p in pursuits(conn, include_closed=True, user_id=user_id)].index(
+                t.tracked_id
+            ),
             t.response_deadline is None,
             t.response_deadline or "",
         ),
@@ -238,17 +1032,11 @@ def pipeline(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> list[Tracke
 
 
 def history(conn: sqlite3.Connection, notice_id: str, *, user_id: int = USER_ID) -> list[Event]:
-    """The change log of one tracked opportunity, oldest first."""
-    rows = conn.execute(
-        "SELECT ev.event_id, ev.changed_at, ev.field, ev.old_value, ev.new_value"
-        " FROM tracked_opportunity_events AS ev"
-        " JOIN tracked_opportunities AS t USING (tracked_id)"
-        " WHERE t.user_id = ? AND t.notice_id = ? ORDER BY ev.event_id",
-        (user_id, notice_id),
-    ).fetchall()
-    if not rows:
+    """The event log of the pursuit this notice belongs to, oldest first."""
+    p = pursuit_for_notice(conn, notice_id, user_id=user_id)
+    if p is None:
         raise NotFound(f"{notice_id} is not tracked")
-    return [Event(*row) for row in rows]
+    return list(pursuit(conn, p.pursuit_id, user_id=user_id).events)
 
 
 def save_search(
@@ -342,6 +1130,16 @@ def save_workflow(
 ) -> WorkflowDocument:
     """Validate ``body`` and store it as the next workflow version."""
     doc = documents.parse(body, WorkflowDocument)
+    in_use = {
+        stage
+        for (stage,) in conn.execute(
+            "SELECT DISTINCT stage FROM pursuits WHERE user_id = ? AND closed_at IS NULL",
+            (user_id,),
+        ).fetchall()
+    }
+    missing = sorted(in_use - set(doc.keys()))
+    if missing:
+        raise ValueError(f"stage keys in use by open pursuits cannot be removed: {missing}")
     save_document(conn, "workflow", body, user_id=user_id)
     return doc
 

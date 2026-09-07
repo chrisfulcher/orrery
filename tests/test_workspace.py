@@ -27,35 +27,42 @@ def test_track_inserts_with_events(seeded: sqlite3.Connection) -> None:
 
     assert (tracked.notice_id, tracked.stage, tracked.pwin, tracked.notes) == (
         HRSA,
-        "watching",
+        "identify",
         None,
         None,
     )
     assert tracked.title == NOTICES[0]["title"] and tracked.agency == "HRSA HEADQUARTERS"
-    assert events(seeded, HRSA) == [("stage", None, "watching")]
+    assert events(seeded, HRSA) == [("stage", None, "identify"), ("notice", None, HRSA)]
 
 
-def test_track_updates_append_only_changed_fields(seeded: sqlite3.Connection) -> None:
+def test_track_advances_through_recorded_gates(seeded: sqlite3.Connection) -> None:
     workspace.track(seeded, HRSA)
     workspace.track(seeded, HRSA, stage="pursuing", pwin=40)
     unchanged = workspace.track(seeded, HRSA, stage="pursuing", pwin=40)
     workspace.track(seeded, HRSA, pwin=55, notes="Incumbent is weak")
 
-    assert (unchanged.stage, unchanged.pwin) == ("pursuing", 40)
+    assert (unchanged.stage, unchanged.pwin) == ("qualify", 40)
     assert events(seeded, HRSA) == [
-        ("stage", None, "watching"),
-        ("stage", "watching", "pursuing"),
+        ("stage", None, "identify"),
+        ("notice", None, HRSA),
+        ("gate", "Pursuit Gate", "go"),
+        ("stage", "identify", "qualify"),
         ("pwin", None, "40"),
         ("pwin", "40", "55"),
         ("notes", None, "Incumbent is weak"),
     ]
-    assert seeded.execute("SELECT count(*) FROM tracked_opportunities").fetchone() == (1,)
+    assert seeded.execute("SELECT count(*) FROM pursuits").fetchone() == (1,)
+    with pytest.raises(ValueError, match="earlier"):
+        workspace.track(seeded, HRSA, stage="watching")
+    assert workspace.track(seeded, HRSA, stage="proposal").stage == "proposal"
+    assert workspace.track(seeded, HRSA, stage="won").stage == "post-award"
+    assert workspace.pursuit_for_notice(seeded, HRSA).outcome == "won"
 
 
 def test_track_unknown_notice_writes_nothing(seeded: sqlite3.Connection) -> None:
     with pytest.raises(workspace.NotFound):
         workspace.track(seeded, "nope")
-    assert seeded.execute("SELECT count(*) FROM tracked_opportunity_events").fetchone() == (0,)
+    assert seeded.execute("SELECT count(*) FROM pursuit_events").fetchone() == (0,)
     with pytest.raises(workspace.NotFound):
         workspace.history(seeded, HRSA)
 
@@ -72,10 +79,10 @@ def test_pipeline_orders_by_stage_then_deadline(seeded: sqlite3.Connection) -> N
     order = [(t.stage, t.notice_id) for t in workspace.pipeline(seeded)]
 
     assert order == [
-        ("watching", by_deadline[1]["noticeId"]),
-        ("pursuing", by_deadline[0]["noticeId"]),
-        ("pursuing", by_deadline[-1]["noticeId"]),
-        ("bid", HRSA),
+        ("identify", by_deadline[1]["noticeId"]),
+        ("qualify", by_deadline[0]["noticeId"]),
+        ("qualify", by_deadline[-1]["noticeId"]),
+        ("proposal", HRSA),
     ]
 
 
@@ -242,3 +249,149 @@ def test_search_document_edit_replaces_the_search(seeded: sqlite3.Connection) ->
         seeded, "sba", 'query = "Microsoft"\nnaics = ["541512"]\ndeadline_within_days = 0\n'
     )
     assert edited.query == "Microsoft" and edited.filters == Filters(naics=("541512",))
+
+
+def pursuit_events(conn: sqlite3.Connection, pursuit_id: int) -> list[tuple]:
+    return [
+        (e.field, e.old_value, e.new_value, e.note)
+        for e in workspace.pursuit(conn, pursuit_id).events
+    ]
+
+
+def test_pursuit_lifecycle_records_every_decision(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-07T12:00:00Z")
+    p = workspace.new_pursuit(conn, "Help desk recompete", summary="HRSA needs a help desk")
+    assert (p.stage, p.open, p.open_tasks) == ("identify", True, 3)
+    detail = workspace.pursuit(conn, p.pursuit_id)
+    assert detail.gate == "Pursuit Gate" and detail.gate_ready is False
+
+    held = workspace.gate(conn, p.pursuit_id, "hold", "budget unclear", until="2026-10-01")
+    assert held.held_until == "2026-10-01"
+    for task in detail.tasks:
+        workspace.complete_task(conn, task.task_id)
+    assert workspace.pursuit(conn, p.pursuit_id).gate_ready is False  # still held
+    gone = workspace.gate(conn, p.pursuit_id, "go", "fits the profile")
+    assert (gone.stage, gone.held_until, gone.open_tasks) == ("qualify", None, 4)
+    task = workspace.add_task(conn, p.pursuit_id, "Call the COR", due="2026-09-10")
+    assert (task.origin, task.stage, task.due) == ("user", "qualify", "2026-09-10")
+
+    closed = workspace.gate(conn, p.pursuit_id, "no-go", "incumbent is entrenched")
+    assert (closed.outcome, closed.open) == ("no-bid", False)
+    with pytest.raises(ValueError, match="closed"):
+        workspace.gate(conn, p.pursuit_id, "go", "x")
+    reopened = workspace.reopen(conn, p.pursuit_id, "incumbent lost their key staff")
+    assert (reopened.outcome, reopened.open, reopened.stage) == (None, True, "qualify")
+    back = workspace.move_back(conn, p.pursuit_id, "identify", "re-check the requirement")
+    assert back.stage == "identify" and back.open_tasks == 5  # nothing re-seeded
+    with pytest.raises(ValueError, match="earlier"):
+        workspace.move_back(conn, p.pursuit_id, "capture", "x")
+    won = workspace.set_outcome(conn, p.pursuit_id, "won", "award received")
+    assert (won.stage, won.outcome, won.open) == ("post-award", "won", True)
+    assert workspace.pursuit(conn, p.pursuit_id).gate is None
+    done = workspace.close_pursuit(conn, p.pursuit_id)
+    assert done.open is False and done.outcome == "won"
+    assert (
+        workspace.pursuits(conn) == [] and len(workspace.pursuits(conn, include_closed=True)) == 1
+    )
+
+    fields = [e[0] for e in pursuit_events(conn, p.pursuit_id)]
+    assert fields == [
+        "stage", "gate", "hold", "task", "task", "task", "gate", "stage", "task", "gate",
+        "outcome", "closed", "reopened", "stage", "outcome", "stage", "closed",
+    ]  # fmt: skip
+    assert ("gate", "Pursuit Gate", "hold", "budget unclear") in pursuit_events(conn, p.pursuit_id)
+    assert ("stage", "qualify", "identify", "re-check the requirement") in pursuit_events(
+        conn, p.pursuit_id
+    )
+
+
+def test_gate_and_outcome_rules(conn: sqlite3.Connection) -> None:
+    p = workspace.new_pursuit(conn, "X")
+    with pytest.raises(ValueError, match="rationale"):
+        workspace.gate(conn, p.pursuit_id, "go", "  ")
+    with pytest.raises(ValueError, match="revisit date"):
+        workspace.gate(conn, p.pursuit_id, "hold", "later")
+    with pytest.raises(ValueError, match="go, no-go, or hold"):
+        workspace.gate(conn, p.pursuit_id, "maybe", "x")
+    with pytest.raises(ValueError, match="is open"):
+        workspace.reopen(conn, p.pursuit_id, "x")
+    with pytest.raises(workspace.NotFound):
+        workspace.pursuit(conn, 99)
+    with pytest.raises(ValueError, match="title"):
+        workspace.new_pursuit(conn, " ")
+    won = workspace.set_outcome(conn, p.pursuit_id, "won", "direct award")
+    with pytest.raises(ValueError, match="no gate"):
+        workspace.gate(conn, won.pursuit_id, "go", "x")
+    with pytest.raises(ValueError, match="cannot be removed"):
+        workspace.save_workflow(conn, '[[stages]]\nkey = "find"\nname = "Find"\n')
+
+
+def test_new_pursuit_from_a_notice_and_a_contract(
+    conn: sqlite3.Connection, seed_awards: Callable[..., object]
+) -> None:
+    seed_awards()
+    p = workspace.new_pursuit(conn, "From the notice", notice_id=HRSA)
+    assert (p.office_code, p.naics_code, p.office, p.notices) == (
+        "75R602", "541512", "HRSA HEADQUARTERS", 1,
+    )  # fmt: skip
+    (contract_id,) = conn.execute(
+        "SELECT contract_id FROM contracts WHERE piid = '75R60222F00009'"
+    ).fetchone()
+    q = workspace.new_pursuit(conn, "From the award", contract_id=contract_id)
+    detail = workspace.pursuit(conn, q.pursuit_id)
+    assert (q.office_code, q.naics_code, q.incumbent) == ("75R602", "541512", "LEIDOS, INC.")
+    assert detail.incumbent is not None and detail.incumbent.piid == "75R60222F00009"
+    assert [n.notice_id for n in detail.related_notices] == [HRSA]  # the prior solicitation
+    assert [(d.kind, d.date) for d in detail.dates] == [("pop_end", "2026-02-28")]
+    role = workspace.NOTICE_ROLES.get(NOTICES[0]["type"], "other")
+    linked = workspace.link_notice(conn, q.pursuit_id, HRSA)
+    assert linked.role == role
+    assert workspace.link_notice(conn, q.pursuit_id, HRSA).role == role
+    assert workspace.pursuit_for_notice(conn, HRSA).pursuit_id == q.pursuit_id  # latest open
+
+
+def test_dashboard_classifies_the_weeks_work(
+    conn: sqlite3.Connection, seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-08-01T00:00:00Z")
+    stale = workspace.new_pursuit(conn, "Stale")
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-01T00:00:00Z")
+    due = workspace.new_pursuit(conn, "Due soon")
+    workspace.add_task(conn, due.pursuit_id, "Call", due="2026-09-03")
+    workspace.add_task(conn, due.pursuit_id, "Late", due="2026-08-30")
+    workspace.add_task(conn, due.pursuit_id, "Far", due="2026-10-30")
+    ready = workspace.new_pursuit(conn, "Ready")
+    for task in workspace.pursuit(conn, ready.pursuit_id).tasks:
+        workspace.complete_task(conn, task.task_id)
+    held = workspace.new_pursuit(conn, "Held")
+    workspace.gate(conn, held.pursuit_id, "hold", "wait", until="2026-09-05")
+    dated = next(n for n in NOTICES if n["responseDeadLine"])
+    noticed = workspace.new_pursuit(conn, "With a notice", notice_id=dated["noticeId"])
+    (deadline,) = conn.execute(
+        "SELECT substr(response_deadline, 1, 10) FROM notices WHERE notice_id = ?",
+        (dated["noticeId"],),
+    ).fetchone()
+    days = workspace._days_between("2026-09-01", deadline) + 1  # the window reaches it
+    won = workspace.new_pursuit(conn, "Won")
+    workspace.set_outcome(conn, won.pursuit_id, "won", "x")  # post-award is not gated
+
+    board = workspace.dashboard(conn, days=days, stall_days=14, horizon_days=60)
+
+    assert [(w.due, w.kind, w.what, w.overdue) for w in board.work] == [
+        ("2026-08-30", "task", "Late", True),
+        ("2026-09-03", "task", "Call", False),
+        (deadline, "response", f"response due: {dated['title']}", False),
+    ]
+    assert [(a.reason, a.pursuit_title) for a in board.attention] == [
+        ("gate ready", "Ready"),
+        ("hold due", "Held"),
+        ("stalled", "Stale"),
+    ]
+    assert [(d.kind, d.pursuit_title) for d in board.dates] == [("response", "With a notice")]
+    assert board.by_stage == (
+        ("identify", 5), ("qualify", 0), ("capture", 0), ("proposal", 0), ("submitted", 0),
+        ("post-award", 1),
+    )  # fmt: skip
+    assert noticed.stage == "identify" and stale.stage == "identify"

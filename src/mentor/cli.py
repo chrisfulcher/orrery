@@ -457,7 +457,7 @@ def track(
             tracked = workspace.track(
                 conn, notice_id, stage=stage.value if stage else None, pwin=pwin, notes=notes
             )
-        except workspace.NotFound as exc:
+        except (workspace.NotFound, ValueError) as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from exc
     if json_output:

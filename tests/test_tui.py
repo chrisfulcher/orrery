@@ -69,7 +69,7 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
 
         await pilot.press("t")
         await pilot.pause()
-        assert text(app, "#tracking").startswith("watching")
+        assert text(app, "#tracking").startswith("identify")
 
         await pilot.press("a")
         await pilot.pause()

@@ -406,33 +406,26 @@ def test_workspace_commands(
         'sba  query="Microsoft" naics=541512,541511 deadline_within_days=30'
     )
     assert run("searches", "edit", "nope", "--file", str(search_toml)).exit_code == 1
-    assert run("workflow", "show").output.startswith("# mentor workflow")
-    assert json.loads(run("workflow", "show", "--json").output)["stages"][0]["key"] == "identify"
-    workflow_toml = tmp_path / "workflow.toml"
-    workflow_toml.write_text('[[stages]]\nkey = "find"\nname = "Find"\ngate = "Go"\n')
-    assert run("workflow", "edit", "--file", str(workflow_toml)).output.strip() == (
-        "saved workflow version 1: find"
-    )
-    assert run("workflow", "history").output.startswith("v1  ")
-    workflow_toml.write_text("stages = []\n")
-    assert run("workflow", "edit", "--file", str(workflow_toml)).exit_code == 1
     assert run("searches", "rm", "sba").exit_code == 0
     assert run("searches", "rm", "sba").exit_code == 1
     assert run("searches", "run", "sba").exit_code == 1
 
     result = run("track", hrsa, "--stage", "pursuing", "--pwin", "40")
     assert result.exit_code == 0, result.output
-    assert result.output.startswith("pursuing:")
+    assert result.output.startswith("qualify:")
     assert run("track", hrsa, "--pwin", "55").exit_code == 0
     assert run("track", "nope").exit_code == 1
     events = json.loads(run("history", hrsa, "--json").output)
     assert [(e["field"], e["new_value"]) for e in events] == [
-        ("stage", "pursuing"),
+        ("stage", "identify"),
+        ("notice", hrsa),
+        ("gate", "go"),
+        ("stage", "qualify"),
         ("pwin", "40"),
         ("pwin", "55"),
     ]
     assert run("history", "nope").exit_code == 1
-    assert run("pipeline").output.startswith("pursuing (1)")
+    assert run("pipeline").output.startswith("qualify (1)")
     assert len(json.loads(run("pipeline", "--json").output)) == 1
 
     assert run("profile", "show").output.startswith("# mentor company profile")
@@ -452,6 +445,19 @@ def test_workspace_commands(
 
     assert run("search", "xylophone", "--naics", "999999").output.strip() == "no matches"
     assert run("search", "x", "--semantic", "--naics", "1").exit_code == 2
+    assert run("workflow", "show").output.startswith("# mentor workflow")
+    assert json.loads(run("workflow", "show", "--json").output)["stages"][0]["key"] == "identify"
+    workflow_toml = tmp_path / "workflow.toml"
+    workflow_toml.write_text('[[stages]]\nkey = "find"\nname = "Find"\ngate = "Go"\n')
+    refused = run("workflow", "edit", "--file", str(workflow_toml))
+    assert refused.exit_code == 1 and "in use by open pursuits" in refused.output
+    workflow_toml.write_text('[[stages]]\nkey = "qualify"\nname = "Qualify"\ngate = "Go"\n')
+    assert run("workflow", "edit", "--file", str(workflow_toml)).output.strip() == (
+        "saved workflow version 1: qualify"
+    )
+    assert run("workflow", "history").output.startswith("v1  ")
+    workflow_toml.write_text("stages = []\n")
+    assert run("workflow", "edit", "--file", str(workflow_toml)).exit_code == 1
 
 
 def test_ingest_awards_from_file(tmp_path: Path) -> None:

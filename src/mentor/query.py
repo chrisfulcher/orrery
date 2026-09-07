@@ -526,6 +526,27 @@ def summarize_facts(
     return summary
 
 
+def contract(conn: sqlite3.Connection, contract_id: int) -> ContractRef | None:
+    row = conn.execute(
+        f"SELECT {CONTRACT_COLUMNS} FROM v_contracts WHERE contract_id = ?", (contract_id,)
+    ).fetchone()
+    return ContractRef(*row) if row else None
+
+
+def notices_for_solicitation(
+    conn: sqlite3.Connection, solicitation: str, *, limit: int = 10
+) -> list[SearchHit]:
+    """Notices carrying this solicitation number, newest first."""
+    rows = conn.execute(
+        "SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,"
+        " 'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank"
+        " FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id"
+        " WHERE n.solicitation_number = ? ORDER BY n.posted_at DESC, n.id LIMIT ?",
+        (solicitation, limit),
+    ).fetchall()
+    return [SearchHit(*row[:6], _snippet(row[6]), row[7]) for row in rows]
+
+
 def contractor(conn: sqlite3.Connection, uei: str, *, recent: int = 20) -> EntityDetail | None:
     """The contractor registered under this UEI, with the awards the store knows."""
     row = conn.execute(
