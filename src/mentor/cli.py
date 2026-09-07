@@ -532,6 +532,14 @@ def ingest_bulk_command(
     )
 
 
+@app.command()
+def mcp() -> None:
+    """Serve the store to an MCP client over standard input and output."""
+    from mentor.mcp_server import main  # heavy import; only when asked for
+
+    main()
+
+
 @db_app.command()
 def migrate() -> None:
     """Apply pending schema migrations."""
