@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/chrisfulcher/mentor/security/advisories/new
+    about: Do not open a public issue for a vulnerability. Report it privately here; only the maintainer can read it.
+  - name: Read the design doc first
+    url: https://github.com/chrisfulcher/mentor/blob/main/docs/DESIGN.md
+    about: The design doc is the source of truth. Issues that name the section they respond to are the most useful.

@@ -1,0 +1,38 @@
+name: Change or new feature
+description: Propose work. Non-trivial changes start here, before code.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or wrong today. Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: input
+    id: section
+    attributes:
+      label: Design doc section
+      description: The section of docs/DESIGN.md this serves. If the proposal changes the design doc, say so.
+      placeholder: "§8"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+  - type: textarea
+    id: principles
+    attributes:
+      label: How it sits with the principles
+      description: >
+        §2 is not negotiable in a pull request: public data and public knowledge only, people only
+        in their official public capacity, every fact carries provenance, zero telemetry, no
+        third-party code loading in v1. Note anything here that brushes against those.
+  - type: checkboxes
+    id: ground-rules
+    attributes:
+      label: Before you post
+      options:
+        - label: This proposal contains no proprietary capture intelligence, customer relationships, pricing, or any organization's internal process.
+          required: true

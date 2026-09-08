@@ -1,0 +1,35 @@
+name: Bug report
+description: Something behaves differently than the design doc or the docs say it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, and what it did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: section
+    attributes:
+      label: Design doc section
+      description: The section of docs/DESIGN.md this concerns, if you know it.
+      placeholder: "§5"
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: How you installed it, Python version, and whether you are running from source or the container.
+  - type: checkboxes
+    id: ground-rules
+    attributes:
+      label: Before you post
+      options:
+        - label: This report contains no proprietary capture intelligence, customer relationships, pricing, or any organization's internal process, and no API keys or database contents.
+          required: true
