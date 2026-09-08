@@ -4,10 +4,10 @@
 services:
   mentor:
     build: .
-    env_file: .env
     environment:
       MENTOR_DATA_DIR: /data   # always the mount below, whatever .env says
     volumes:
       - ./data:/data
+      - ./.env:/app/.env       # settings; the app's Setup tab writes it in place (touch .env first)
     extra_hosts:
       - "host.docker.internal:host-gateway"   # a host Ollama, for MENTOR_EMBED_BASE_URL

@@ -44,6 +44,8 @@ v1 deliberately does not include a hosted service, accounts, telemetry, third-pa
 
 A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Each search page and each notice description is one request; attachment files download without a key and do not count. Ten a day is enough to try a narrow slice, and a thousand is the budget the tool is designed around.
 
+Every setting below can be entered in the app (`mentor top`, key `5`), which also tests each connection with the smallest possible request (`ctrl+t`): one keyed one-day SAM.gov search page, one embedding of the word "mentor", one tiny structured completion from a chat model.
+
 **An embedding endpoint** (optional; needed only for `mentor embed` and `mentor search --semantic`). Any OpenAI-compatible `/embeddings` endpoint works. The default is a local [Ollama](https://ollama.com): install it, run `ollama pull nomic-embed-text`, and the defaults (`MENTOR_EMBED_BASE_URL=http://localhost:11434/v1`, `MENTOR_EMBED_MODEL=nomic-embed-text`, no key) already point at it. For a cloud endpoint set the base URL, the model name, and `MENTOR_EMBED_API_KEY`.
 
 **A chat model** (optional; needed only for `mentor pursuit assess`). Two slots, `fast` for grunt work and `deep` for judgment, each any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM, OpenAI, OpenRouter) or Anthropic through its official SDK, set with `MENTOR_AI_FAST_*` and `MENTOR_AI_DEEP_*`. The default is a local Ollama running `qwen3:14b` (`ollama pull qwen3:14b`); run Ollama with `OLLAMA_CONTEXT_LENGTH=16384` or more, because its default context of 4,096 tokens silently truncates a long prompt from the front. Leave the deep slot unset to use the fast one for everything, or point it at `claude-opus-5` with `MENTOR_AI_DEEP_PROVIDER=anthropic` and a key in `MENTOR_AI_DEEP_API_KEY` or `ANTHROPIC_API_KEY`. On Arch with an AMD GPU, the `ollama-rocm` package is the one that uses the card; the plain `ollama` package runs on the CPU.
@@ -52,11 +54,7 @@ What leaves your machine: `mentor ingest awards` sends only its filter (your NAI
 
 ## Quickstart
 
-Both paths start from a `.env` file. Copy the example and set `MENTOR_SAM_API_KEY` (see [Before you start](#before-you-start)) and `MENTOR_NAICS`; the other settings are documented in the file and default sensibly.
-
-```
-cp .env.example .env
-```
+Setup happens inside the app. On first run it opens on its Connections tab; enter your SAM.gov key (see [Before you start](#before-you-start)) and NAICS codes, press `ctrl+s`, and the app writes `.env` next to it (mode 0600, only `MENTOR_*` lines, never logged). Every operation below then runs from the Jobs tab (`j`) with a log, and every setting, your profile, your workflow, and your saved searches are forms under `5`. The CLI is the same engine for scripts and cron; if you would rather start from a file, copy `.env.example` to `.env` and fill it in.
 
 ### From source
 
@@ -64,7 +62,12 @@ Requires Python 3.13 and uv; `mise install` provides both from `.mise.toml`.
 
 ```
 uv sync
-uv run mentor db migrate
+uv run mentor top                 # first run: Connections tab, then j for the jobs below
+```
+
+The same operations from a shell:
+
+```
 uv run mentor ingest notices      # yesterday's notices for your NAICS codes; one request per page
 uv run mentor ingest bulk         # today's full extract (~250 MB, no key, no quota), your NAICS codes only
 uv run mentor ingest awards       # three years of USAspending award history for your NAICS codes (no key, no quota)
@@ -84,8 +87,14 @@ The image is built from the repository's own `Dockerfile`, which installs only w
 
 ```
 mkdir -p data                     # mounted at /data inside the container
+touch .env                        # mounted at /app/.env; the app writes it (a missing file would mount as a directory)
 docker compose build
-docker compose run --rm mentor db migrate
+docker compose run --rm mentor top
+```
+
+The same operations from a shell:
+
+```
 docker compose run --rm mentor ingest notices
 docker compose run --rm mentor ingest bulk
 docker compose run --rm mentor ingest awards
@@ -99,11 +108,13 @@ docker compose run --rm mentor search --semantic "on-site help desk staffing"
 docker compose run --rm mentor quota
 ```
 
-The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
+The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data .env` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. `.env` is bind-mounted rather than injected as environment variables so the app can write it; `MENTOR_DATA_DIR` is the one real environment variable in the container, and the app shows it locked. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
 `mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. `mentor ingest awards` asks USAspending for every contract action in your NAICS codes over the last three years (`--since` and `--until` change the window), waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. Vendors become contractor entities keyed by UEI; awards resolve to offices already in the store by office code, and what cannot resolve is queued as an unresolved alias rather than guessed. `mentor ingest entities` downloads SAM.gov's public monthly entity extract (one keyed request for every registrant in the country, about 150 MB) into `data/extracts/sam/` and keeps only the registrants the store cares about: vendors seen in awards, registrants whose primary NAICS is one of yours, and your own company. Each becomes a contractor entity with its registration status, expiry, structure, business and SBA types, NAICS and PSC lists, and address as sourced facts; registrant contacts are never stored. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. Both count against the same daily budget as notices. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
 
 ### Working pursuits
+
+Everything here has a form in the app: the profile, the workflow, and saved searches are tabs under `5`, and a pursuit's screen carries its tasks, gates, and `s` to assess it. The CLI equivalents:
 
 ```
 uv run mentor profile edit                  # your company as a TOML document, in $EDITOR; every save is a version
@@ -138,7 +149,7 @@ A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadl
 uv run mentor top
 ```
 
-`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, then this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first), what needs attention (a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks) with the open pursuits per stage, and the government's dates for the next 60 days as a strip; Enter on any row opens the pursuit. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, its pursuit, the incumbent (the award that shares its solicitation or award number), description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` opens the notice's pursuit or attaches the notice to one (or starts one), `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. `3` is the board of open pursuits by stage (`n` starts one, `c` shows closed ones); a pursuit's screen carries its tasks, notices, and decision log, with `d` to finish the selected task, `t` to add one, `g` for a gate decision, `b` to move back a stage, `w` for the outcome (or to reopen), `p` and `n` for PWin and notes, `a` and `i` for the office and the incumbent, `x` to accept the latest assessment's suggested tasks, and Enter on a notice for its context view. `4` is the recompete radar: awards in your profile's NAICS ending soonest with options included, `p` starts a pursuit from one with the award as its incumbent, `m` widens the window. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `q` quits. The app draws in your terminal's own colours.
+`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, then this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first), what needs attention (a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks) with the open pursuits per stage, and the government's dates for the next 60 days as a strip; Enter on any row opens the pursuit. `2` is the opportunities table; `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, its pursuit, the incumbent (the award that shares its solicitation or award number), description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` opens the notice's pursuit or attaches the notice to one (or starts one), `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. `3` is the board of open pursuits by stage (`n` starts one, `c` shows closed ones); a pursuit's screen carries its tasks, notices, and decision log, with `d` to finish the selected task, `t` to add one, `s` to assess it with the deep model, `g` for a gate decision, `b` to move back a stage, `w` for the outcome (or to reopen), `p` and `n` for PWin and notes, `a` and `i` for the office and the incumbent, `x` to accept the latest assessment's suggested tasks, and Enter on a notice for its context view. `4` is the recompete radar: awards in your profile's NAICS ending soonest with options included, `p` starts a pursuit from one with the award as its incumbent, `m` widens the window. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `5` is setup: Connections (every `MENTOR_*` setting as a form; `ctrl+s` writes `.env`, `ctrl+t` tests the service of the field you are in, and a setting supplied by a real environment variable shows as locked), Profile, Workflow (stages, gates, and task templates: `a` adds, Enter edits, `x` removes, shift+arrows reorder), Searches (`n`, Enter, `x`, `r` runs one), and Jobs (`j` from anywhere: every ingest, fetch, extract, embed, assess, and database operation with its parameters, last run, and log; `r` runs the selected one, `c` cancels between items). One job runs at a time, on its own database connection, and the dashboard's queues panel shows it. Because a focused field swallows the mode keys, Escape returns to the tab bar first. `q` quits. The app draws in your terminal's own colours.
 
 To use it from a browser tab instead, on the same machine or a home server:
 
@@ -146,6 +157,8 @@ To use it from a browser tab instead, on the same machine or a home server:
 uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
+
+Each browser tab is its own `mentor top` process in the server's working directory: two tabs can each run a job (the store serializes them and the quota is per request) and both write the same `.env`, which the app re-reads before every write.
 
 For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pursuits`, `v_pursuit_tasks`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/mentor.sqlite`.
 

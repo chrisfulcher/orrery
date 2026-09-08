@@ -43,6 +43,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 - Python 3.13, pinned in `.mise.toml` together with uv. Dependencies live in `pyproject.toml` with a committed `uv.lock`; add a dependency only in the commit that first uses it.
 - Source layout `src/mentor/`, tests in `tests/`, CLI entry point `mentor` (typer).
 - Interfaces: terminal UI with Textual (`mentor top`, `src/mentor/tui/`), CLI with `--json` on every command that prints data, MCP server (`src/mentor/mcp_server.py`, stdio, interface version 1, tools only added, nothing that spends quota), and versioned read-only SQL views named `v_*` (interface version 1, columns only added). All of them go through one query module (`src/mentor/query.py`); no front end reads the raw tables directly, and the raw tables are not a public interface.
+- Long-running operations (ingest, fetch, extract, embed, assess, db) are jobs in `src/mentor/jobs.py`; the CLI and the app both run them through it, and adapters take `report` and `cancelled` hooks from `src/mentor/progress.py`. The app runs a job on its own connection in a thread; its own connection never leaves the event loop.
 - Storage is stdlib `sqlite3`, no ORM. Schema changes are numbered SQL files in `src/mentor/migrations/`, applied in order by `mentor db migrate`, and mirrored in `docs/DESIGN.md` §8 in the same commit.
 - Commands: `uv sync` (install), `uv run mentor` (CLI), `uv run pytest` (tests), `uv run ruff check . && uv run ruff format --check .` (lint and format). All four must pass before a commit.
 - Container: `docker compose build` and `docker compose run --rm mentor <command>`. The Dockerfile installs only from the lockfile (`uv sync --frozen`), never pulls an application image from a registry, and runs as a non-root user with the store at `/data`.
@@ -50,6 +51,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 ## Repo hygiene
 
 - No secrets. `.env` files are gitignored; keep them that way.
+- `.env` is written only by `src/mentor/dotenv.py`: only `MENTOR_*` keys, comments and order preserved, atomic replace (in place on a bind mount), mode 0600, never logged. Real environment variables still override it and the app shows those fields as locked.
 - No local databases or downloaded attachments committed.
 - No employer-, customer-, or person-specific data anywhere. Synthetic or public sample data only.
 - `docs/` holds the design. The rest of the layout is defined with the stack.
