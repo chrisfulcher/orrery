@@ -30,9 +30,9 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/qwertybaba/mentor"
-Issues = "https://github.com/qwertybaba/mentor/issues"
-Design = "https://github.com/qwertybaba/mentor/blob/main/docs/DESIGN.md"
+Repository = "https://github.com/chrisfulcher/mentor"
+Issues = "https://github.com/chrisfulcher/mentor/issues"
+Design = "https://github.com/chrisfulcher/mentor/blob/main/docs/DESIGN.md"
 
 [project.scripts]
 mentor = "mentor.cli:app"
