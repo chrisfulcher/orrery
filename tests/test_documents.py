@@ -109,3 +109,23 @@ def test_search_document_round_trips_and_treats_zero_as_unset() -> None:
     assert parse(text, SearchDocument) == doc and text.startswith('# saved search "it"')
     empty = parse(render_search("x", SearchDocument()), SearchDocument)
     assert empty == SearchDocument() and empty.deadline_within_days is None
+
+
+def test_validate_reports_like_parse() -> None:
+    from mentor.documents import validate
+
+    assert validate({"company": {"name": "X"}}, ProfileDocument).company.name == "X"
+    with pytest.raises(DocumentError, match="company.uei: .*UEI 'x' is not 12 characters"):
+        validate({"company": {"uei": "x"}}, ProfileDocument)
+
+
+def test_parties_lines_round_trip() -> None:
+    from mentor.tui.forms import parse_parties, parties_lines
+
+    parties = [
+        {"uei": "UE9QJD4KK1L6", "name": "A", "notes": "n"},
+        {"uei": None, "name": "B", "notes": ""},
+    ]
+    assert parties_lines(parties) == "UE9QJD4KK1L6 | A | n\n | B"
+    assert parse_parties(parties_lines(parties)) == parties
+    assert parse_parties("\n  \n") == []

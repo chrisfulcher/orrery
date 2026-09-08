@@ -5,11 +5,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, Static, TabbedContent
+from textual.widgets import Input, Select, Static, TabbedContent, TextArea
 
-from mentor import db, dotenv
+from mentor import db, documents, dotenv, workspace
 from mentor.config import Settings, env_values
-from mentor.tui.app import DashboardScreen, MentorTop
+from mentor.documents import ProfileDocument
+from mentor.tui.app import DashboardScreen, MentorTop, RadarScreen
 from mentor.tui.setup import SetupScreen
 
 Seed = Callable[[dict | None], None]
@@ -124,3 +125,71 @@ async def test_migrations_run_on_start(settings: Settings, tmp_path: Path) -> No
     check = db.connect(settings.db_path)
     assert db.status(check).pending == []
     check.close()
+
+
+@pytest.fixture
+def ready_app(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> MentorTop:
+    seed()
+    conn.close()
+    env_path = tmp_path / ".env"
+    dotenv.write(env_path, env_values(settings))
+    return MentorTop(settings, env_path=env_path)
+
+
+async def test_profile_form_round_trips_the_document(
+    ready_app: MentorTop, settings: Settings
+) -> None:
+    app = ready_app
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        await pilot.press("5")
+        await pilot.pause()
+        app.screen.show_tab("profile")
+        await pilot.pause()
+        assert text(app, "#profile_status") == "no profile saved yet"
+        screen = app.screen
+        screen.query_one("#field-company-name", Input).value = "Example LLC"
+        screen.query_one("#field-company-uei", Input).value = "ue9qjd4kk1l6"
+        screen.query_one("#field-offerings-naics", Input).value = "541512, 541511"
+        screen.query_one(
+            "#field-offerings-capability-statement", TextArea
+        ).text = "Help desks.\nZero trust."
+        screen.query_one("#field-qualifications-size", Select).value = "small"
+        screen.query_one("#field-qualifications-set-asides", Input).value = "SBA"
+        screen.query_one(
+            "#field-competitors", TextArea
+        ).text = "PHZDZ8SJ5CM1 | CDW GOVERNMENT LLC | incumbent at HRSA\n | Partner Co |"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert text(app, "#profile_form-errors") == ""
+        assert text(app, "#profile_status").startswith("profile v1, saved ")
+
+        conn = db.connect(settings.db_path)
+        latest = workspace.latest_document(conn, "profile")
+        doc = documents.parse(latest.body, ProfileDocument)
+        assert doc.company.name == "Example LLC" and doc.company.uei == "UE9QJD4KK1L6"
+        assert doc.offerings.naics == ["541512", "541511"]
+        assert doc.offerings.capability_statement == "Help desks.\nZero trust."
+        assert doc.qualifications.size == "small" and doc.qualifications.set_asides == ["SBA"]
+        assert [(c.uei, c.name, c.notes) for c in doc.competitors] == [
+            ("PHZDZ8SJ5CM1", "CDW GOVERNMENT LLC", "incumbent at HRSA"),
+            (None, "Partner Co", ""),
+        ]
+        assert latest.body.startswith("# mentor company profile")  # the CLI sees the same document
+        assert workspace.get_profile(conn).naics == ("541512", "541511")
+        conn.close()
+
+        screen.query_one("#field-company-uei", Input).value = "short"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "company.uei: " in text(app, "#profile_form-errors")
+        assert text(app, "#profile_status").startswith("profile v1,")  # nothing new saved
+
+        await pilot.press("escape")
+        await pilot.press("4")
+        await pilot.pause()
+        assert isinstance(app.screen, RadarScreen)
+        assert "NAICS 541512, 541511" in app.screen.query_one("#radar").border_title
+        await pilot.press("q")

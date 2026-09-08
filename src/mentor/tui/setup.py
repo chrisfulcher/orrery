@@ -8,9 +8,10 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Static, TabbedContent, TabPane, Tabs
 
-from mentor import dotenv
+from mentor import documents, dotenv, workspace
 from mentor.config import Settings, env_key, env_values, environment_overrides, setup_needed
-from mentor.tui.forms import FieldSpec, Form, FormError
+from mentor.documents import ProfileDocument
+from mentor.tui.forms import FieldSpec, Form, FormError, flatten, unflatten
 
 LOCKED_ENV = "set by {var} in the environment; the file cannot change it"
 LOCKED_STORE = "the store is open on this directory; set MENTOR_DATA_DIR before starting"
@@ -131,6 +132,73 @@ class ConnectionsTab(Vertical):
         return True
 
 
+SIZES = (("small", "small"), ("other than small", "other-than-small"))
+
+PROFILE_FIELDS = [
+    FieldSpec("company.name", "Company name", section="Company"),
+    FieldSpec("company.uei", "UEI", empty=None, help="12 characters, from SAM.gov"),
+    FieldSpec("company.cage", "CAGE", empty=None),
+    FieldSpec("offerings.naics", "NAICS codes", "csv", section="Offerings",
+              help="comma-separated; the first is the primary"),
+    FieldSpec("offerings.psc", "PSC codes", "csv"),
+    FieldSpec("offerings.keywords", "Keywords", "csv"),
+    FieldSpec("offerings.capability_statement", "Capability statement", "prose"),
+    FieldSpec("markets.agency_prefixes", "Target agency path prefixes", "csv",
+              section="Markets", help="075 or 075.7526"),
+    FieldSpec("markets.office_codes", "Target office codes", "csv", help="75R602"),
+    FieldSpec("markets.places", "Places served", "csv"),
+    FieldSpec("qualifications.size", "Size", "select", empty=None, options=SIZES,
+              section="Qualifications"),
+    FieldSpec("qualifications.set_asides", "Set-asides you can bid under", "csv",
+              help="SBA, 8A, SDVOSBC, HZC"),
+    FieldSpec("qualifications.certifications", "Certifications", "csv"),
+    FieldSpec("competitors", "Competitors", "parties", section="Competitors and partners",
+              help="one per line: UEI | name | notes"),
+    FieldSpec("partners", "Teaming partners", "parties", help="one per line: UEI | name | notes"),
+    FieldSpec("ai.notes", "Notes for AI assessments", "prose", section="AI"),
+]  # fmt: skip
+
+
+class ProfileTab(Vertical):
+    """The company profile as a form; saved as the same TOML document the CLI edits."""
+
+    def compose(self) -> ComposeResult:
+        conn = self.app.conn
+        doc = documents.parse(workspace.profile_document(conn), ProfileDocument)
+        yield Form(PROFILE_FIELDS, flatten(doc.model_dump()), id="profile_form")
+        yield Static(id="profile_status", classes="status")
+
+    def on_mount(self) -> None:
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        latest = workspace.latest_document(self.app.conn, "profile")
+        self.query_one("#profile_status", Static).update(
+            f"profile v{latest.version}, saved {latest.created_at}"
+            if latest
+            else "no profile saved yet"
+        )
+
+    def save(self) -> bool:
+        form = self.query_one("#profile_form", Form)
+        try:
+            doc = documents.validate(unflatten(form.values()), ProfileDocument)
+        except FormError as exc:
+            form.show_error(str(exc))
+            form.focus_field(exc.key)
+            return False
+        except documents.DocumentError as exc:
+            form.show_error(str(exc))
+            form.focus_field(str(exc).split(":", 1)[0])
+            return False
+        form.show_error(None)
+        workspace.save_profile(self.app.conn, documents.render_profile(doc))
+        self.refresh_status()
+        latest = workspace.latest_document(self.app.conn, "profile")
+        self.app.notify(f"saved profile v{latest.version if latest else '?'}")
+        return True
+
+
 class SetupScreen(Screen):
     BINDINGS = [
         Binding("escape", "focus_tabs", "Tabs"),
@@ -147,7 +215,7 @@ class SetupScreen(Screen):
             with TabPane("Connections", id="connections"):
                 yield ConnectionsTab(id="connections_tab")
             with TabPane("Profile", id="profile"):
-                yield Static("profile form arrives in the next commit", classes="placeholder")
+                yield ProfileTab(id="profile_tab")
             with TabPane("Workflow", id="workflow"):
                 yield Static("workflow editor arrives soon", classes="placeholder")
             with TabPane("Searches", id="searches"):
@@ -183,5 +251,7 @@ class SetupScreen(Screen):
         if active == "connections":
             if self.query_one("#connections_tab", ConnectionsTab).save():
                 self.refresh_banner()
+        elif active == "profile":
+            self.query_one("#profile_tab", ProfileTab).save()
         else:
             self.notify("nothing to save on this tab yet", severity="warning")

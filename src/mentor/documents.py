@@ -118,6 +118,11 @@ def parse[M: BaseModel](text: str, model: type[M]) -> M:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise DocumentError(f"not valid TOML: {exc}") from exc
+    return validate(data, model)
+
+
+def validate[M: BaseModel](data: object, model: type[M]) -> M:
+    """Validate already-parsed data (a form's values) with the same readable errors."""
     try:
         return model.model_validate(data)
     except ValidationError as exc:
