@@ -4,13 +4,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, Select, Static, TabbedContent, TextArea
+from textual.widgets import Input, Select, Static, TabbedContent, Tabs, TextArea
 
 from mentor import db, documents, dotenv, workspace
 from mentor.config import Settings, env_values
 from mentor.documents import ProfileDocument
 from mentor.tui.app import DashboardScreen, MentorTop, RadarScreen
-from mentor.tui.setup import SetupScreen
+from mentor.tui.setup import FormModal, SetupScreen
 
 Seed = Callable[[dict | None], None]
 
@@ -329,3 +329,29 @@ async def test_searches_tab_creates_edits_runs_and_deletes(
         assert [s.name for s in workspace.list_searches(conn)] == ["it"]
         conn.close()
         await pilot.press("q")
+
+
+async def test_the_tab_bar_keeps_focus_until_enter_steps_into_the_tab(
+    app_with_pursuit: MentorTop,
+) -> None:
+    app = app_with_pursuit
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        await pilot.press("5")
+        await pilot.press("escape")
+        await pilot.press("right", "right", "right")  # profile, workflow, searches
+        await pilot.pause()
+        tabs = app.screen.query_one("#setup_tabs", TabbedContent)
+        assert tabs.active == "searches" and isinstance(app.focused, Tabs)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.focused is app.screen.query_one("#searches_table")
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        await pilot.press("escape")
+        await pilot.press("escape")
+        await pilot.press("left", "left", "left")
+        await pilot.press("enter")  # connections: the first field
+        await pilot.pause()
+        assert isinstance(app.focused, Input)

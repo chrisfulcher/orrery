@@ -663,6 +663,7 @@ class SetupScreen(Screen):
         Binding("escape", "focus_tabs", "Tabs"),
         Binding("ctrl+s", "save", "Save"),
         Binding("ctrl+t", "test", "Test connection"),
+        Binding("enter", "enter_tab", "Into the tab", show=False),
     ]
 
     def __init__(self, initial: str = "connections") -> None:
@@ -700,10 +701,26 @@ class SetupScreen(Screen):
         )
         banner.set_class(bool(reason), "-visible")
 
+    TABLES = {"workflow": "#stages", "searches": "#searches_table", "jobs": "#operations"}
+    """Tabs whose keys live on a table, which takes focus when the tab is shown."""
+
     def show_tab(self, pane: str) -> None:
         self.query_one("#setup_tabs", TabbedContent).active = pane
-        if pane == "jobs":
-            self.query_one("#operations", WrapTable).focus()
+        self._focus_table(pane)
+
+    def action_enter_tab(self) -> None:
+        """From the tab bar, Enter steps into the active tab: its table, or its first field."""
+        self._focus_table(self.query_one("#setup_tabs", TabbedContent).active)
+
+    def _focus_table(self, pane: str) -> None:
+        selector = self.TABLES.get(pane)
+        if selector is not None:
+            self.query_one(selector, WrapTable).focus()
+            return
+        pane = self.query_one("#setup_tabs", TabbedContent).get_pane(pane)
+        fields = pane.query("Input, TextArea, Select")
+        if fields:
+            fields.first().focus()
 
     def action_focus_tabs(self) -> None:
         self.query_one(Tabs).focus()
