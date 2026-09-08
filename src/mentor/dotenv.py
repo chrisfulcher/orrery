@@ -74,8 +74,15 @@ def _unquote(value: str) -> str:
 
 
 def _replace(path: Path, text: str) -> None:
+    """Write atomically through a temporary file; when the file is a bind mount or its
+    directory is not writable (the container's /app), rewrite it in place instead."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
+    try:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
+    except PermissionError:
+        path.write_text(text, encoding="utf-8")
+        _restrict(path)
+        return
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -85,9 +92,16 @@ def _replace(path: Path, text: str) -> None:
         except OSError as exc:
             if exc.errno not in (errno.EBUSY, errno.EXDEV, errno.EPERM):
                 raise
-            path.write_text(text, encoding="utf-8")  # a bind-mounted file: rewrite in place
+            path.write_text(text, encoding="utf-8")
             Path(tmp).unlink(missing_ok=True)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    os.chmod(path, 0o600)
+    _restrict(path)
+
+
+def _restrict(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except PermissionError:  # another user's file on a mount: the content is written
+        pass

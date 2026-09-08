@@ -733,7 +733,9 @@ class PursuitScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#pursuit_header").border_title = "pursuit"
-        self.query_one("#assessment").border_title = "assessment"
+        self.query_one("#assessment").border_title = (
+            f"assessment · {self._assessing()}" if self._assessing() else "assessment"
+        )
         self.query_one("#tasks").border_title = "tasks"
         self.query_one("#pursuit_notices").border_title = "notices"
         self.query_one("#events").border_title = "decisions and changes"

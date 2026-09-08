@@ -1,6 +1,7 @@
 import errno
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,22 @@ def test_write_falls_back_to_in_place_on_a_busy_mount(
     monkeypatch.setattr(os, "replace", real)
     assert path.read_text() == "MENTOR_NAICS=2\n" and list(tmp_path.glob(".env.*")) == []
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_write_rewrites_in_place_when_the_directory_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The container: /app belongs to root, .env is a bind mount the app user may write."""
+    path = tmp_path / ".env"
+    path.write_text("# kept\nMENTOR_NAICS=1\n")
+
+    def denied(**kwargs: object) -> tuple[int, str]:
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(tempfile, "mkstemp", denied)
+    dotenv.write(path, {"MENTOR_NAICS": "2", "MENTOR_FETCH_DELAY": "0.5"})
+    assert path.read_text() == "# kept\nMENTOR_NAICS=2\n\nMENTOR_FETCH_DELAY=0.5\n"
+    assert list(tmp_path.glob(".env.*")) == []
 
 
 def test_environment_overrides_and_setup_needed(
