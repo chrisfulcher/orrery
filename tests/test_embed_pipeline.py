@@ -98,3 +98,18 @@ def test_model_change_embeds_again(
 
     models = conn.execute("SELECT model, count(*) FROM embeddings GROUP BY model").fetchall()
     assert models == [("nomic-embed-text", 3), ("other-model", 3)]
+
+
+def test_embed_reports_and_cancels_between_sources(
+    conn: sqlite3.Connection, settings: Settings, sources: tuple[str, int], fake_embeddings: list
+) -> None:
+    from mentor.progress import JobCancelled
+
+    notice_id, attachment_id = sources
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        embed_pending(conn, settings, report=lines.append, cancelled=lambda: len(lines) >= 1)
+    assert lines == [f"notice {notice_id}: 1 chunk(s)"]
+    assert conn.execute("SELECT count(*) FROM embeddings").fetchone() == (1,)
+    result = embed_pending(conn, settings)
+    assert (result.notices, result.attachments) == (0, 1)

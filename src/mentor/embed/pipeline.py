@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from mentor.config import Settings
 from mentor.embed.chunks import chunk_text
 from mentor.embed.client import EmbeddingClient, pack
+from mentor.progress import Cancelled, Report, check, never, quiet
 
 PENDING_NOTICES = """
 SELECT n.notice_id, n.description FROM notices AS n
@@ -40,7 +41,12 @@ class EmbedResult:
 
 
 def embed_pending(
-    conn: sqlite3.Connection, settings: Settings, *, limit: int | None = None
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    limit: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> EmbedResult:
     """Chunk and embed pending sources, notices then attachments. ``limit`` caps sources."""
     model = settings.embed_model
@@ -50,13 +56,19 @@ def embed_pending(
             PENDING_NOTICES, {"model": model, "limit": -1 if limit is None else limit}
         ).fetchall()
         for notice_id, text in rows:
-            chunks += _embed_source(conn, client, model, notice_id, None, text)
+            check(cancelled)
+            count = _embed_source(conn, client, model, notice_id, None, text)
+            chunks += count
             notices += 1
+            report(f"notice {notice_id}: {count} chunk(s)")
         remaining = -1 if limit is None else limit - notices
         rows = conn.execute(PENDING_ATTACHMENTS, {"model": model, "limit": remaining}).fetchall()
         for attachment_id, notice_id, text in rows:
-            chunks += _embed_source(conn, client, model, notice_id, attachment_id, text)
+            check(cancelled)
+            count = _embed_source(conn, client, model, notice_id, attachment_id, text)
+            chunks += count
             attachments += 1
+            report(f"attachment {attachment_id}: {count} chunk(s)")
     return EmbedResult(notices, attachments, chunks, model)
 
 

@@ -28,6 +28,7 @@ import httpx
 from mentor import db, runs
 from mentor.config import Settings
 from mentor.ingest.notices import record_alias
+from mentor.progress import Cancelled, Report, check, never, quiet
 from mentor.usaspending.client import UsaspendingClient
 
 SOURCE_ID = "usaspending_awards"
@@ -133,6 +134,7 @@ def fetch_awards(
     until: date,
     http: httpx.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    report: Report = quiet,
 ) -> Path:
     """Request, wait for, and download one slice into ``data_dir/extracts/usaspending``."""
     if not settings.naics:
@@ -141,12 +143,20 @@ def fetch_awards(
         ticket = client.request_awards_download(
             award_filters(settings.naics, since=since, until=until)
         )
-        client.wait_until_ready(ticket)
+        report(f"requested {ticket.file_name}; waiting for USAspending to prepare it")
+        rows = client.wait_until_ready(ticket)
+        report(f"ready: {rows} rows; downloading")
         return client.download(ticket, settings.data_dir / "extracts" / "usaspending")
 
 
 def ingest_awards(
-    conn: sqlite3.Connection, settings: Settings, path: Path, *, limit: int | None = None
+    conn: sqlite3.Connection,
+    settings: Settings,
+    path: Path,
+    *,
+    limit: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> AwardsResult:
     """Stream one award summary file (the zip, or its CSV), writing rows in the NAICS slice in
     batches of ``BATCH``. ``limit`` caps matched rows this run. The run is closed as failed
@@ -169,6 +179,7 @@ def ingest_awards(
         )
         if conn.in_transaction:
             conn.execute("COMMIT")
+        report(f"{matched} awards in slice, {read} rows read")
 
     try:
         csv.field_size_limit(1 << 24)
@@ -196,6 +207,7 @@ def ingest_awards(
                 if in_batch >= BATCH:
                     commit_batch()
                     in_batch = 0
+                    check(cancelled)
                 if limit is not None and matched >= limit:
                     break
         commit_batch()

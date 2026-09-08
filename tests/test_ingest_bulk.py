@@ -301,3 +301,23 @@ def test_fetch_extract_failure_leaves_nothing(httpx_mock: HTTPXMock, tmp_path: P
     with pytest.raises(BulkError, match="HTTP 404"):
         fetch_extract(tmp_path / "extracts", fiscal_year=2025)
     assert not list((tmp_path / "extracts").iterdir())
+
+
+def test_cancel_between_batches_keeps_the_first_and_resumes(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mentor.ingest import bulk as bulk_module
+    from mentor.progress import JobCancelled
+
+    monkeypatch.setattr(bulk_module, "BATCH", 1)
+    path = write(tmp_path, [{}, {}, {}])
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        ingest_bulk(conn, settings, path, report=lines.append, cancelled=lambda: len(lines) >= 1)
+    assert lines == ["1 notices in slice, 1 rows read"]
+    assert conn.execute("SELECT count(*) FROM notices").fetchone() == (1,)
+    (status, error, cursor) = conn.execute(
+        "SELECT status, error, cursor FROM ingestion_runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()
+    assert (status, error) == ("failed", "cancelled") and cursor.endswith(":1")
+    assert ingest_bulk(conn, settings, path).resumed_from == 1

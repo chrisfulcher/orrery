@@ -58,3 +58,20 @@ def test_scanned_pdf_is_done_with_empty_text(
 
     assert extract_pending(conn, settings) == ExtractResult(1, 0, 0)
     assert statuses(conn)[attachment_id] == ("done", "")
+
+
+def test_extract_reports_and_cancels_between_files(
+    conn: sqlite3.Connection, settings: Settings, fetched: Fetched, make_pdf: MakePdf
+) -> None:
+    import pytest
+
+    from mentor.progress import JobCancelled
+
+    fetched("a.pdf", make_pdf(["one"]))
+    fetched("b.pdf", make_pdf(["two"]))
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        extract_pending(conn, settings, report=lines.append, cancelled=lambda: len(lines) >= 1)
+    assert len(lines) == 1 and lines[0].startswith("done: attachments/")
+    assert list(statuses(conn).values()).count(("done", "one")) == 1
+    assert extract_pending(conn, settings) == ExtractResult(done=1, unsupported=0, failed=0)

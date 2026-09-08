@@ -192,3 +192,32 @@ def test_lookup_creates_the_contractor_and_spends_one_request(
     assert conn.execute(
         "SELECT count(*) FROM facts WHERE value LIKE '%Placeholder%'"
     ).fetchone() == (0,)
+
+
+def test_cancel_between_batches_and_lookup_progress(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed_awards: SeedAwards,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,
+) -> None:
+    from mentor.progress import JobCancelled
+
+    seed_awards()
+    monkeypatch.setattr(entities, "BATCH", 1)
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        ingest_extract(
+            conn, settings, EXTRACT_SAMPLE, report=lines.append, cancelled=lambda: len(lines) >= 1
+        )
+    assert lines == ["1 registrants in slice, 1 read"]
+    assert conn.execute("SELECT count(*) FROM entity_registrations").fetchone() == (1,)
+    assert ingest_extract(conn, settings, EXTRACT_SAMPLE).resumed_from == 2  # BOF is line 1
+
+    fixture = json.loads((FIXTURES / "sam_entity_v3.json").read_text())
+    httpx_mock.add_response(url=re.compile(r".*/entity-information/v3/entities.*"), json=fixture)
+    lines = []
+    lookup_entities(conn, settings, [LEIDOS], report=lines.append)
+    assert lines == ["looked up 1 of 1"]
+    with pytest.raises(JobCancelled):
+        lookup_entities(conn, settings, [LEIDOS], cancelled=lambda: True)

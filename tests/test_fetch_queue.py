@@ -274,3 +274,23 @@ def test_saved_search_leads_the_queue(
         "SELECT notice_id FROM attachments WHERE fetch_status = 'fetched'"
     ).fetchone()
     assert fetched == dod
+
+
+def test_fetch_reports_and_cancels_between_items(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, httpx_mock: HTTPXMock
+) -> None:
+    from mentor.progress import JobCancelled
+
+    seed()
+    httpx_mock.add_response(url=NOTICEDESC, json=DESC_BODY, is_reusable=True)
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        fetch_pending(conn, settings, report=lines.append, cancelled=lambda: len(lines) >= 1)
+    assert len(lines) == 1 and lines[0].startswith("description: ")
+    assert conn.execute(
+        "SELECT count(*) FROM notices WHERE description_status = 'fetched'"
+    ).fetchone() == (1,)
+    (status, error) = conn.execute(
+        "SELECT status, error FROM ingestion_runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()
+    assert (status, error) == ("failed", "cancelled")

@@ -15,6 +15,7 @@ from typing import Any
 
 from mentor import db, runs
 from mentor.config import Settings
+from mentor.progress import Cancelled, Report, check, never, quiet
 from mentor.sam.client import SamClient
 from mentor.sam.models import Opportunity
 
@@ -59,7 +60,13 @@ class IngestResult:
 
 
 def ingest_notices(
-    conn: sqlite3.Connection, settings: Settings, *, posted_from: date, posted_to: date
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    posted_from: date,
+    posted_to: date,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> IngestResult:
     """Search every configured NAICS code for the window and upsert what comes back.
 
@@ -75,7 +82,14 @@ def ingest_notices(
     try:
         with SamClient(settings, conn, run_id) as client:
             for naics in settings.naics:
-                for page in client.search_pages(posted_from, posted_to, naics):
+                pages = client.search_pages(posted_from, posted_to, naics)
+                number = 0
+                while True:
+                    check(cancelled)  # before the next keyed request, never after it
+                    page = next(pages, None)
+                    if page is None:
+                        break
+                    number += 1
                     # The keyed request and its api_requests row completed in autocommit
                     # mode before the page was yielded; only the page's writes go here.
                     conn.execute("BEGIN")
@@ -90,6 +104,7 @@ def ingest_notices(
                     except BaseException:
                         conn.execute("ROLLBACK")
                         raise
+                    report(f"{naics}: page {number}, {len(page.opportunities_data)} notices")
     except Exception as exc:
         runs.finish(conn, run_id, status="failed", records_returned=seen, error=str(exc))
         raise

@@ -15,6 +15,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from mentor.config import Settings
+from mentor.progress import Cancelled, Report, check, never, quiet
 
 # pypdf warns at length about odd files; a file it cannot read is recorded as failed.
 logging.getLogger("pypdf").setLevel(logging.ERROR)
@@ -38,13 +39,20 @@ class ExtractResult:
 
 
 def extract_pending(
-    conn: sqlite3.Connection, settings: Settings, *, limit: int | None = None
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    limit: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> ExtractResult:
     """Extract text from every fetched attachment not yet attempted."""
     counts = {"done": 0, "unsupported": 0, "failed": 0}
     rows = conn.execute(PENDING, (-1 if limit is None else limit,)).fetchall()
     for attachment_id, path in rows:
+        check(cancelled)
         status, text = _extract(settings.data_dir / path)
+        report(f"{status}: {path}")
         conn.execute(
             "UPDATE attachments SET extracted_text = ?, extract_status = ? WHERE attachment_id = ?",
             (text, status, attachment_id),

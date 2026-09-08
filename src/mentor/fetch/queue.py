@@ -19,6 +19,7 @@ from html.parser import HTMLParser
 
 from mentor import db, query, runs
 from mentor.config import Settings
+from mentor.progress import Cancelled, Report, check, never, quiet
 from mentor.quota import BudgetExceeded
 from mentor.sam.client import AttachmentTooLarge, SamClient, SamError
 
@@ -110,6 +111,8 @@ def fetch_pending(
     *,
     budget: int | None = None,
     max_attachments: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> FetchResult:
     """Descriptions first (keyed, budgeted), then attachments (public, delayed).
 
@@ -124,11 +127,12 @@ def fetch_pending(
     try:
         with SamClient(settings, conn, run_id) as client:
             d_fetched, d_failed, exhausted = _fetch_descriptions(
-                conn, client, -1 if budget is None else budget
+                conn, client, -1 if budget is None else budget, report, cancelled
             )
             a_fetched, a_failed, a_skipped = _fetch_attachments(
-                conn, client, settings, run_id, -1 if max_attachments is None else max_attachments
-            )
+                conn, client, settings, run_id, -1 if max_attachments is None else max_attachments,
+                report, cancelled,
+            )  # fmt: skip
     except Exception as exc:
         processed = d_fetched + d_failed + a_fetched + a_failed + a_skipped
         runs.finish(conn, run_id, status="failed", records_returned=processed, error=str(exc))
@@ -144,12 +148,17 @@ def fetch_pending(
 
 
 def _fetch_descriptions(
-    conn: sqlite3.Connection, client: SamClient, limit: int
+    conn: sqlite3.Connection,
+    client: SamClient,
+    limit: int,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> tuple[int, int, bool]:
     """Returns (fetched, failed, budget_exhausted)."""
     fetched = failed = 0
     rows = _pending(conn, PENDING_DESCRIPTIONS, limit)
-    for notice_id, url, _deadline, _title in rows:
+    for notice_id, url, _deadline, title in rows:
+        check(cancelled)
         try:
             text = _html_to_text(client.get_description(url, notice_id=notice_id) or "")
         except BudgetExceeded:
@@ -167,16 +176,24 @@ def _fetch_descriptions(
             (text, notice_id),
         )
         fetched += 1
+        report(f"description: {title}")
     return fetched, failed, False
 
 
 def _fetch_attachments(
-    conn: sqlite3.Connection, client: SamClient, settings: Settings, run_id: int, limit: int
+    conn: sqlite3.Connection,
+    client: SamClient,
+    settings: Settings,
+    run_id: int,
+    limit: int,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> tuple[int, int, int]:
     """Returns (fetched, failed, skipped). Pauses ``settings.fetch_delay`` between downloads."""
     fetched = failed = skipped = 0
     rows = _pending(conn, PENDING_ATTACHMENTS, limit)
     for index, (attachment_id, notice_id, url) in enumerate(rows):
+        check(cancelled)
         if index:
             time.sleep(settings.fetch_delay)
         try:
@@ -206,6 +223,7 @@ def _fetch_attachments(
             ),
         )
         fetched += 1
+        report(f"attachment: {result.filename}")
     return fetched, failed, skipped
 
 

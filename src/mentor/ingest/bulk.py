@@ -23,6 +23,7 @@ import httpx
 from mentor import __version__, db, runs
 from mentor.config import Settings
 from mentor.ingest.notices import _deadline_utc, resolve_agency_segments
+from mentor.progress import Cancelled, Report, check, never, quiet
 
 SOURCE_ID = "sam_bulk_csv"
 BATCH = 1000  # matched rows per transaction
@@ -111,7 +112,11 @@ def archive_name(fiscal_year: int) -> str:
 
 
 def fetch_extract(
-    dest_dir: Path, *, fiscal_year: int | None = None, http: httpx.Client | None = None
+    dest_dir: Path,
+    *,
+    fiscal_year: int | None = None,
+    http: httpx.Client | None = None,
+    report: Report = quiet,
 ) -> Path:
     """Download the active extract (or one fiscal year's archive) into ``dest_dir`` unless a
     copy downloaded today (UTC) is already there. Streams to a .part file, then renames.
@@ -135,8 +140,13 @@ def fetch_extract(
         ):
             if not response.is_success:
                 raise BulkError(f"{url}: HTTP {response.status_code}")
+            report(f"downloading {dest.name}")
+            received = 0
             for chunk in response.iter_bytes():
                 out.write(chunk)
+                received += len(chunk)
+                if received % (1 << 24) < len(chunk):
+                    report(f"{received >> 20} MB")
     except BaseException as exc:
         tmp.unlink(missing_ok=True)
         if isinstance(exc, httpx.HTTPError):
@@ -156,6 +166,8 @@ def ingest_bulk(
     *,
     mark_inactive: bool = False,
     limit: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> BulkResult:
     """Stream one extract, writing rows in the NAICS slice in batches of ``BATCH``.
 
@@ -181,6 +193,7 @@ def ingest_bulk(
         )
         if conn.in_transaction:
             conn.execute("COMMIT")
+        report(f"{matched} notices in slice, {read} rows read")
 
     try:
         csv.field_size_limit(1 << 24)
@@ -207,6 +220,7 @@ def ingest_bulk(
                 if in_batch >= BATCH:
                     commit_batch()
                     in_batch = 0
+                    check(cancelled)
                 if limit is not None and matched >= limit:
                     complete = False
                     break

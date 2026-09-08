@@ -266,3 +266,18 @@ def test_fetch_awards_requests_waits_and_downloads(
         "award_type_codes": ["A", "B", "C", "D"],
         "naics_codes": {"require": ["541512"]},
     }
+
+
+def test_cancel_between_batches_keeps_committed_awards(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mentor.progress import JobCancelled
+
+    monkeypatch.setattr(awards, "BATCH", 1)
+    path = write(tmp_path, [{"award_id_piid": "A"}, {"award_id_piid": "B"}])
+    lines: list[str] = []
+    with pytest.raises(JobCancelled):
+        ingest_awards(conn, settings, path, report=lines.append, cancelled=lambda: len(lines) >= 1)
+    assert lines == ["1 awards in slice, 1 rows read"]
+    assert [p for (p,) in conn.execute("SELECT piid FROM contracts")] == ["A"]
+    assert ingest_awards(conn, settings, path).resumed_from == 1

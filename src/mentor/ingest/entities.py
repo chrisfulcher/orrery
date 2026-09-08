@@ -27,6 +27,7 @@ from mentor import db, runs, workspace
 from mentor.config import Settings
 from mentor.ingest.awards import resolve_contractor
 from mentor.ingest.notices import record_alias
+from mentor.progress import Cancelled, Report, check, never, quiet
 from mentor.sam.client import ENTITIES_PER_REQUEST, SamClient
 
 SOURCE_ID = "sam_entities"
@@ -203,9 +204,12 @@ def wanted_ueis(conn: sqlite3.Connection) -> set[str]:
     return ueis
 
 
-def fetch_extract(conn: sqlite3.Connection, settings: Settings, dest_dir: Path) -> Path:
+def fetch_extract(
+    conn: sqlite3.Connection, settings: Settings, dest_dir: Path, *, report: Report = quiet
+) -> Path:
     """Download the monthly extract under its own run: one keyed request."""
     run_id = runs.start(conn, SOURCE_ID)
+    report("downloading the SAM.gov public monthly entity extract (one keyed request)")
     try:
         with SamClient(settings, conn, run_id) as sam:
             path = sam.download_entity_extract(dest_dir)
@@ -222,7 +226,13 @@ def newest_extract(dest_dir: Path) -> Path | None:
 
 
 def ingest_extract(
-    conn: sqlite3.Connection, settings: Settings, path: Path, *, limit: int | None = None
+    conn: sqlite3.Connection,
+    settings: Settings,
+    path: Path,
+    *,
+    limit: int | None = None,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> EntitiesResult:
     """Stream one extract, keeping the slice, in batches of ``BATCH`` records. Resumable
     through the run cursor, as the bulk adapter is."""
@@ -242,6 +252,7 @@ def ingest_extract(
         )
         if conn.in_transaction:
             conn.execute("COMMIT")
+        report(f"{matched} registrants in slice, {read} read")
 
     try:
         with _open_extract(path) as handle:
@@ -267,6 +278,7 @@ def ingest_extract(
                 if in_batch >= BATCH:
                     commit_batch()
                     in_batch = 0
+                    check(cancelled)
                 if limit is not None and matched >= limit:
                     break
         commit_batch()
@@ -282,7 +294,12 @@ def ingest_extract(
 
 
 def lookup_entities(
-    conn: sqlite3.Connection, settings: Settings, ueis: Iterable[str]
+    conn: sqlite3.Connection,
+    settings: Settings,
+    ueis: Iterable[str],
+    *,
+    report: Report = quiet,
+    cancelled: Cancelled = never,
 ) -> EntitiesResult:
     """Fetch and apply the registrations of specific UEIs, ten per keyed request."""
     ueis = sorted({uei.strip().upper() for uei in ueis if uei.strip()})
@@ -292,7 +309,9 @@ def lookup_entities(
     try:
         with SamClient(settings, conn, run_id) as sam:
             for start in range(0, len(ueis), ENTITIES_PER_REQUEST):
+                check(cancelled)
                 body = sam.get_entities(ueis[start : start + ENTITIES_PER_REQUEST])
+                report(f"looked up {min(start + ENTITIES_PER_REQUEST, len(ueis))} of {len(ueis)}")
                 conn.execute("BEGIN")
                 for entity in body.get("entityData") or []:
                     registration = parse_api_record(entity)

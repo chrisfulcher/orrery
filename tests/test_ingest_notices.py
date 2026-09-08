@@ -185,3 +185,33 @@ def test_empty_naics_is_refused(conn: sqlite3.Connection, settings: Settings) ->
 )
 def test_deadline_utc(value: str | None, expected: str | None) -> None:
     assert _deadline_utc(value) == expected
+
+
+def test_progress_lines_and_cancellation(
+    conn: sqlite3.Connection, settings: Settings, httpx_mock: HTTPXMock
+) -> None:
+    from mentor.progress import JobCancelled
+
+    httpx_mock.add_response(
+        url=re.compile(r".*/opportunities/v2/search.*"), json=FIXTURE, is_reusable=True
+    )
+    lines: list[str] = []
+    ingest_notices(
+        conn,
+        settings,
+        posted_from=date(2026, 9, 5),
+        posted_to=date(2026, 9, 6),
+        report=lines.append,
+    )
+    assert lines == ["541512: page 1, 5 notices"]
+
+    with pytest.raises(JobCancelled):
+        ingest_notices(
+            conn, settings, posted_from=date(2026, 9, 5), posted_to=date(2026, 9, 6),
+            cancelled=lambda: True,
+        )  # fmt: skip
+    (status, error) = conn.execute(
+        "SELECT status, error FROM ingestion_runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()
+    assert (status, error) == ("failed", "cancelled")
+    assert len(httpx_mock.get_requests()) == 1  # nothing was spent by the cancelled run
