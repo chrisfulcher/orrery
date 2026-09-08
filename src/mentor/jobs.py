@@ -298,6 +298,71 @@ def _run_reindex(conn, settings, values, report, cancelled) -> object:
     return None
 
 
+# Connection probes: the cheapest request that proves a setting works.
+
+
+def _probe_sam(conn, settings, values, report, cancelled) -> object:
+    from datetime import timedelta
+
+    from mentor import runs
+    from mentor.sam.client import SamClient
+
+    today = datetime.now(UTC).date()
+    run_id = runs.start(conn, "sam_opportunities_api")
+    try:
+        with SamClient(settings, conn, run_id) as client:
+            page = next(
+                client.search_pages(today - timedelta(days=1), today, settings.naics[0], limit=1),
+                None,
+            )
+    except Exception as exc:
+        runs.finish(conn, run_id, status="failed", error=str(exc))
+        raise
+    runs.finish(conn, run_id, status="succeeded", records_returned=0)
+    total = page.total_records if page else 0
+    return (
+        f"SAM.gov ok · {total} notices posted yesterday for {settings.naics[0]} · 1 request spent"
+    )
+
+
+def _probe_embed(conn, settings, values, report, cancelled) -> object:
+    from mentor.embed.client import EmbeddingClient
+
+    with EmbeddingClient(settings) as client:
+        [vector] = client.embed(["mentor"])
+    return f"embeddings ok · {settings.embed_model} · {len(vector)} dimensions"
+
+
+def _probe_slot(name: str) -> Runner:
+    def run(conn, settings, values, report, cancelled) -> object:
+        from mentor import ai
+
+        slot = ai.resolve_slot(settings, name)
+        backend = ai.backend_for(slot)
+        try:
+            completion = backend.complete(
+                system="Answer with one JSON object.",
+                user='Return {"ok": true}.',
+                schema={
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                max_tokens=64,
+            )
+        finally:
+            backend.close()
+        tokens = (
+            f"{completion.input_tokens} in / {completion.output_tokens} out"
+            if completion.input_tokens is not None
+            else "tokens unknown"
+        )
+        return f"{slot.name} ok · {slot.provider} {slot.model} · {tokens}"
+
+    return run
+
+
 JOBS: dict[str, Job] = {
     job.name: job
     for job in (
@@ -348,8 +413,16 @@ JOBS: dict[str, Job] = {
         ),
         Job("db-migrate", "Apply schema migrations", frozenset(), (), False, _run_migrate),
         Job("db-reindex", "Rebuild the search indexes", frozenset(), (), False, _run_reindex),
+        Job("probe-sam", "Test the SAM.gov key (one request)", frozenset({"sam_key", "naics"}),
+            (), False, _probe_sam),
+        Job("probe-embed", "Test the embeddings endpoint", frozenset(), (), False, _probe_embed),
+        Job("probe-fast", "Test the fast model", frozenset(), (), False, _probe_slot("fast")),
+        Job("probe-deep", "Test the deep model", frozenset(), (), False, _probe_slot("deep")),
     )
 }  # fmt: skip
+
+OPERATIONS = tuple(name for name in JOBS if not name.startswith("probe-"))
+"""The jobs the Jobs tab lists; probes run from the Connections tab."""
 
 
 def summarize(job: Job, result: object) -> str:
@@ -409,4 +482,6 @@ def summarize(job: Job, result: object) -> str:
             return "up to date" if not r else "\n".join(f"applied {name}" for name in r)
         case "db-reindex":
             return "search index rebuilt"
+        case name if name.startswith("probe-"):
+            return str(r)
     return str(r)

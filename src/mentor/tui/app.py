@@ -8,19 +8,24 @@ milliseconds, so nothing runs off the event loop.
 """
 
 import webbrowser
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
+from contextlib import closing
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Sparkline, Static
+from textual.worker import Worker, WorkerState, get_current_worker
 
-from mentor import assess, db, query, quota, workspace
+from mentor import assess, db, jobs, query, quota, workspace
 from mentor.config import Settings, setup_needed
 from mentor.fetch import queue
+from mentor.progress import JobCancelled
 from mentor.tui.setup import SetupScreen
 from mentor.tui.widgets import Row, WrapTable
 
@@ -132,6 +137,9 @@ class DashboardScreen(Screen):
     def on_screen_resume(self) -> None:
         self.refresh_panels()
 
+    def refresh_jobs(self) -> None:
+        self.refresh_panels()
+
     def refresh_panels(self) -> None:
         app = self.app
         conn, settings = app.conn, app.settings
@@ -143,9 +151,11 @@ class DashboardScreen(Screen):
             float(n) for _, n in query.quota_history(conn, days=30)
         ]
         status = queue.queue_status(conn)
+        self.query_one("#queues").border_title = "queues · jobs (j)"
         self.query_one("#queues", Static).update(
             f"{status.descriptions_pending} descriptions pending\n"
-            f"{status.attachments_pending} attachments pending"
+            f"{status.attachments_pending} attachments pending\n"
+            + "\n".join(app.job_status_lines())
         )
         counts = query.counts(conn)
         self.query_one("#activity_text", Static).update(
@@ -704,6 +714,7 @@ class PursuitScreen(Screen):
         Binding("a", "office", "Office"),
         Binding("i", "incumbent", "Incumbent"),
         Binding("x", "accept_tasks", "Accept suggested tasks"),
+        Binding("s", "assess", "Assess"),
         Binding("escape", "app.pop_screen", "Back"),
     ]
 
@@ -778,7 +789,7 @@ class PursuitScreen(Screen):
         self.query_one("#assessment", Static).update(
             "\n".join(assess.describe(detail.assessment))
             if detail.assessment
-            else f"none yet: run `mentor pursuit assess {p.pursuit_id}` (x accepts suggested tasks)"
+            else self._assessing() or "none yet: s to assess (x accepts suggested tasks)"
         )
         self.query_one("#events", WrapTable).set_rows(
             [
@@ -934,6 +945,25 @@ class PursuitScreen(Screen):
         if self.detail and self.detail.incumbent and self.detail.incumbent.vendor_entity_id:
             self.app.push_screen(EntityScreen(self.detail.incumbent.vendor_entity_id))
 
+    def _assessing(self) -> str | None:
+        run = self.app.current
+        if (
+            run
+            and run.finished_at is None
+            and run.job.name == "assess"
+            and int(run.params.get("pursuit_id", 0)) == self.pursuit_id
+        ):
+            return f"assessing with the {run.params.get('slot', 'deep')} model… (j for the log)"
+        return None
+
+    def refresh_jobs(self) -> None:
+        self.load()
+
+    def action_assess(self) -> None:
+        self.app.run_job(
+            "assess", {"pursuit_id": self.pursuit_id, "slot": "deep"}, on_done=self.load
+        )
+
     def action_accept_tasks(self) -> None:
         if not self.detail or not self.detail.assessment:
             self.notify("no assessment yet", severity="warning")
@@ -1009,6 +1039,31 @@ class EntityScreen(Screen):
                 self.app.push_screen(EntityScreen(other))
 
 
+@dataclass
+class JobRun:
+    """One job as the app runs it: its lines, its worker, and how it ended."""
+
+    job: jobs.Job
+    params: dict
+    started_at: str
+    lines: deque[str] = field(default_factory=lambda: deque(maxlen=2000))
+    worker: Worker | None = None
+    result: object = None
+    error: str | None = None
+    finished_at: str | None = None
+    on_done: Callable[[], None] | None = None
+
+    @property
+    def state(self) -> str:
+        if self.finished_at is None:
+            return "cancelling" if self.worker and self.worker.is_cancelled else "running"
+        return self.error or "done"
+
+    @property
+    def last_line(self) -> str:
+        return self.lines[-1] if self.lines else ""
+
+
 class MentorTop(App):
     TITLE = "mentor"
     CSS_PATH = "top.tcss"
@@ -1025,6 +1080,7 @@ class MentorTop(App):
         Binding("3", "switch_mode('pursuits')", "Pursuits"),
         Binding("4", "switch_mode('radar')", "Radar"),
         Binding("5", "switch_mode('setup')", "Setup"),
+        Binding("j", "jobs", "Jobs", show=False),
         Binding("slash", "search", "Search"),
         Binding("q", "quit", "Quit"),
     ]
@@ -1035,6 +1091,8 @@ class MentorTop(App):
         self.env_path = env_path
         """Where the Connections tab writes settings; None means session-only."""
         self.conn = None
+        self.current: JobRun | None = None
+        self.history: list[JobRun] = []
 
     def on_mount(self) -> None:
         self.theme = "ansi-dark"  # the terminal's own palette
@@ -1043,6 +1101,114 @@ class MentorTop(App):
         if applied:
             self.notify(f"applied {len(applied)} migration(s)")
         self.switch_mode("setup" if setup_needed(self.settings, self.env_path) else "dashboard")
+
+    async def action_jobs(self) -> None:
+        await self.switch_mode("setup")
+        if isinstance(self.screen, SetupScreen):
+            self.screen.show_tab("jobs")
+
+    def run_job(
+        self, name: str, params: dict, *, on_done: Callable[[], None] | None = None
+    ) -> bool:
+        """Start a job in a thread on its own connection; one at a time."""
+        if self.current is not None and self.current.finished_at is None:
+            self.notify(f"{self.current.job.label} is still running", severity="warning")
+            return False
+        job = jobs.JOBS[name]
+        unmet = jobs.needs_unmet(job, self.settings, params)
+        if unmet:
+            self.notify("; ".join(unmet), severity="error")
+            self.run_worker(self._open_connections(), exclusive=False)
+            return False
+        try:
+            jobs.coerce(job, params)
+        except jobs.JobFailed as exc:
+            self.notify(str(exc), severity="error")
+            return False
+        run = JobRun(job, params, db.utcnow(), on_done=on_done)
+        self.current = run
+        run.worker = self._job_worker(run)
+        self.refresh_job_views()
+        return True
+
+    async def _open_connections(self) -> None:
+        await self.switch_mode("setup")
+        if isinstance(self.screen, SetupScreen):
+            self.screen.show_tab("connections")
+
+    @work(thread=True, exit_on_error=False, group="jobs")
+    def _job_worker(self, run: JobRun) -> object:
+        worker = get_current_worker()
+        settings = self.settings
+        with closing(db.connect(settings.db_path)) as conn:
+            return jobs.run(
+                run.job, conn, settings, run.params,
+                report=lambda message: self.call_from_thread(self._job_line, run, message),
+                cancelled=lambda: worker.is_cancelled,
+            )  # fmt: skip
+
+    def _job_line(self, run: JobRun, message: str) -> None:
+        run.lines.append(message)
+        self.refresh_job_views()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        run = self.current
+        if event.worker.group != "jobs" or run is None or event.worker is not run.worker:
+            return
+        if event.state == WorkerState.SUCCESS:
+            run.result = event.worker.result
+            run.lines.append(jobs.summarize(run.job, run.result))
+            self.notify(f"{run.job.label}: done")
+        elif event.state == WorkerState.ERROR:
+            error = event.worker.error
+            run.error = "cancelled" if isinstance(error, JobCancelled) else str(error)
+            run.lines.append(run.error)
+            self.notify(f"{run.job.label}: {run.error}", severity="error")
+        elif event.state == WorkerState.CANCELLED:
+            run.error = "cancelled"
+            run.lines.append("cancelled")
+        else:
+            return
+        run.finished_at = db.utcnow()
+        self.history.append(run)
+        del self.history[:-10]
+        self.refresh_job_views()
+        if run.on_done is not None:
+            run.on_done()
+
+    def action_cancel_job(self) -> None:
+        run = self.current
+        if run is None or run.finished_at is not None or run.worker is None:
+            return
+        if not run.job.cancellable:
+            self.notify(f"{run.job.label} cannot be cancelled", severity="warning")
+            return
+        run.worker.cancel()
+        run.lines.append("cancelling after the current item")
+        self.refresh_job_views()
+
+    def refresh_job_views(self) -> None:
+        """Tell whatever is on screen that job state changed."""
+        screen = self.screen
+        refresh = getattr(screen, "refresh_jobs", None)
+        if refresh is not None:
+            refresh()
+
+    def job_status_lines(self) -> list[str]:
+        """Two lines for the dashboard: what is running, and the last result."""
+        current = self.current
+        running = (
+            f"running: {current.job.label} · {current.last_line or 'starting'}"
+            if current and current.finished_at is None
+            else "idle"
+        )
+        last = next((r for r in reversed(self.history)), None)
+        return [
+            running,
+            f"last: {last.job.label} · {last.last_line[:60]} ({last.finished_at[11:16]})"
+            if last
+            else "last: none this session",
+        ]
 
     async def show_hits(self, hits: list[query.SearchHit], title: str) -> None:
         """Switch to the opportunities table with these hits (a saved search's results)."""

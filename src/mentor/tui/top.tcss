@@ -133,3 +133,11 @@ FormModal, ConfirmModal {
 #stages, #searches {
     height: 1fr;
 }
+#operations {
+    height: 1fr;
+}
+#job_log {
+    height: 12;
+    border: round $primary;
+    padding: 0 1;
+}

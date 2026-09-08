@@ -13,16 +13,28 @@ from mentor.ingest.awards import AwardsResult
 from mentor.ingest.bulk import BulkResult
 from mentor.ingest.entities import EntitiesResult
 from mentor.ingest.notices import IngestResult
-from mentor.jobs import JOBS, JobFailed, coerce, default_window, needs_unmet, summarize
+from mentor.jobs import (
+    JOBS,
+    OPERATIONS,
+    JobFailed,
+    coerce,
+    default_window,
+    needs_unmet,
+    summarize,
+)
 from mentor.progress import JobCancelled
 from mentor.sam.client import SamError
 
 
 def test_registry_lists_the_operations_with_their_needs() -> None:
-    assert list(JOBS) == [
+    assert list(OPERATIONS) == [
         "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities", "fetch",
         "extract", "embed", "assess", "db-migrate", "db-reindex",
     ]  # fmt: skip
+    assert [n for n in JOBS if n not in OPERATIONS] == [
+        "probe-sam", "probe-embed", "probe-fast", "probe-deep"
+    ]  # fmt: skip
+    assert JOBS["probe-sam"].needs == {"sam_key", "naics"} and not JOBS["probe-sam"].cancellable
     assert JOBS["ingest-notices"].needs == {"sam_key", "naics"}
     assert JOBS["fetch"].needs == {"sam_key"} and JOBS["ingest-awards"].needs == {"naics"}
     assert not JOBS["assess"].cancellable and JOBS["fetch"].cancellable

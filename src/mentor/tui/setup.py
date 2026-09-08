@@ -8,9 +8,19 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Label, ListItem, ListView, Static, TabbedContent, TabPane, Tabs
+from textual.widgets import (
+    Footer,
+    Label,
+    ListItem,
+    ListView,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+    Tabs,
+)
 
-from mentor import documents, dotenv, workspace
+from mentor import documents, dotenv, jobs, query, workspace
 from mentor.config import Settings, env_key, env_values, environment_overrides, setup_needed
 from mentor.documents import ProfileDocument, SearchDocument, StageSpec, WorkflowDocument
 from mentor.tui.forms import FieldSpec, Form, FormError, flatten, unflatten
@@ -517,10 +527,142 @@ class SearchesTab(Vertical):
         self.app.run_worker(self.app.show_hits(hits, f"saved search {name}"), exclusive=False)
 
 
+JOB_SOURCES = {
+    "ingest-notices": "sam_opportunities_api",
+    "ingest-bulk": "sam_bulk_csv",
+    "ingest-awards": "usaspending_awards",
+    "ingest-entities": "sam_entities",
+    "fetch": "sam_opportunities_api",
+}
+
+
+def param_fields(job: jobs.Job) -> list[FieldSpec]:
+    fields = []
+    for param in job.params:
+        kind = {"date": "text", "int": "int", "str": "text", "csv": "csv", "choice": "select",
+                "bool": "select"}[param.kind]  # fmt: skip
+        options = tuple((c, c) for c in param.choices)
+        if param.kind == "bool":
+            options = (("yes", "yes"), ("no", "no"))
+        fields.append(
+            FieldSpec(
+                param.name,
+                param.label,
+                kind,
+                empty=None,
+                options=options,
+                help=param.help + (" (required)" if param.required else ""),
+            )  # fmt: skip
+        )
+    return fields
+
+
+class JobsTab(Vertical):
+    BINDINGS = [
+        Binding("r", "run", "Run"),
+        Binding("enter", "run", "Run", show=False),
+        Binding("c", "cancel", "Cancel"),
+        Binding("l", "focus_log", "Log"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield WrapTable(
+            [("operation", 34), ("needs", 22), ("last run", 22), ("status", None)],
+            id="operations",
+            classes="panel",
+            cursor_type="row",
+        )
+        yield RichLog(id="job_log", classes="panel", wrap=True, markup=False, max_lines=2000)
+
+    def on_mount(self) -> None:
+        self.shown = 0
+        self.refresh_jobs()
+        self.set_interval(1.0, self.refresh_jobs)
+
+    def refresh_jobs(self) -> None:
+        app = self.app
+        last_runs = query.last_runs(app.conn)
+        current = app.current
+        rows = []
+        for name in jobs.OPERATIONS:
+            job = jobs.JOBS[name]
+            needs = ", ".join(sorted(job.needs)) or "-"
+            ref = last_runs.get(JOB_SOURCES.get(name, ""))
+            last = f"{ref.started_at[:16]} {ref.status}" if ref else "-"
+            status = ""
+            if current and current.job.name == name:
+                status = (
+                    f"{current.state}: {current.last_line}" if current.last_line else current.state
+                )
+            else:
+                done = next((r for r in reversed(app.history) if r.job.name == name), None)
+                if done:
+                    status = f"{done.state}: {done.last_line}"
+            rows.append(((job.label, needs, last, status), name))
+        table = self.query_one("#operations", WrapTable)
+        table.border_title = (
+            f"operations · {current.job.label} {current.state}"
+            if current and current.finished_at is None
+            else "operations · idle · r runs the selected one"
+        )
+        table.set_rows(rows)
+        log = self.query_one("#job_log", RichLog)
+        if current is None:
+            log.border_title = "log"
+            return
+        log.border_title = f"log · {current.job.label} · {current.state}"
+        if getattr(self, "logged_run", None) is not current:
+            log.clear()
+            self.logged_run = current
+            self.shown = 0
+        for line in list(current.lines)[self.shown :]:
+            log.write(line)
+        self.shown = len(current.lines)
+
+    def _selected(self) -> str | None:
+        table = self.query_one("#operations", WrapTable)
+        if not table.row_count:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+    def action_run(self) -> None:
+        name = self._selected()
+        if name is None:
+            return
+        job = jobs.JOBS[name]
+        if not job.params:
+            self.app.run_job(name, {})
+            return
+        defaults = {p.name: p.default for p in job.params if p.default is not None}
+        self.app.push_screen(
+            FormModal(
+                job.label, param_fields(job), defaults, lambda values: jobs.coerce(job, values)
+            ),
+            lambda values: values is not None and self.app.run_job(name, values),
+        )
+
+    def action_cancel(self) -> None:
+        self.app.action_cancel_job()
+
+    def action_focus_log(self) -> None:
+        self.query_one("#job_log", RichLog).focus()
+
+
+PROBE_BY_PREFIX = (
+    ("sam_", "probe-sam"),
+    ("naics", "probe-sam"),
+    ("embed_", "probe-embed"),
+    ("ai_fast_", "probe-fast"),
+    ("ai_deep_", "probe-deep"),
+    ("ai_timeout", "probe-deep"),
+)
+
+
 class SetupScreen(Screen):
     BINDINGS = [
         Binding("escape", "focus_tabs", "Tabs"),
         Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+t", "test", "Test connection"),
     ]
 
     def __init__(self, initial: str = "connections") -> None:
@@ -539,7 +681,7 @@ class SetupScreen(Screen):
             with TabPane("Searches", id="searches"):
                 yield SearchesTab(id="searches_tab")
             with TabPane("Jobs", id="jobs"):
-                yield Static("jobs arrive soon", classes="placeholder")
+                yield JobsTab(id="jobs_tab")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -560,9 +702,45 @@ class SetupScreen(Screen):
 
     def show_tab(self, pane: str) -> None:
         self.query_one("#setup_tabs", TabbedContent).active = pane
+        if pane == "jobs":
+            self.query_one("#operations", WrapTable).focus()
 
     def action_focus_tabs(self) -> None:
         self.query_one(Tabs).focus()
+
+    def refresh_jobs(self) -> None:
+        try:
+            self.query_one("#jobs_tab", JobsTab).refresh_jobs()
+        except Exception:  # the tab is not mounted yet
+            return
+
+    def action_test(self) -> None:
+        """Probe the service the focused Connections field belongs to."""
+        if self.query_one("#setup_tabs", TabbedContent).active != "connections":
+            self.notify("tests run from the Connections tab", severity="warning")
+            return
+        focused = self.app.focused
+        key = (focused.id or "").removeprefix("field-").replace("-", "_") if focused else ""
+        probe = next((name for prefix, name in PROBE_BY_PREFIX if key.startswith(prefix)), None)
+        if probe is None:
+            self.notify("put the cursor in a SAM.gov, embeddings, or model field first")
+            return
+        status = self.query_one("#connections_status", Static)
+
+        def done() -> None:
+            run = self.app.history[-1] if self.app.history else None
+            if run is not None:
+                status.update(run.last_line)
+
+        if probe == "probe-sam":
+            self.app.push_screen(
+                ConfirmModal(
+                    "test the SAM.gov key? This spends one of today's requests.", verb="test"
+                ),
+                lambda yes: yes and self.app.run_job(probe, {}, on_done=done),
+            )
+        else:
+            self.app.run_job(probe, {}, on_done=done)
 
     def action_save(self) -> None:
         active = self.query_one("#setup_tabs", TabbedContent).active

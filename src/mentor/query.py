@@ -603,6 +603,28 @@ def attachment_text(conn: sqlite3.Connection, attachment_id: int) -> str | None:
     return row[0] if row else None
 
 
+@dataclass(frozen=True)
+class RunRef:
+    run_id: int
+    source_id: str
+    started_at: str
+    finished_at: str | None
+    status: str
+    records_returned: int | None
+    requests_spent: int
+    error: str | None
+
+
+def last_runs(conn: sqlite3.Connection) -> dict[str, RunRef]:
+    """The latest ingestion run per source."""
+    rows = conn.execute(
+        "SELECT run_id, source_id, started_at, finished_at, status, records_returned,"
+        " requests_spent, error FROM ingestion_runs WHERE run_id IN"
+        " (SELECT max(run_id) FROM ingestion_runs GROUP BY source_id)"
+    ).fetchall()
+    return {row[1]: RunRef(*row) for row in rows}
+
+
 def office_for_code(conn: sqlite3.Connection, code: str) -> EntityRef | None:
     """The office entity whose agency path ends with this code: one candidate, or the
     deepest of twins sharing the same department and sub-tier; otherwise None."""
