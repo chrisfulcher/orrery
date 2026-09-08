@@ -42,7 +42,7 @@ The sign-off adds a `Signed-off-by:` line with your name and email and certifies
 
 ## Security
 
-Do not open a public issue for a vulnerability. Once the repository is public, report it through the hosting platform's private security advisory; this section will name the exact process at that time.
+Do not open a public issue for a vulnerability. Report it privately through GitHub's security advisories: [Report a vulnerability](https://github.com/qwertybaba/mentor/security/advisories/new), which only the maintainer can read. You will get an acknowledgement, a fix or a reasoned response, and credit in the advisory if you want it.
 
 ## License
 

@@ -29,6 +29,11 @@ dev = [
     "ruff>=0.5",
 ]
 
+[project.urls]
+Repository = "https://github.com/qwertybaba/mentor"
+Issues = "https://github.com/qwertybaba/mentor/issues"
+Design = "https://github.com/qwertybaba/mentor/blob/main/docs/DESIGN.md"
+
 [project.scripts]
 mentor = "mentor.cli:app"
 
