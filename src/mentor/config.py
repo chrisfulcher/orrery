@@ -7,6 +7,7 @@ Unknown keys in ``.env`` are ignored so that a file written for a newer version 
 breaks an older one.
 """
 
+import os
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -99,3 +100,43 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "mentor.sqlite"
+
+
+def env_key(field: str) -> str:
+    """``sam_api_key`` -> ``MENTOR_SAM_API_KEY``."""
+    return "MENTOR_" + field.upper()
+
+
+def env_values(settings: Settings) -> dict[str, str]:
+    """Every field as the string ``.env`` would hold: lists comma-joined, secrets revealed,
+    None as empty. Only for writing the file; never log the result."""
+    values: dict[str, str] = {}
+    for field in Settings.model_fields:
+        value = getattr(settings, field)
+        if value is None:
+            text = ""
+        elif isinstance(value, SecretStr):
+            text = value.get_secret_value()
+        elif isinstance(value, list):
+            text = ",".join(str(v) for v in value)
+        else:
+            text = str(value)
+        values[env_key(field)] = text
+    return values
+
+
+def environment_overrides() -> set[str]:
+    """Fields whose ``MENTOR_*`` variable is set and non-empty in the process environment:
+    those win over ``.env`` and cannot be changed by writing the file."""
+    return {field for field in Settings.model_fields if os.environ.get(env_key(field), "")}
+
+
+def setup_needed(settings: Settings, env_path: Path | None) -> str | None:
+    """Why first-run setup is needed, or None when the essentials are in place."""
+    if settings.sam_api_key is None:
+        return f"{env_key('sam_api_key')} is not set"
+    if not settings.naics:
+        return f"{env_key('naics')} is empty"
+    if env_path is not None and not env_path.is_file() and not environment_overrides():
+        return f"{env_path} not found"
+    return None
