@@ -1,6 +1,8 @@
 import sqlite3
 from collections.abc import Callable
 
+import pytest
+
 from mentor.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
@@ -15,6 +17,11 @@ V1_COLUMNS = {
         "agency", "description_status", "description", "url", "attachments",
         "attachments_fetched", "attachments_extracted", "versions",
         "award_number", "award_date", "award_amount", "awardee",
+        "summary", "work_type", "keywords", "stated_set_aside", "summary_model",
+    },
+    "v_notice_summaries": {
+        "notice_id", "summary", "work_type", "keywords", "stated_set_aside", "slot", "model",
+        "prompt_version", "created_at",
     },
     "v_contracts": {
         "contract_id", "award_key", "piid", "parent_piid", "awarding_entity_id",
@@ -69,6 +76,54 @@ def test_v_notices_counts_and_url(conn: sqlite3.Connection, seed: Seed) -> None:
     ).fetchone()
     assert row[:4] == ("HRSA HEADQUARTERS", 1, 0, 1)
     assert row[4].startswith("https://sam.gov/workspace/contract/opp/")
+
+
+SUMMARY_COLUMNS = (
+    "(notice_id, slot, provider, model, prompt_version, inputs_hash, raw_response, result,"
+    " summary, work_type, keywords, stated_set_aside, created_at)"
+)
+
+
+def test_v_notice_summaries_is_the_latest_valid_row(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    (notice_id,) = conn.execute("SELECT notice_id FROM notices ORDER BY id LIMIT 1").fetchone()
+    rows = [
+        ("old-model", '{"summary": "first"}', "first", "it", '["a"]', None, "2026-09-01T00:00:00Z"),
+        (
+            "qwen3:14b",
+            '{"summary": "second"}',
+            "second",
+            "services",
+            '["b", "c"]',
+            "SBA",
+            "2026-09-02T00:00:00Z",
+        ),
+        ("qwen3:14b", None, None, None, None, None, "2026-09-03T00:00:00Z"),
+    ]
+    for model, result, summary, work_type, keywords, stated, created in rows:
+        conn.execute(
+            f"INSERT INTO notice_summaries {SUMMARY_COLUMNS}"
+            " VALUES (?, 'fast', 'openai', ?, 1, 'hash', 'raw', ?, ?, ?, ?, ?, ?)",
+            (notice_id, model, result, summary, work_type, keywords, stated, created),
+        )
+    latest = conn.execute(
+        "SELECT summary, work_type, keywords, stated_set_aside, model FROM v_notice_summaries"
+    ).fetchall()
+    assert latest == [("second", "services", '["b", "c"]', "SBA", "qwen3:14b")]
+    row = conn.execute(
+        "SELECT summary, summary_model FROM v_notices WHERE notice_id = ?", (notice_id,)
+    ).fetchone()
+    assert row == ("second", "qwen3:14b")
+    assert conn.execute("SELECT count(*) FROM v_notices WHERE summary IS NULL").fetchone()[0] > 0
+    with pytest.raises(sqlite3.IntegrityError, match="never updated"):
+        conn.execute("UPDATE notice_summaries SET summary = 'x'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            f"INSERT INTO notice_summaries {SUMMARY_COLUMNS}"
+            " VALUES (?, 'fast', 'openai', 'm', 1, 'h', 'r', NULL, NULL, NULL, '{\"a\": 1}',"
+            " NULL, 'now')",
+            (notice_id,),
+        )
 
 
 def test_v_entities_counts_offices_below(conn: sqlite3.Connection, seed: Seed) -> None:
