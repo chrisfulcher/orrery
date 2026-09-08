@@ -1255,7 +1255,7 @@ def top(
         return
     from mentor.tui.app import MentorTop
 
-    MentorTop(settings).run()
+    MentorTop(settings, env_path=Path(".env")).run()
 
 
 @app.command()

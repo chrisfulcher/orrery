@@ -6,8 +6,8 @@ import pytest
 from conftest import SEARCH_FIXTURE
 from textual.widgets import DataTable, Static
 
-from mentor import db, workspace
-from mentor.config import Settings
+from mentor import db, dotenv, workspace
+from mentor.config import Settings, env_values
 from mentor.ingest.awards import AwardsResult
 from mentor.tui.app import (
     ContextScreen,
@@ -28,7 +28,11 @@ HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
 
 @pytest.fixture
 def app(
-    conn: sqlite3.Connection, settings: Settings, seed: Seed, monkeypatch: pytest.MonkeyPatch
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed: Seed,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> MentorTop:
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     seed()
@@ -53,7 +57,14 @@ def app(
         },
     )  # fmt: skip
     conn.close()
-    return MentorTop(settings)
+    return MentorTop(settings, env_path=write_env(settings, tmp_path))
+
+
+def write_env(settings: Settings, tmp_path: Path) -> Path:
+    """A .env holding the fixture settings, so the app opens on the dashboard."""
+    path = tmp_path / ".env"
+    dotenv.write(path, env_values(settings))
+    return path
 
 
 def text(app: MentorTop, selector: str) -> str:
@@ -155,11 +166,12 @@ def app_with_awards(
     settings: Settings,
     seed_awards: SeedAwards,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> MentorTop:
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     seed_awards()
     conn.close()
-    return MentorTop(settings)
+    return MentorTop(settings, env_path=write_env(settings, tmp_path))
 
 
 async def test_context_view_awards_panels_and_contractor_screen(app_with_awards: MentorTop) -> None:

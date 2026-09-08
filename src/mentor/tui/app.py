@@ -10,6 +10,7 @@ milliseconds, so nothing runs off the event loop.
 import webbrowser
 from collections import Counter
 from collections.abc import Callable
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -18,8 +19,9 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Sparkline, Static
 
 from mentor import assess, db, query, quota, workspace
-from mentor.config import Settings
+from mentor.config import Settings, setup_needed
 from mentor.fetch import queue
+from mentor.tui.setup import SetupScreen
 
 REFRESH_SECONDS = 5
 
@@ -1090,25 +1092,37 @@ class MentorTop(App):
         "opportunities": OpportunitiesScreen,
         "pursuits": PursuitsScreen,
         "radar": RadarScreen,
+        "setup": SetupScreen,
     }
     BINDINGS = [
         Binding("1", "switch_mode('dashboard')", "Dashboard"),
         Binding("2", "switch_mode('opportunities')", "Opportunities"),
         Binding("3", "switch_mode('pursuits')", "Pursuits"),
         Binding("4", "switch_mode('radar')", "Radar"),
+        Binding("5", "switch_mode('setup')", "Setup"),
         Binding("slash", "search", "Search"),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, env_path: Path | None = None) -> None:
         super().__init__()
         self.settings = settings
+        self.env_path = env_path
+        """Where the Connections tab writes settings; None means session-only."""
         self.conn = None
 
     def on_mount(self) -> None:
         self.theme = "ansi-dark"  # the terminal's own palette
         self.conn = db.connect(self.settings.db_path)
-        self.switch_mode("dashboard")
+        applied = db.migrate(self.conn)
+        if applied:
+            self.notify(f"applied {len(applied)} migration(s)")
+        self.switch_mode("setup" if setup_needed(self.settings, self.env_path) else "dashboard")
+
+    def reload_settings(self) -> None:
+        """Re-read settings after the Connections tab wrote .env."""
+        if self.env_path is not None:
+            self.settings = Settings(_env_file=self.env_path)
 
     async def action_search(self) -> None:
         await self.switch_mode("opportunities")
