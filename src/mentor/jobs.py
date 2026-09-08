@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
-from mentor import assess, db, query, workspace
+from mentor import assess, db, query, summaries, workspace
 from mentor.ai import AIError
 from mentor.config import Settings
 from mentor.embed.client import EmbeddingError
@@ -108,6 +108,7 @@ PREFIXES = {
     "ingest-awards": "awards ingest stopped: ",
     "ingest-entities": "entities ingest stopped: ",
     "embed": "embedding stopped: ",
+    "summarize": "summarize stopped: ",
 }
 
 
@@ -282,6 +283,17 @@ def _run_embed(conn, settings, values, report, cancelled) -> object:
     )
 
 
+def _run_summarize(conn, settings, values, report, cancelled) -> object:
+    return summaries.summarize_pending(
+        conn,
+        settings,
+        slot=values["slot"],
+        limit=values.get("limit"),
+        report=report,
+        cancelled=cancelled,
+    )
+
+
 def _run_assess(conn, settings, values, report, cancelled) -> object:
     return assess.assess(conn, settings, values["pursuit_id"], slot=values["slot"], warn=report)
 
@@ -406,6 +418,12 @@ JOBS: dict[str, Job] = {
         Job("embed", "Embed text", frozenset(),
             (Param("limit", "Source limit", "int"),), True, _run_embed),
         Job(
+            "summarize", "Summarize notices", frozenset(),
+            (Param("limit", "Notice limit", "int"),
+             Param("slot", "Model slot", "choice", default="fast", choices=("fast", "deep"))),
+            True, _run_summarize,
+        ),
+        Job(
             "assess", "Assess a pursuit", frozenset(),
             (Param("pursuit_id", "Pursuit id", "int", required=True),
              Param("slot", "Model slot", "choice", default="deep", choices=("deep", "fast"))),
@@ -476,6 +494,8 @@ def summarize(job: Job, result: object) -> str:
                 f"{r.notices} notices, {r.attachments} attachments,"
                 f" {r.chunks} chunks embedded with {r.model}"
             )
+        case "summarize":
+            return f"{r.summarized} notices summarized, {r.failed} invalid, with {r.model}"
         case "assess":
             return "\n".join(assess.describe(r))
         case "db-migrate":

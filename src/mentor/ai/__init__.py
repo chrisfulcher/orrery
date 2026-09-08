@@ -9,7 +9,7 @@ pydantic model, retrying once with the validation error. Keys never appear in me
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -24,6 +24,16 @@ ANTHROPIC_DEFAULT_MODEL = "claude-opus-5"
 
 class AIError(Exception):
     """A model request failed. The message never contains a key."""
+
+
+class InvalidResponse(AIError):
+    """The model answered, but the answer is unusable: not the schema after a retry, a refusal,
+    or an output cut off at ``max_tokens``. A walk over many items records it and moves on;
+    ``completions`` are the attempts made, for token accounting."""
+
+    def __init__(self, message: str, completions: Sequence["Completion"] = ()) -> None:
+        super().__init__(message)
+        self.completions = list(completions)
 
 
 @dataclass(frozen=True)
@@ -150,7 +160,9 @@ def complete_structured[M: BaseModel](
             f"{user}\n\nYour previous answer was invalid: {error}."
             " Return only a JSON object matching the schema."
         )
-    raise AIError(f"{backend.slot.model} did not return valid JSON after 2 attempts: {error}")
+    raise InvalidResponse(
+        f"{backend.slot.model} did not return valid JSON after 2 attempts: {error}", completions
+    )
 
 
 def redact(text: str, keys: Iterable[SecretStr | None]) -> str:

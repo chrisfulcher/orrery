@@ -12,7 +12,7 @@ from anthropic import DefaultHttpxClient
 from pydantic import SecretStr
 
 from mentor import ai
-from mentor.ai import AIError, Slot
+from mentor.ai import AIError, InvalidResponse, Slot
 from mentor.ai.anthropic_backend import FALLBACK_BETA, AnthropicBackend
 
 
@@ -81,10 +81,10 @@ def test_other_models_use_the_plain_messages_endpoint() -> None:
 
 def test_refusal_and_max_tokens_become_errors() -> None:
     backend = AnthropicBackend(slot(), FakeClient(message("", stop="refusal", category="cyber")))
-    with pytest.raises(AIError, match="declined the request \\(cyber\\)"):
+    with pytest.raises(InvalidResponse, match="declined the request \\(cyber\\)"):
         backend.complete(system="s", user="u", schema={}, max_tokens=8)
     backend = AnthropicBackend(slot(), FakeClient(message("{", stop="max_tokens")))
-    with pytest.raises(AIError, match="ran out of output tokens"):
+    with pytest.raises(InvalidResponse, match="ran out of output tokens"):
         backend.complete(system="s", user="u", schema={}, max_tokens=8)
 
 

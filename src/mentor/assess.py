@@ -153,7 +153,8 @@ def _join(values: list[str]) -> str:
     return ", ".join(values) or "-"
 
 
-def _clip(text: str | None, limit: int) -> str:
+def clip(text: str | None, limit: int) -> str:
+    """The head of ``text`` within ``limit`` characters, cut at a word and marked."""
     text = (text or "").strip()
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " […]"
 
@@ -194,8 +195,8 @@ def render(inputs: Inputs, *, context_chars: int) -> str:
             f"competitors: {_join([c.name or c.uei or '?' for c in doc.competitors])}\n"
             f"partners: {_join([c.name or c.uei or '?' for c in doc.partners])}\n"
             "capability statement: "
-            f"{_clip(doc.offerings.capability_statement, STATEMENT_CHARS) or '-'}\n"
-            f"notes for AI: {_clip(doc.ai.notes, AI_NOTES_CHARS) or '-'}"
+            f"{clip(doc.offerings.capability_statement, STATEMENT_CHARS) or '-'}\n"
+            f"notes for AI: {clip(doc.ai.notes, AI_NOTES_CHARS) or '-'}"
         )
     tasks = inputs.detail.tasks
     open_tasks = [t.title for t in tasks if t.done_at is None]
@@ -205,8 +206,8 @@ def render(inputs: Inputs, *, context_chars: int) -> str:
         f"stage: {p.stage} · office: {p.office or '-'} ({p.office_code or '-'})"
         f" · NAICS {p.naics_code or '-'} · PWin {p.pwin if p.pwin is not None else '-'}"
         f"{' · held until ' + p.held_until if p.held_until else ''}\n"
-        f"summary: {_clip(p.summary, DESCRIPTION_CHARS) or '-'}\n"
-        f"notes: {_clip(p.notes, DESCRIPTION_CHARS) or '-'}\n"
+        f"summary: {clip(p.summary, DESCRIPTION_CHARS) or '-'}\n"
+        f"notes: {clip(p.notes, DESCRIPTION_CHARS) or '-'}\n"
         f"open tasks: {'; '.join(open_tasks) or '-'}\n"
         f"done tasks: {'; '.join(done_tasks) or '-'}"
     )
@@ -217,7 +218,7 @@ def render(inputs: Inputs, *, context_chars: int) -> str:
                 f"- {n.title} ({n.notice_type or '-'}; {n.notice_id}) · posted {n.posted_at or '-'}"
                 f" · deadline {n.response_deadline or '-'} · set-aside {n.set_aside_code or '-'}"
                 f" · NAICS {n.naics_code or '-'} · {'active' if n.active else 'inactive'}\n"
-                f"  {_clip(n.description, DESCRIPTION_CHARS) or '(no description fetched)'}"
+                f"  {clip(n.description, DESCRIPTION_CHARS) or '(no description fetched)'}"
             )
         out.append("\n".join(lines))
     else:
@@ -258,7 +259,7 @@ def render(inputs: Inputs, *, context_chars: int) -> str:
         share = budget // min(len(inputs.excerpts), EXCERPTS)
         lines = ["# Document excerpts (the best-matching attachments of the linked notices)"]
         for excerpt in inputs.excerpts[:EXCERPTS]:
-            body = _clip(_pages(excerpt.text), share)
+            body = clip(_pages(excerpt.text), share)
             lines.append(f"## {excerpt.filename} ({excerpt.notice_title})\n{body}")
         fixed = fixed.replace(
             "# Workflow stage keys", "\n".join(lines) + "\n\n# Workflow stage keys", 1
@@ -413,6 +414,7 @@ __all__ = [
     "SYSTEM_PROMPT",
     "accept_tasks",
     "assess",
+    "clip",
     "describe",
     "gather",
     "render",

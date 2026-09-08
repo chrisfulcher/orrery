@@ -12,7 +12,7 @@ from typing import Any
 import anthropic
 
 from mentor import __version__
-from mentor.ai import AIError, Completion, Slot, redact
+from mentor.ai import AIError, Completion, InvalidResponse, Slot, redact
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 FALLBACK_MODELS = ("claude-opus-5", "claude-fable-")
@@ -66,11 +66,11 @@ class AnthropicBackend:
         if stop == "refusal":
             details = getattr(response, "stop_details", None)
             category = getattr(details, "category", None) if details else None
-            raise AIError(
+            raise InvalidResponse(
                 f"{self.slot.model} declined the request" + (f" ({category})" if category else "")
             )
         if stop == "max_tokens":
-            raise AIError(f"{self.slot.model} ran out of output tokens ({max_tokens})")
+            raise InvalidResponse(f"{self.slot.model} ran out of output tokens ({max_tokens})")
         text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
         usage = getattr(response, "usage", None)
         return Completion(

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import EMBED_URL, make_extract, register_fake_embeddings
+from conftest import CHAT_URL, EMBED_URL, make_extract, register_fake_chat, register_fake_embeddings
 from pytest_httpx import HTTPXMock
 from typer.testing import CliRunner
 
@@ -286,6 +286,40 @@ def test_extract_search_and_reindex(
     assert (
         len(json.loads(runner.invoke(app, ["search", "xylophone", "--json"], env=env).output)) == 1
     )
+
+
+def test_summarize_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+    desc = json.loads((Path(__file__).with_name("fixtures") / "sam_noticedesc_v1.json").read_text())
+    httpx_mock.add_response(url=re.compile(r".*noticedesc.*"), json=desc, is_reusable=True)
+    assert runner.invoke(app, ["fetch", "--max-attachments", "0"], env=env).exit_code == 0
+
+    result = runner.invoke(app, ["summarize", "--slot", "medium"], env=env)
+    assert result.exit_code == 2 and "must be one of fast, deep" in result.output
+
+    httpx_mock.add_exception(httpx.ConnectError("refused"), url=CHAT_URL)
+    result = runner.invoke(app, ["summarize"], env=env)
+    assert result.exit_code == 1, result.output
+    assert "summarize stopped" in result.output and "Traceback" not in result.output
+
+    reply = {
+        "summary": "Buys X. Due soon.",
+        "work_type": "it",
+        "keywords": ["x"],
+        "set_aside": None,
+    }
+    requests: list[dict] = []
+    register_fake_chat(httpx_mock, [json.dumps(reply)], requests)
+    result = runner.invoke(app, ["summarize", "--limit", "2"], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "2 notices summarized, 0 invalid, with qwen3:14b"
+    assert requests[0]["model"] == "qwen3:14b"
+    result = runner.invoke(app, ["summarize", "--json"], env=env)
+    assert json.loads(result.output) == {"summarized": 3, "failed": 0, "model": "qwen3:14b"}
+    assert len(requests) == 5
 
 
 def test_embed_command_and_unreachable_endpoint(
@@ -674,7 +708,6 @@ def test_recompetes_command_defaults_to_the_profile_naics(tmp_path: Path) -> Non
 def test_pursuit_assess_and_accept_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
 ) -> None:
-    from conftest import register_fake_chat
 
     monkeypatch.chdir(tmp_path)
     env = seed_via_cli(tmp_path, httpx_mock)

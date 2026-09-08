@@ -170,6 +170,17 @@ def embed(
     _run_job("embed", {"limit": limit}, json_output)
 
 
+@app.command()
+def summarize(
+    limit: Annotated[int | None, typer.Option(help="Cap notices summarized this run.")] = None,
+    slot: Annotated[str, typer.Option("--slot", help="fast (the default) or deep.")] = "fast",
+    json_output: JsonFlag = False,
+) -> None:
+    """Summarize and tag fetched notice descriptions with the configured model; stored with
+    provenance. Spends no quota."""
+    _run_job("summarize", {"limit": limit, "slot": slot}, json_output)
+
+
 NaicsOption = Annotated[str | None, typer.Option("--naics", help="NAICS codes, comma-separated.")]
 SetAsideOption = Annotated[
     str | None, typer.Option("--set-aside", help="Set-aside codes, comma-separated.")

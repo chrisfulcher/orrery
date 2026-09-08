@@ -29,7 +29,7 @@ from mentor.sam.client import SamError
 def test_registry_lists_the_operations_with_their_needs() -> None:
     assert list(OPERATIONS) == [
         "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities", "fetch",
-        "extract", "embed", "assess", "db-migrate", "db-reindex",
+        "extract", "embed", "summarize", "assess", "db-migrate", "db-reindex",
     ]  # fmt: skip
     assert [n for n in JOBS if n not in OPERATIONS] == [
         "probe-sam", "probe-embed", "probe-fast", "probe-deep"

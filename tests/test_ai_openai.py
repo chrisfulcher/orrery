@@ -7,7 +7,15 @@ from pydantic import BaseModel, SecretStr
 from pytest_httpx import HTTPXMock
 
 from mentor import ai
-from mentor.ai import AIError, Completion, Slot, complete_structured, resolve_slot, strip_thinking
+from mentor.ai import (
+    AIError,
+    Completion,
+    InvalidResponse,
+    Slot,
+    complete_structured,
+    resolve_slot,
+    strip_thinking,
+)
 from mentor.ai.openai_compat import OpenAIChatBackend
 from mentor.config import Settings
 
@@ -111,9 +119,11 @@ def test_complete_structured_retries_once_with_the_error(httpx_mock: HTTPXMock) 
 def test_complete_structured_gives_up_after_two(httpx_mock: HTTPXMock) -> None:
     register_fake_chat(httpx_mock, ["not json"], [])
     with OpenAIChatBackend(slot()) as backend:
-        with pytest.raises(AIError, match="after 2 attempts"):
+        with pytest.raises(InvalidResponse, match="after 2 attempts") as raised:
             complete_structured(backend, system="s", user="u", model_type=Verdict, max_tokens=8)
     assert len(httpx_mock.get_requests()) == 2
+    assert [c.text for c in raised.value.completions] == ["not json", "not json"]
+    assert isinstance(raised.value, AIError)
 
 
 def test_backend_for_anthropic_without_the_sdk_explains(monkeypatch: pytest.MonkeyPatch) -> None:
