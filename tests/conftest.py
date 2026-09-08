@@ -25,6 +25,8 @@ from mentor.sam.client import SamClient
 # must fail fast rather than reach the network.
 os.environ.setdefault("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
 os.environ.pop("ANTHROPIC_API_KEY", None)
+for _name in [n for n in os.environ if n.startswith("MENTOR_")]:
+    del os.environ[_name]  # a developer's shell must not leak settings into the tests
 
 SEARCH_FIXTURE = json.loads(
     (Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text()

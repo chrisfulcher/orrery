@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import stat
 from collections.abc import Callable
@@ -18,13 +17,6 @@ Seed = Callable[[dict | None], None]
 
 def text(app: MentorTop, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).content)
-
-
-@pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in list(os.environ):
-        if name.startswith("MENTOR_"):
-            monkeypatch.delenv(name)
 
 
 async def test_first_run_opens_setup_and_saves_the_env_file(
