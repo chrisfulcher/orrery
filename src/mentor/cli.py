@@ -5,26 +5,20 @@ import json
 import sqlite3
 from collections.abc import Callable
 from contextlib import closing
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import click
 import typer
 
-from mentor import __version__, assess, db, documents, query, workspace
+from mentor import __version__, assess, db, documents, jobs, query, workspace
 from mentor import quota as quota_module
 from mentor.ai import AIError
 from mentor.config import Settings
 from mentor.documents import DocumentError, ProfileDocument, SearchDocument, WorkflowDocument
 from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
-from mentor.embed.pipeline import embed_pending
-from mentor.extract.text import extract_pending
 from mentor.fetch import queue
-from mentor.ingest import awards, bulk, entities, notices
-from mentor.quota import BudgetExceeded
-from mentor.sam.client import SamError
-from mentor.usaspending.client import UsaspendingError
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -50,6 +44,48 @@ DateOption = Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], metav
 def print_json(payload: object) -> None:
     """Every ``--json`` output goes through here: one document on stdout."""
     typer.echo(json.dumps(payload, indent=2, default=str))
+
+
+MILESTONES = {
+    "ingest-bulk": ("extract: ",),
+    "ingest-awards": ("awards: ",),
+    "ingest-entities": ("extract: ",),
+    "assess": ("",),
+}
+"""The report lines each command has always printed to stderr; the rest is progress the
+app's log shows."""
+
+
+def _run_job(
+    name: str, params: dict, json_output: bool = False, *, heading: str | None = None
+) -> object:
+    """Run a registry job the way the CLI always has: preconditions exit 2, failures exit
+    with the job's code, the result is printed as JSON or as its one-line summary."""
+    settings = Settings()
+    job = jobs.JOBS[name]
+    prefixes = MILESTONES.get(name, ())
+
+    def report(message: str) -> None:
+        if message.startswith(prefixes):
+            typer.echo(message, err=True)
+
+    try:
+        unmet = jobs.needs_unmet(job, settings, params)
+        if unmet:
+            typer.echo(unmet[0], err=True)
+            raise typer.Exit(2)
+        with closing(db.connect(settings.db_path)) as conn:
+            result = jobs.run(job, conn, settings, params, report=report)
+    except jobs.JobFailed as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(exc.exit_code) from exc
+    if json_output:
+        print_json(dataclasses.asdict(result))
+    else:
+        if heading:
+            typer.echo(heading)
+        typer.echo(jobs.summarize(job, result))
+    return result
 
 
 @app.callback()
@@ -113,25 +149,7 @@ def fetch(
                 deadline = item.response_deadline or "-"
                 typer.echo(f"  {item.notice_id}  {deadline:20}  {item.title}")
         return
-    if settings.sam_api_key is None:
-        typer.echo("MENTOR_SAM_API_KEY is not set", err=True)
-        raise typer.Exit(2)
-    with closing(db.connect(settings.db_path)) as conn:
-        result = queue.fetch_pending(conn, settings, budget=budget, max_attachments=max_attachments)
-    if json_output:
-        print_json(dataclasses.asdict(result))
-    else:
-        note = (
-            " (daily budget exhausted; attachments still fetched)"
-            if result.budget_exhausted
-            else ""
-        )
-        typer.echo(
-            f"run {result.run_id}: {result.descriptions_fetched} descriptions fetched,"
-            f" {result.descriptions_failed} failed; {result.attachments_fetched} attachments"
-            f" fetched, {result.attachments_failed} failed, {result.attachments_skipped} skipped;"
-            f" {result.requests_spent} requests{note}"
-        )
+    _run_job("fetch", {"budget": budget, "max_attachments": max_attachments}, json_output)
 
 
 @app.command()
@@ -140,15 +158,7 @@ def extract(
     json_output: JsonFlag = False,
 ) -> None:
     """Extract text from fetched attachments (PDF for now). Spends no quota."""
-    settings = Settings()
-    with closing(db.connect(settings.db_path)) as conn:
-        result = extract_pending(conn, settings, limit=limit)
-    if json_output:
-        print_json(dataclasses.asdict(result))
-    else:
-        typer.echo(
-            f"{result.done} extracted, {result.unsupported} unsupported, {result.failed} failed"
-        )
+    _run_job("extract", {"limit": limit}, json_output)
 
 
 @app.command()
@@ -157,20 +167,7 @@ def embed(
     json_output: JsonFlag = False,
 ) -> None:
     """Embed fetched descriptions and extracted attachment text via the configured endpoint."""
-    settings = Settings()
-    with closing(db.connect(settings.db_path)) as conn:
-        try:
-            result = embed_pending(conn, settings, limit=limit)
-        except EmbeddingError as exc:
-            typer.echo(f"embedding stopped: {exc}", err=True)
-            raise typer.Exit(1) from exc
-    if json_output:
-        print_json(dataclasses.asdict(result))
-    else:
-        typer.echo(
-            f"{result.notices} notices, {result.attachments} attachments,"
-            f" {result.chunks} chunks embedded with {result.model}"
-        )
+    _run_job("embed", {"limit": limit}, json_output)
 
 
 NaicsOption = Annotated[str | None, typer.Option("--naics", help="NAICS codes, comma-separated.")]
@@ -789,14 +786,7 @@ def pursuit_assess(
     if slot not in ("fast", "deep"):
         typer.echo("--slot must be fast or deep", err=True)
         raise typer.Exit(2)
-    settings = Settings()
-    _run_pursuit(
-        lambda conn: assess.assess(
-            conn, settings, pursuit_id, slot=slot, warn=lambda m: typer.echo(m, err=True)
-        ),
-        json_output,
-        "assessed",
-    )
+    _run_job("assess", {"pursuit_id": pursuit_id, "slot": slot}, json_output, heading="assessed:")
 
 
 @pursuit_app.command("accept")
@@ -1044,32 +1034,7 @@ def ingest_notices_command(
     since: DateOption = None, until: DateOption = None, json_output: JsonFlag = False
 ) -> None:
     """Ingest notices posted in a window (default yesterday to today, UTC) for every NAICS code."""
-    settings = Settings()
-    if settings.sam_api_key is None:
-        typer.echo("MENTOR_SAM_API_KEY is not set", err=True)
-        raise typer.Exit(2)
-    if not settings.naics:
-        typer.echo("MENTOR_NAICS is empty; nothing to ingest", err=True)
-        raise typer.Exit(2)
-    today = datetime.now(UTC).date()
-    posted_from = since.date() if since else today - timedelta(days=1)
-    posted_to = until.date() if until else today
-    with closing(db.connect(settings.db_path)) as conn:
-        try:
-            result = notices.ingest_notices(
-                conn, settings, posted_from=posted_from, posted_to=posted_to
-            )
-        except (BudgetExceeded, SamError) as exc:
-            typer.echo(f"ingestion stopped: {exc}", err=True)
-            raise typer.Exit(1) from exc
-    if json_output:
-        print_json(dataclasses.asdict(result))
-    else:
-        typer.echo(
-            f"run {result.run_id}: {result.notices_seen} notices seen, {result.notices_new} new,"
-            f" {result.versions_added} versions, {result.attachments_added} attachments,"
-            f" {result.requests_spent} requests"
-        )
+    _run_job("ingest-notices", {"since": since, "until": until}, json_output)
 
 
 @ingest_app.command("bulk")
@@ -1084,33 +1049,7 @@ def ingest_bulk_command(
     json_output: JsonFlag = False,
 ) -> None:
     """Backfill from the SAM.gov bulk extract: no key, no quota, filtered to your NAICS codes."""
-    settings = Settings()
-    if not settings.naics:
-        typer.echo("MENTOR_NAICS is empty; nothing to ingest", err=True)
-        raise typer.Exit(2)
-    if archived is not None and file is not None:
-        typer.echo("--archived and --file are mutually exclusive", err=True)
-        raise typer.Exit(2)
-    try:
-        path = file or bulk.fetch_extract(settings.data_dir / "extracts", fiscal_year=archived)
-        typer.echo(f"extract: {path}", err=True)
-        with closing(db.connect(settings.db_path)) as conn:
-            result = bulk.ingest_bulk(
-                conn, settings, path, mark_inactive=(file is None and archived is None), limit=limit
-            )
-    except (bulk.BulkError, ValueError) as exc:
-        typer.echo(f"bulk ingest stopped: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if json_output:
-        print_json(dataclasses.asdict(result))
-        return
-    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
-    typer.echo(
-        f"run {result.run_id}: {result.rows_read} rows read, {result.rows_matched} in slice,"
-        f" {result.notices_new} new, {result.notices_updated} updated,"
-        f" {result.descriptions_filled} descriptions filled, {result.versions_added} versions,"
-        f" {result.notices_deactivated} marked inactive{resumed}"
-    )
+    _run_job("ingest-bulk", {"archived": archived, "file": file, "limit": limit}, json_output)
 
 
 @ingest_app.command("awards")
@@ -1128,36 +1067,8 @@ def ingest_awards_command(
     Actions in the window (default the last three years to today) are requested as one
     download, which the service takes minutes to prepare.
     """
-    settings = Settings()
-    if not settings.naics:
-        typer.echo("MENTOR_NAICS is empty; nothing to ingest", err=True)
-        raise typer.Exit(2)
-    if file is not None and (since or until):
-        typer.echo("--file ignores the window; drop --since/--until", err=True)
-        raise typer.Exit(2)
-    today = datetime.now(UTC).date()
-    posted_to = until.date() if until else today
-    posted_from = since.date() if since else _years_before(today, 3)
-    if posted_from > posted_to:
-        typer.echo("--since must not be after --until", err=True)
-        raise typer.Exit(2)
-    try:
-        path = file or awards.fetch_awards(settings, since=posted_from, until=posted_to)
-        typer.echo(f"awards: {path}", err=True)
-        with closing(db.connect(settings.db_path)) as conn:
-            result = awards.ingest_awards(conn, settings, path, limit=limit)
-    except (UsaspendingError, awards.AwardsError, ValueError) as exc:
-        typer.echo(f"awards ingest stopped: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if json_output:
-        print_json(dataclasses.asdict(result))
-        return
-    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
-    typer.echo(
-        f"run {result.run_id}: {result.rows_read} rows read, {result.rows_matched} in slice,"
-        f" {result.contracts_new} new, {result.contracts_updated} updated,"
-        f" {result.contractors_new} contractors new, {result.offices_unresolved} offices and"
-        f" {result.vendors_unresolved} vendors unresolved{resumed}"
+    _run_job(
+        "ingest-awards", {"since": since, "until": until, "file": file, "limit": limit}, json_output
     )
 
 
@@ -1182,49 +1093,11 @@ def ingest_entities_command(
     """Ingest SAM.gov entity registrations: the monthly public extract (one keyed request,
     filtered to contractors already known, your NAICS codes, and your own company), or a
     few UEIs through the Entity Management API."""
-    settings = Settings()
-    if uei is not None and file is not None:
-        typer.echo("--uei and --file are mutually exclusive", err=True)
-        raise typer.Exit(2)
-    extract_dir = settings.data_dir / "extracts" / "sam"
-    needs_key = uei is not None or (
-        file is None and (refresh or entities.newest_extract(extract_dir) is None)
+    _run_job(
+        "ingest-entities",
+        {"uei": uei, "file": file, "refresh": refresh, "limit": limit},
+        json_output,
     )
-    if needs_key and settings.sam_api_key is None:
-        typer.echo("MENTOR_SAM_API_KEY is not set", err=True)
-        raise typer.Exit(2)
-    with closing(db.connect(settings.db_path)) as conn:
-        try:
-            if uei is not None:
-                result = entities.lookup_entities(conn, settings, uei.split(","))
-            else:
-                path = file
-                if path is None and not refresh:
-                    path = entities.newest_extract(extract_dir)
-                if path is None:
-                    path = entities.fetch_extract(conn, settings, extract_dir)
-                typer.echo(f"extract: {path}", err=True)
-                result = entities.ingest_extract(conn, settings, path, limit=limit)
-        except (BudgetExceeded, SamError, entities.EntitiesError) as exc:
-            typer.echo(f"entities ingest stopped: {exc}", err=True)
-            raise typer.Exit(1) from exc
-    if json_output:
-        print_json(dataclasses.asdict(result))
-        return
-    resumed = f" (resumed at row {result.resumed_from})" if result.resumed_from else ""
-    typer.echo(
-        f"run {result.run_id}: {result.rows_read} registrants read, {result.rows_matched} in slice,"
-        f" {result.rows_malformed} malformed, {result.entities_new} contractors new,"
-        f" {result.registrations_added} registrations, {result.facts_added} facts,"
-        f" {result.requests_spent} requests{resumed}"
-    )
-
-
-def _years_before(day: date, years: int) -> date:
-    try:
-        return day.replace(year=day.year - years)
-    except ValueError:  # 29 February
-        return day.replace(year=day.year - years, day=28)
 
 
 @app.command()
@@ -1258,22 +1131,13 @@ def mcp() -> None:
 @db_app.command()
 def migrate() -> None:
     """Apply pending schema migrations."""
-    settings = Settings()
-    with closing(db.connect(settings.db_path)) as conn:
-        applied = db.migrate(conn)
-    if not applied:
-        typer.echo("up to date")
-    for name in applied:
-        typer.echo(f"applied {name}")
+    _run_job("db-migrate", {})
 
 
 @db_app.command()
 def reindex() -> None:
     """Rebuild the search indexes from the notice and attachment tables."""
-    settings = Settings()
-    with closing(db.connect(settings.db_path)) as conn:
-        query.rebuild_search(conn)
-    typer.echo("search index rebuilt")
+    _run_job("db-reindex", {})
 
 
 @db_app.command()
