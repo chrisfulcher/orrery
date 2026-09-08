@@ -396,18 +396,7 @@ def searches_list(json_output: JsonFlag = False) -> None:
     if not searches:
         typer.echo("no saved searches")
     for saved in searches:
-        parts = [f"query={json.dumps(saved.query)}"] if saved.query else []
-        filters = saved.filters
-        for field, value in (
-            ("naics", filters.naics),
-            ("set_asides", filters.set_asides),
-            ("agency_prefixes", filters.agency_prefixes),
-        ):
-            if value:
-                parts.append(f"{field}={','.join(value)}")
-        if filters.deadline_within_days:
-            parts.append(f"deadline_within_days={filters.deadline_within_days}")
-        typer.echo(f"{saved.name}  {' '.join(parts) or '(everything)'}")
+        typer.echo(f"{saved.name}  {workspace.describe_search(saved)}")
 
 
 @searches_app.command("edit")

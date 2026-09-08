@@ -117,3 +117,19 @@ Form TextArea {
 #setup_banner.-visible {
     display: block;
 }
+FormModal, ConfirmModal {
+    align: center middle;
+}
+.modal_form {
+    width: 78;
+    height: 80%;
+}
+.modal_form Form {
+    height: 1fr;
+}
+.modal_box TextArea {
+    height: 8;
+}
+#stages, #searches {
+    height: 1fr;
+}

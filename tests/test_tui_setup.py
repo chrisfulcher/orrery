@@ -193,3 +193,147 @@ async def test_profile_form_round_trips_the_document(
         assert isinstance(app.screen, RadarScreen)
         assert "NAICS 541512, 541511" in app.screen.query_one("#radar").border_title
         await pilot.press("q")
+
+
+@pytest.fixture
+def app_with_pursuit(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> MentorTop:
+    seed()
+    hrsa = __import__("conftest").SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
+    workspace.track(conn, hrsa, stage="pursuing")  # a pursuit in qualify
+    workspace.save_search(
+        conn, "sba", filters=__import__("mentor.query").query.Filters(set_asides=("SBA",))
+    )
+    conn.close()
+    env_path = tmp_path / ".env"
+    dotenv.write(env_path, env_values(settings))
+    return MentorTop(settings, env_path=env_path)
+
+
+async def test_workflow_tab_edits_stages_and_refuses_removing_one_in_use(
+    app_with_pursuit: MentorTop, settings: Settings
+) -> None:
+    from mentor.tui.setup import FormModal
+
+    app = app_with_pursuit
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        await pilot.press("5")
+        await pilot.pause()
+        app.screen.show_tab("workflow")
+        await pilot.pause()
+        table = app.screen.query_one("#stages")
+        assert table.row_count == 6 and "default" in table.border_title
+        table.focus()
+
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        app.screen.query_one("#field-key", Input).value = "identify"  # duplicate
+        app.screen.query_one("#field-name", Input).value = "Again"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        assert "duplicate stage key 'identify'" in text(app, "#modal_form-errors")
+        app.screen.query_one("#field-key", Input).value = "review"
+        app.screen.query_one("#field-name", Input).value = "Review"
+        app.screen.query_one("#field-tasks", TextArea).text = "Check\nDouble check"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        table = app.screen.query_one("#stages")
+        assert table.row_count == 7 and "unsaved" in table.border_title
+        assert table.get_row_at(6)[3] == "2: Check; Double check"
+
+        table.move_cursor(row=6)
+        await pilot.press("shift+up")
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "unsaved" not in app.screen.query_one("#stages").border_title
+        conn = db.connect(settings.db_path)
+        assert workspace.workflow(conn).keys() == [
+            "identify", "qualify", "capture", "proposal", "submitted", "review", "post-award",
+        ]  # fmt: skip
+        conn.close()
+
+        table = app.screen.query_one("#stages")
+        table.move_cursor(row=1)  # qualify, in use by the pursuit
+        await pilot.press("x")
+        await pilot.pause()
+        assert table.row_count == 6
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert "in use by open pursuits cannot be removed: ['qualify']" in text(
+            app, "#workflow_errors"
+        )
+        await pilot.press("q")
+
+
+async def test_searches_tab_creates_edits_runs_and_deletes(
+    app_with_pursuit: MentorTop, settings: Settings
+) -> None:
+    from mentor.tui.app import OpportunitiesScreen
+    from mentor.tui.setup import ConfirmModal, FormModal
+
+    app = app_with_pursuit
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        await pilot.press("5")
+        await pilot.pause()
+        app.screen.show_tab("searches")
+        await pilot.pause()
+        table = app.screen.query_one("#searches_table")
+        assert table.row_count == 1 and table.get_row_at(0)[1] == "set_asides=SBA"
+        table.focus()
+
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        app.screen.query_one("#field-name", Input).value = "it"
+        app.screen.query_one("#field-naics", Input).value = "541512"
+        app.screen.query_one("#field-deadline-within-days", Input).value = "30"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        table = app.screen.query_one("#searches_table")
+        assert (
+            table.row_count == 2
+            and table.get_row_at(0)[1] == "naics=541512 deadline_within_days=30"
+        )
+
+        table.move_cursor(row=1)  # sba
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, FormModal)
+        app.screen.query_one("#field-query", Input).value = "Microsoft"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert (
+            app.screen.query_one("#searches_table").get_row_at(1)[1]
+            == 'query="Microsoft" set_asides=SBA'
+        )
+
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.pause()
+        assert isinstance(app.screen, OpportunitiesScreen)
+        hits = app.screen.query_one("#hits")
+        assert hits.row_count >= 1 and hits.border_title == "saved search sba"
+
+        await pilot.press("5")
+        await pilot.pause()
+        app.screen.query_one("#searches_table").focus()
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.query_one("#searches_table").row_count == 2
+        await pilot.press("x")
+        await pilot.press("enter")  # "delete" is the first item
+        await pilot.pause()
+        assert app.screen.query_one("#searches_table").row_count == 1
+        conn = db.connect(settings.db_path)
+        assert [s.name for s in workspace.list_searches(conn)] == ["it"]
+        conn.close()
+        await pilot.press("q")

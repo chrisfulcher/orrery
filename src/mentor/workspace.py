@@ -1250,6 +1250,22 @@ def save_workflow(
     return doc
 
 
+def describe_search(saved: SavedSearch) -> str:
+    """The one-line summary ``mentor searches list`` prints."""
+    parts = [f"query={json.dumps(saved.query)}"] if saved.query else []
+    filters = saved.filters
+    for field, value in (
+        ("naics", filters.naics),
+        ("set_asides", filters.set_asides),
+        ("agency_prefixes", filters.agency_prefixes),
+    ):
+        if value:
+            parts.append(f"{field}={','.join(value)}")
+    if filters.deadline_within_days:
+        parts.append(f"deadline_within_days={filters.deadline_within_days}")
+    return " ".join(parts) or "(everything)"
+
+
 def search_document(saved: SavedSearch) -> str:
     """A saved search rendered for editing."""
     filters = saved.filters
