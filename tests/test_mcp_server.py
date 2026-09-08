@@ -34,6 +34,7 @@ def test_tools_read_and_write_the_store(store: sqlite3.Connection) -> None:
     assert [hit.notice_id for hit in hits] and all(hit.source == "notice" for hit in hits)
     detail = mcp_server.notice(HRSA)
     assert detail.agency == "HRSA HEADQUARTERS" and len(detail.agency_chain) == 3
+    assert detail.summary is None and detail.keywords == () and hits[0].work_type is None
     assert mcp_server.entity(detail.agency_chain[0].entity_id).children
     assert len(mcp_server.upcoming(days=3650)) == 4
 

@@ -273,6 +273,10 @@ def test_extract_search_and_reindex(
         "posted_at",
         "source",
         "snippet",
+        "set_aside_code",
+        "summary",
+        "work_type",
+        "stated_set_aside",
         "rank",
         "page",
     }
@@ -320,6 +324,12 @@ def test_summarize_command(
     result = runner.invoke(app, ["summarize", "--json"], env=env)
     assert json.loads(result.output) == {"summarized": 3, "failed": 0, "model": "qwen3:14b"}
     assert len(requests) == 5
+
+    result = runner.invoke(app, ["search", "Microsoft"], env=env)
+    assert result.exit_code == 0, result.output
+    assert "\n  it · fit unknown: Buys X. Due soon.\n" in result.output
+    result = runner.invoke(app, ["search", "Microsoft", "--json"], env=env)
+    assert json.loads(result.output)[0]["summary"] == "Buys X. Due soon."
 
 
 def test_embed_command_and_unreachable_endpoint(
@@ -708,7 +718,6 @@ def test_recompetes_command_defaults_to_the_profile_naics(tmp_path: Path) -> Non
 def test_pursuit_assess_and_accept_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
 ) -> None:
-
     monkeypatch.chdir(tmp_path)
     env = seed_via_cli(tmp_path, httpx_mock)
     runner.invoke(app, ["pursuit", "new", "Help desk", "--office", "75R602"], env=env)

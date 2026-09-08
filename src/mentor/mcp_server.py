@@ -51,7 +51,8 @@ def search(
     deadline_days: int | None = None,
 ) -> list[query.SearchHit]:
     """Keyword search across notice text and attachment text (FTS5 syntax allowed); one
-    best hit per notice with its source and snippet. Filters: NAICS codes, set-aside codes,
+    best hit per notice with its source and snippet, plus the stored summary, work type,
+    and stated set-aside when `mentor summarize` has run. Filters: NAICS codes, set-aside codes,
     agency path-code prefixes, and a deadline window in days."""
     filters = query.Filters(
         naics=_tuple(naics),
@@ -67,7 +68,8 @@ def search(
 def notice(notice_id: str) -> query.NoticeDetail:
     """Everything public about one notice: typed fields, description, agency chain,
     attachments with fetch and extraction status, version count, the SAM.gov page URL, the
-    incumbent award, recent awards from the same office, and the government contacts."""
+    incumbent award, recent awards from the same office, the government contacts, and the
+    stored summary with its work type, keywords, stated set-aside, and model."""
     with _conn() as conn:
         detail = query.notice(conn, notice_id)
     if detail is None:

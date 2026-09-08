@@ -14,6 +14,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rich.markup import escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -22,7 +23,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Sparkline, Static
 from textual.worker import Worker, WorkerState, get_current_worker
 
-from mentor import assess, db, jobs, query, quota, workspace
+from mentor import assess, db, jobs, query, quota, summaries, workspace
 from mentor.config import Settings, setup_needed
 from mentor.fetch import queue
 from mentor.progress import JobCancelled
@@ -204,19 +205,32 @@ class DashboardScreen(Screen):
             self.app.push_screen(PursuitScreen(pursuit_id))
 
 
+def _fit(quals: summaries.Qualifications, code: str | None, stated: str | None) -> str:
+    fit = quals.fit(code, stated)
+    return "-" if fit == "unknown" else fit
+
+
 class OpportunitiesScreen(Screen):
     BINDINGS = [Binding("escape", "focus_table", "Table", show=False)]
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="search notice and attachment text, Enter to run", id="query")
         yield WrapTable(
-            [("deadline", 10), ("agency", 28), ("title", None), ("source", 24)],
+            [
+                ("deadline", 10),
+                ("agency", 28),
+                ("type", 12),
+                ("fit", 10),
+                ("title", None),
+                ("source", 24),
+            ],
             id="hits",
             cursor_type="row",
         )
         yield Footer()
 
     def on_mount(self) -> None:
+        self.quals = summaries.qualifications(self.app.conn)
         self.fill(query.upcoming(self.app.conn, days=30, limit=200))
         self.query_one("#hits", WrapTable).focus()
 
@@ -224,7 +238,15 @@ class OpportunitiesScreen(Screen):
         self.query_one("#hits", WrapTable).set_rows(
             [
                 (
-                    (_day(hit.response_deadline), hit.agency or "-", hit.title, hit.source),
+                    (
+                        _day(hit.response_deadline),
+                        hit.agency or "-",
+                        hit.work_type or "-",
+                        _fit(self.quals, hit.set_aside_code, hit.stated_set_aside),
+                        escape(hit.title)
+                        + (f"\n[dim]{escape(hit.summary)}[/]" if hit.summary else ""),
+                        hit.source,
+                    ),
                     hit.notice_id,
                 )
                 for hit in hits
@@ -273,6 +295,7 @@ class ContextScreen(Screen):
         yield Static(id="header", classes="panel")
         yield Static(id="pursuit", classes="panel")
         yield Static(id="incumbent", classes="panel")
+        yield Static(id="summary", classes="panel")
         with VerticalScroll(id="description_scroll", classes="panel"):
             yield Static(id="description")
         yield WrapTable(AWARD_COLUMNS, id="awards", classes="panel", cursor_type="row")
@@ -288,6 +311,7 @@ class ContextScreen(Screen):
         self.query_one("#header").border_title = "notice"
         self.query_one("#pursuit").border_title = "pursuit"
         self.query_one("#incumbent").border_title = "incumbent"
+        self.query_one("#summary").border_title = "summary"
         self.query_one("#description_scroll").border_title = "description"
         self.query_one("#awards").border_title = "award history"
         self.query_one("#officials").border_title = "officials"
@@ -332,6 +356,19 @@ class ContextScreen(Screen):
             f" · {_day(incumbent.award_date)} to {_day(incumbent.pop_end)}"
             f" · set-aside {incumbent.set_aside_code or '-'} (i to open)"
         )
+        summary = self.query_one("#summary", Static)
+        if detail.summary is None:
+            summary.update("none yet (mentor summarize)")
+            summary.border_subtitle = ""
+        else:
+            quals = summaries.qualifications(conn)
+            fit = _fit(quals, detail.set_aside_code, detail.stated_set_aside)
+            summary.update(
+                f"{detail.summary}\n{detail.work_type} · set-aside"
+                f" {detail.set_aside_code or detail.stated_set_aside or '-'} {fit}"
+                f" · {', '.join(detail.keywords) or '-'}"
+            )
+            summary.border_subtitle = detail.summary_model or ""
         self.query_one("#description", Static).update(
             detail.description or f"description {detail.description_status}"
         )

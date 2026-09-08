@@ -12,7 +12,7 @@ from typing import Annotated
 import click
 import typer
 
-from mentor import __version__, assess, db, documents, jobs, query, workspace
+from mentor import __version__, assess, db, documents, jobs, query, summaries, workspace
 from mentor import quota as quota_module
 from mentor.ai import AIError
 from mentor.config import Settings
@@ -209,7 +209,12 @@ def _filters(
     )
 
 
-def _print_hits(hits: list[query.SearchHit], json_output: bool) -> None:
+def _print_hits(
+    hits: list[query.SearchHit],
+    json_output: bool,
+    quals: summaries.Qualifications | None = None,
+) -> None:
+    quals = quals or summaries.Qualifications()
     if json_output:
         print_json([dataclasses.asdict(hit) for hit in hits])
         return
@@ -223,6 +228,9 @@ def _print_hits(hits: list[query.SearchHit], json_output: bool) -> None:
         typer.echo(f"  {hit.agency or '-'}  deadline {hit.response_deadline or '-'}")
         page = f" p.{hit.page}" if hit.page else ""
         typer.echo(f"  {hit.source}{page}: {hit.snippet}")
+        if hit.summary:
+            fit = quals.fit(hit.set_aside_code, hit.stated_set_aside)
+            typer.echo(f"  {hit.work_type} · fit {fit}: {hit.summary}")
 
 
 @app.command()
@@ -253,7 +261,8 @@ def search(
             except query.InvalidQuery as exc:
                 typer.echo(f"invalid query: {exc}", err=True)
                 raise typer.Exit(1) from exc
-    _print_hits(hits, json_output)
+        quals = summaries.qualifications(conn)
+    _print_hits(hits, json_output, quals)
 
 
 def _semantic_hits(conn, settings: Settings, text: str, limit: int) -> list[query.SearchHit]:
@@ -457,7 +466,8 @@ def searches_run(
         except query.InvalidQuery as exc:
             typer.echo(f"invalid query: {exc}", err=True)
             raise typer.Exit(1) from exc
-    _print_hits(hits, json_output)
+        quals = summaries.qualifications(conn)
+    _print_hits(hits, json_output, quals)
 
 
 @searches_app.command("rm")

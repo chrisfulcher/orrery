@@ -171,6 +171,35 @@ def test_list_notices_orders_by_deadline(conn: sqlite3.Connection, seed: Seed) -
     assert len(query.list_notices(conn, query.Filters(), limit=2)) == 2
 
 
+def test_hits_and_detail_carry_the_latest_summary(conn: sqlite3.Connection, seed: Seed) -> None:
+    seed()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
+    conn.execute(
+        "INSERT INTO notice_summaries (notice_id, slot, provider, model, prompt_version,"
+        " inputs_hash, raw_response, result, summary, work_type, keywords, stated_set_aside,"
+        " created_at) VALUES (?, 'fast', 'openai', 'qwen3:14b', 1, 'h', 'r', '{}',"
+        " 'Buys a help desk. Due soon.', 'it', '[\"help desk\", \"staffing\"]', 'SBA', 'now')",
+        (hrsa,),
+    )
+    hits = {h.notice_id: h for h in query.list_notices(conn, query.Filters())}
+    hit = hits[hrsa]
+    assert (hit.summary, hit.work_type, hit.stated_set_aside, hit.set_aside_code) == (
+        "Buys a help desk. Due soon.", "it", "SBA", None
+    )  # fmt: skip
+    others = [h for h in hits.values() if h.notice_id != hrsa]
+    assert others and all(h.summary is None and h.work_type is None for h in others)
+    [hit] = [h for h in query.search(conn, "Microsoft") if h.notice_id == hrsa] or [None]
+    assert hit is None or hit.summary == "Buys a help desk. Due soon."
+    detail = query.notice(conn, hrsa)
+    assert detail is not None
+    assert (detail.summary, detail.work_type, detail.keywords, detail.stated_set_aside) == (
+        "Buys a help desk. Due soon.", "it", ("help desk", "staffing"), "SBA"
+    )  # fmt: skip
+    assert detail.summary_model == "qwen3:14b"
+    other = query.notice(conn, others[0].notice_id)
+    assert other is not None and other.summary is None and other.keywords == ()
+
+
 def test_notice_detail(conn: sqlite3.Connection, seed: Seed) -> None:
     seed()
     hrsa = SEARCH_FIXTURE["opportunitiesData"][0]

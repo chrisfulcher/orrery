@@ -31,6 +31,12 @@ class SearchHit:
     """bm25 for keyword hits, cosine distance for semantic hits; lower is better in both."""
     page: int | None = None
     """1-based page of an attachment hit; None for notice text and for keyword hits."""
+    set_aside_code: str | None = None
+    summary: str | None = None
+    """The latest stored summary of the notice (``mentor summarize``), when one exists."""
+    work_type: str | None = None
+    stated_set_aside: str | None = None
+    """The set-aside the notice text states, from the summary; fills an empty code."""
 
 
 @dataclass(frozen=True)
@@ -92,9 +98,11 @@ WITH hits AS (
     WHERE attachments_fts MATCH :q
 )
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
-       h.source, h.snippet, min(h.rank) AS rank
+       h.source, h.snippet, min(h.rank) AS rank,
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
 FROM hits AS h JOIN notices AS n ON n.id = h.nid
 LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
+LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
 WHERE 1 = 1 {FILTERS}
 GROUP BY h.nid
 ORDER BY rank, n.posted_at DESC
@@ -103,8 +111,10 @@ LIMIT :limit
 
 LIST_NOTICES = f"""
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
-       'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank
+       'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank,
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
 FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
+LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
 WHERE 1 = 1 {FILTERS}
 ORDER BY n.response_deadline IS NULL, n.response_deadline, n.posted_at DESC, n.id
 LIMIT :limit
@@ -117,11 +127,13 @@ WITH hits AS (
     FROM embeddings WHERE model = :model
 )
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
-       coalesce(a.filename, 'notice') AS source, h.text, min(h.distance) AS rank, h.page
+       coalesce(a.filename, 'notice') AS source, h.text, min(h.distance) AS rank, h.page,
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
 FROM hits AS h
 JOIN notices AS n ON n.notice_id = h.notice_id
 LEFT JOIN attachments AS a ON a.attachment_id = h.attachment_id
 LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
+LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
 GROUP BY h.notice_id
 ORDER BY rank, n.posted_at DESC
 LIMIT :limit
@@ -138,12 +150,27 @@ def semantic_search(
     have ``db.load_vec`` applied.
     """
     rows = conn.execute(SEMANTIC_SEARCH, {"q": vector, "model": model, "limit": limit}).fetchall()
-    return [SearchHit(*row[:6], _snippet(row[6]), row[7], row[8]) for row in rows]
+    return [_hit(row[:8] + row[9:], _snippet(row[6]), page=row[8]) for row in rows]
 
 
 def _snippet(text: str, width: int = 200) -> str:
     text = " ".join(text.split())
     return text if len(text) <= width else text[:width].rsplit(" ", 1)[0] + "..."
+
+
+def _hit(row: tuple, snippet: str, *, page: int | None = None) -> SearchHit:
+    """A hit from the eight standard columns followed by the notice's set-aside code and its
+    latest summary's text, work type, and stated set-aside."""
+    return SearchHit(
+        *row[:6],
+        snippet,
+        row[7],
+        page,
+        set_aside_code=row[8],
+        summary=row[9],
+        work_type=row[10],
+        stated_set_aside=row[11],
+    )
 
 
 def search(
@@ -163,13 +190,13 @@ def search(
             rows = _match(conn, _quoted(text), limit, filters)
         except sqlite3.OperationalError as exc:
             raise InvalidQuery(str(exc)) from exc
-    return [SearchHit(*row[:6], " ".join(row[6].split()), row[7]) for row in rows]
+    return [_hit(row, " ".join(row[6].split())) for row in rows]
 
 
 def list_notices(conn: sqlite3.Connection, filters: Filters, *, limit: int = 50) -> list[SearchHit]:
     """Notices passing the filters, soonest deadline first; no text ranking (rank is 0)."""
     rows = conn.execute(LIST_NOTICES, {"limit": limit, **filters.params()}).fetchall()
-    return [SearchHit(*row[:6], _snippet(row[6]), row[7]) for row in rows]
+    return [_hit(row, _snippet(row[6])) for row in rows]
 
 
 def rebuild_search(conn: sqlite3.Connection) -> None:
@@ -305,6 +332,13 @@ class NoticeDetail:
     award_history: tuple[ContractRef, ...] = ()
     """Recent awards from the same office in the notice's NAICS, newest first."""
     officials: tuple[Official, ...] = ()
+    summary: str | None = None
+    """The latest stored summary (``mentor summarize``): two sentences, or None."""
+    work_type: str | None = None
+    keywords: tuple[str, ...] = ()
+    stated_set_aside: str | None = None
+    """The set-aside the notice text states, as a SAM.gov code; fills an empty code."""
+    summary_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -356,7 +390,8 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         "SELECT notice_id, solicitation_number, title, notice_type, naics_code, psc_code,"
         " set_aside_code, posted_at, response_deadline, active, first_seen_at, last_seen_at,"
         " source_id, description_status, description, url, agency, agency_entity_id, versions,"
-        " award_number, award_date, award_amount, awardee, agency_path_code"
+        " award_number, award_date, award_amount, awardee, agency_path_code,"
+        " summary, work_type, keywords, stated_set_aside, summary_model"
         " FROM v_notices WHERE notice_id = ?",
         (notice_id,),
     ).fetchone()
@@ -384,6 +419,11 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         _incumbent(conn, row[1], row[19], office_code),
         tuple(history),
         _officials(conn, notice_id, row[17]),
+        summary=row[24],
+        work_type=row[25],
+        keywords=tuple(json.loads(row[26])) if row[26] else (),
+        stated_set_aside=row[27],
+        summary_model=row[28],
     )
 
 
@@ -656,11 +696,13 @@ def notices_for_solicitation(
     rows = conn.execute(
         "SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,"
         " 'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank"
+        ", n.set_aside_code, s.summary, s.work_type, s.stated_set_aside"
         " FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id"
+        " LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id"
         " WHERE n.solicitation_number = ? ORDER BY n.posted_at DESC, n.id LIMIT ?",
         (solicitation, limit),
     ).fetchall()
-    return [SearchHit(*row[:6], _snippet(row[6]), row[7]) for row in rows]
+    return [_hit(row, _snippet(row[6])) for row in rows]
 
 
 def contractor(conn: sqlite3.Connection, uei: str, *, recent: int = 20) -> EntityDetail | None:

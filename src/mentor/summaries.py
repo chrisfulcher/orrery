@@ -20,9 +20,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from mentor import ai, db
+from mentor import ai, db, documents, workspace
 from mentor.assess import clip
 from mentor.config import Settings
+from mentor.documents import ProfileDocument
 from mentor.progress import Cancelled, Report, check, never, quiet
 
 PROMPT_VERSION = 1
@@ -31,9 +32,10 @@ SYSTEM_PROMPT = """\
 You write for a small-business capture team scanning U.S. federal contract notices. From
 the notice given, write summary: two short sentences, the first saying what is being bought
 and for whom, the second how and when to respond (notice type, set-aside, deadline) or, when
-the notice is not a solicitation, what it announces. Classify work_type from the list. Give
-keywords: three to eight lowercase tags a vendor would search for (technologies, services,
-products, standards), never agency names. Set set_aside to the SAM.gov code of the set-aside
+the notice is not a solicitation, what it announces. Classify work_type by what the vendor
+would deliver, from the list. Give keywords: three to eight lowercase tags a vendor would
+search for (technologies, services, products, standards), never agency names, set-aside
+terms, or contract types. Set set_aside to the SAM.gov code of the set-aside
 the notice text itself states, or null when the text does not say; the code in the header may
 be missing while the text is explicit. Answer with one JSON object matching the schema and
 nothing else.
@@ -86,11 +88,13 @@ class Summary(BaseModel):
     )
     work_type: WorkType = Field(
         description=(
-            "services: facilities, logistics, maintenance, operations. it: software, systems,"
-            " networks, cybersecurity, telecom. construction: build, renovate, architecture and"
-            " engineering. supplies: products, equipment, parts. research: R&D, studies,"
-            " prototypes. professional: consulting, staffing, training, program support."
-            " medical: clinical and health services, medical equipment. other: none of these."
+            "What the vendor delivers. services: facilities, logistics, maintenance,"
+            " operations. it: software, systems, networks, wireless, cybersecurity, telecom,"
+            " and their installation or support. construction: building, renovation,"
+            " architecture and engineering. supplies: products, equipment, parts, and"
+            " replacements bought as goods. research: studies, experiments, prototypes."
+            " professional: consulting, staffing, training, program support. medical:"
+            " clinical and health services, medical equipment. other: none of these."
         )
     )
     keywords: list[str] = Field(
@@ -261,6 +265,29 @@ def summarize_pending(
     return SummarizeResult(summarized, failed, chosen.model)
 
 
+@dataclass(frozen=True)
+class Qualifications:
+    """What the profile says the company may bid under; empty when there is no profile."""
+
+    size: str | None = None
+    set_asides: tuple[str, ...] = ()
+
+    def fit(self, code: str | None, stated: str | None) -> Fit:
+        return set_aside_fit(code, stated, size=self.size, set_asides=self.set_asides)
+
+
+def qualifications(conn: sqlite3.Connection, *, user_id: int = workspace.USER_ID) -> Qualifications:
+    """The latest profile document's qualifications, read once per screen or command."""
+    latest = workspace.latest_document(conn, "profile", user_id=user_id)
+    if latest is None:
+        return Qualifications()
+    try:
+        doc = documents.parse(latest.body, ProfileDocument)
+    except documents.DocumentError:
+        return Qualifications()
+    return Qualifications(doc.qualifications.size, tuple(doc.qualifications.set_asides))
+
+
 def set_aside_fit(
     code: str | None,
     stated: str | None,
@@ -293,11 +320,13 @@ __all__ = [
     "Fit",
     "NoticeInputs",
     "PROMPT_VERSION",
+    "Qualifications",
     "SET_ASIDE_CODES",
     "SYSTEM_PROMPT",
     "Summary",
     "SummarizeResult",
     "WORK_TYPES",
+    "qualifications",
     "render",
     "set_aside_fit",
     "summarize_pending",

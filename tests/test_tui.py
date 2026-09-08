@@ -71,6 +71,60 @@ def text(app: MentorTop, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).content)
 
 
+SENTINEL = SEARCH_FIXTURE["opportunitiesData"][1]["noticeId"]  # SBA set-aside, deadline set
+
+
+@pytest.fixture
+def app_with_summary(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> MentorTop:
+    """The Sentinel notice summarized, and a small-business profile eligible for its SBA code."""
+    seed()
+    workspace.save_profile(
+        conn, '[company]\nname = "Example LLC"\n[qualifications]\nsize = "small"\n'
+    )
+    conn.execute(
+        "INSERT INTO notice_summaries (notice_id, slot, provider, model, prompt_version,"
+        " inputs_hash, raw_response, result, summary, work_type, keywords, stated_set_aside,"
+        " created_at) VALUES (?, 'fast', 'openai', 'qwen3:14b', 1, 'h', 'r', '{}',"
+        " 'Buys a help desk. Due soon.', 'it', '[\"help desk\", \"staffing\"]', NULL, 'now')",
+        (SENTINEL,),
+    )
+    conn.close()
+    return MentorTop(settings, env_path=write_env(settings, tmp_path))
+
+
+async def test_opportunities_and_context_show_the_summary(app_with_summary: MentorTop) -> None:
+    app = app_with_summary
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        assert isinstance(app.screen, OpportunitiesScreen)
+        assert app.screen.query_one("#hits", DataTable).row_count == 4
+        rows = {key: cells for cells, key in app.screen.query_one("#hits").rows_data}
+        assert rows[SENTINEL][2:5] == (
+            "it",
+            "eligible",
+            f"{SEARCH_FIXTURE['opportunitiesData'][1]['title']}"
+            "\n[dim]Buys a help desk. Due soon.[/]",
+        )
+        other_id, other = next((k, c) for k, c in rows.items() if k != SENTINEL)
+        assert other[2] == "-" and other[3] in ("open", "eligible") and "\n" not in other[4]
+
+        app.push_screen(ContextScreen(SENTINEL))
+        await pilot.pause()
+        assert text(app, "#summary") == (
+            "Buys a help desk. Due soon.\nit · set-aside SBA eligible · help desk, staffing"
+        )
+        assert app.screen.query_one("#summary").border_subtitle == "qwen3:14b"
+        await pilot.press("escape")
+        await pilot.pause()
+        app.push_screen(ContextScreen(other_id))
+        await pilot.pause()
+        assert text(app, "#summary") == "none yet (mentor summarize)"
+
+
 async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
