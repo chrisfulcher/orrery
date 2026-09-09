@@ -10,7 +10,7 @@ mentor is a free, open source, self-hosted business development intelligence too
 - **People only in their official public capacity,** from government sources. No adapter touches personal social media or profiles individuals beyond their public role.
 - **Every stored fact carries provenance:** source, observation time, and confidence. A fact without a source is not stored.
 - **No third-party code loading in v1.** The MCP server is the only extension surface. Do not add a plugin loader.
-- **Self-hosted, one `docker compose up`.** Keep the install path readable by a security reviewer, and keep the build-from-source route working.
+- **Self-hosted, one `docker compose` command** (`run` today; `up` once the ingestion daemon exists). Keep the install path readable by a security reviewer, and keep the build-from-source route working.
 
 ## Data rules
 

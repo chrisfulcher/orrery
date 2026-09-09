@@ -60,7 +60,8 @@ The ambition is larger than a better search over solicitations. mentor is built 
 ## Principles
 
 - **Shipped code stays free and forkable.** Guaranteed by a permissive license, not by a pricing page.
-- **Self-hostable by design.** One `docker compose up` on a home server or a cheap cloud box.
+- **Self-hostable by design.** One `docker compose` command on a home server or a cheap
+  cloud box — `run` today, `up` once the ingestion daemon makes a long-running service.
 - **Zero telemetry.** The software phones home to nobody.
 - **Bring your own keys.** You supply your own SAM.gov API key and LLM credentials; the project never touches credentials, billing, or inference costs.
 - **Model-agnostic AI.** Every AI feature talks to a configurable OpenAI-compatible endpoint, local or cloud, your choice.

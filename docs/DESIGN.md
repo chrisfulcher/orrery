@@ -15,7 +15,7 @@ The ambition is not a better SAM.gov search. The ambition is an entity graph of 
 ## 2. Core principles (the non-negotiables)
 
 1. **Shipped code stays free and forkable.** Guaranteed by a permissive license, not by a pricing page.
-2. **Self-hostable by design.** One `docker compose up` on a home server or cheap cloud box.
+2. **Self-hostable by design.** One `docker compose` command on a home server or cheap cloud box (`run` today; `up` once the ingestion daemon makes a long-running service, §5).
 3. **Zero telemetry.** The software phones home to nobody. In a user base that works near sensitive programs, this is a headline feature.
 4. **Bring your own keys.** Users supply their own SAM.gov API key and LLM credentials. The project never touches credentials, billing, or inference costs.
 5. **Model-agnostic AI.** All AI features talk to a configurable OpenAI-compatible endpoint. Local (Ollama/Qwen-class) or frontier cloud (Claude/GPT) - user's choice.
