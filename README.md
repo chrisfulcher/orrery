@@ -6,9 +6,47 @@
 
 ## Status
 
-Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
+Early, and usable today. The primary interface is `mentor top`, a full-screen
+terminal UI; every command also runs from the shell and prints `--json`. It
+installs from source or with `docker compose`, and runs with no SAM.gov account
+at all (see [Before you start](#before-you-start)).
 
-The terminal UI, `mentor top`, is the primary interface; the MCP server and the read-only SQL views are in. USAspending award history and SAM.gov entity registrations are in too, so the context view of a notice now shows the incumbent, the office's recent awards, and the government contacts, and every vendor is an entity with its registration on record. The BD workflow is in: pursuits anchored on a requirement move through your own gated stages (streamlined Shipley by default, editable), the dashboard shows this week's work on your calendar rather than the government's, and a recompete radar surfaces requirements from the award history months before any notice. Your company profile is a versioned TOML document, and a chat model you choose assesses a pursuit against it, with the result stored with its provenance. Setup and every operation run inside the app. The fast model writes a two-sentence summary, a work type, keywords, and the set-aside the text states for every fetched notice; the opportunities table and the context view show them, with the set-aside fit against your profile. Not there yet: officials and organizations beyond notice contacts, budget context, and the resolver that merges the duplicate offices the bulk extract creates. The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+**Working now**
+
+- **Ingest** — a NAICS slice of SAM.gov notices, from the daily bulk extract or
+  the API, with their attachments; three years of USAspending award history;
+  and SAM.gov entity registrations.
+- **Search** — full text across notice descriptions and the text extracted from
+  PDF, Word and spreadsheet attachments, by keyword or by meaning through an
+  embedding endpoint you choose.
+- **Context** — a notice's page carries the agency chain, the incumbent, the
+  office's recent awards in the same NAICS, the government contacts named on
+  it, and the documents. Every vendor is an entity with its registration on
+  record.
+- **Pursuits** — a requirement you intend to win moves through your own gated
+  stages (streamlined Shipley by default, editable) by recorded decisions. The
+  dashboard shows this week's work on your calendar rather than the
+  government's, and the recompete radar surfaces requirements from the award
+  history months before any notice.
+- **AI you choose** — a fast model writes a two-sentence summary, a work type,
+  keywords, and the set-aside the text states for every fetched notice; a deep
+  model assesses a pursuit against your company profile, a versioned TOML
+  document. Both are stored with their provenance.
+- **Interfaces** — the terminal UI, the CLI, an MCP server so an agent can work
+  over the store, and versioned read-only `v_*` SQL views for your own
+  dashboards. Setup and every operation run inside the app.
+
+**Not there yet**
+
+- Officials and organizations beyond the contacts named on a notice
+- Budget context
+- The resolver that merges the duplicate offices the bulk extract creates
+
+The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
+The probe notes in [`docs/notes/`](docs/notes/) record what was checked live
+against each government API, and when — the endpoints these adapters rest on are
+largely undocumented.
+
 
 ## Why
 
@@ -112,7 +150,24 @@ docker compose run --rm mentor quota
 
 The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data .env` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`mentor.sqlite` plus `attachments/`), and the same directory works from source and from the container. `.env` is bind-mounted rather than injected as environment variables so the app can write it; `MENTOR_DATA_DIR` is the one real environment variable in the container, and the app shows it locked. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `MENTOR_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
-`mentor ingest bulk` downloads the daily SAM.gov extract once per day into `data/extracts/`, keeps only your NAICS codes, and fills in descriptions the API has not fetched; `--archived 2025` ingests a fiscal year's archive for history. `mentor ingest awards` asks USAspending for every contract action in your NAICS codes over the last three years (`--since` and `--until` change the window), waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. Vendors become contractor entities keyed by UEI; awards resolve to offices already in the store by office code, and what cannot resolve is queued as an unresolved alias rather than guessed. `mentor ingest entities` downloads SAM.gov's public monthly entity extract (one keyed request for every registrant in the country, about 150 MB) into `data/extracts/sam/` and keeps only the registrants the store cares about: vendors seen in awards, registrants whose primary NAICS is one of yours, and your own company. Each becomes a contractor entity with its registration status, expiry, structure, business and SBA types, NAICS and PSC lists, and address as sourced facts; registrant contacts are never stored. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. Both count against the same daily budget as notices. Every command that prints data takes `--json`. `mentor --help` and `mentor <command> --help` list the rest.
+The three ingest commands, and what each costs against the SAM.gov quota:
+
+| Command | Source | Quota |
+|---|---|---|
+| `mentor ingest bulk` | The daily SAM.gov extract, downloaded once per day into `data/extracts/`, keeping only your NAICS codes and filling in descriptions the API has not fetched. `--archived 2025` ingests a fiscal year's archive for history. | None |
+| `mentor ingest awards` | Every USAspending contract action in your NAICS codes over the last three years (`--since` and `--until` change the window). Waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. | None |
+| `mentor ingest entities` | SAM.gov's public monthly entity extract — one keyed request for every registrant in the country, about 150 MB — into `data/extracts/sam/`. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. | Counts against the daily budget |
+
+Vendors become contractor entities keyed by UEI. Awards resolve to offices
+already in the store by office code, and what cannot resolve is queued as an
+unresolved alias rather than guessed. From the entity extract mentor keeps only
+the registrants the store cares about — vendors seen in awards, registrants
+whose primary NAICS is one of yours, and your own company — each with its
+registration status, expiry, structure, business and SBA types, NAICS and PSC
+lists, and address as sourced facts. Registrant contacts are never stored.
+
+Every command that prints data takes `--json`. `mentor --help` and
+`mentor <command> --help` list the rest.
 
 ### Working pursuits
 
@@ -152,7 +207,86 @@ uv run mentor top
 ```
 <img width="1917" height="1050" alt="screenshot-2026-09-09_14-25-09" src="https://github.com/user-attachments/assets/5731cc79-39ea-4090-bcdb-04005e392af9" />
 
-`1` is the dashboard: quota against budget with a 30-day sparkline, the fetch queues, store activity, then this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first), what needs attention (a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks) with the open pursuits per stage, and the government's dates for the next 60 days as a strip; Enter on any row opens the pursuit. `2` is the opportunities table (deadline, agency, work type, set-aside fit against your profile, title with its summary beneath, and the matching source); `/` focuses the search box, Enter runs a keyword search over notice and attachment text, Escape returns to the table. Enter on any row opens the context view of that notice: agency chain, its pursuit, the incumbent (the award that shares its solicitation or award number), the summary with its tags and set-aside fit, description, the office's recent awards in the same NAICS, the government contacts named on the notice, and documents. There, `t` opens the notice's pursuit or attaches the notice to one (or starts one), `a` opens the office's entity view, `i` opens the incumbent's, Enter on an award opens its vendor, `o` opens the SAM.gov page in your browser, and Escape goes back. `3` is the board of open pursuits by stage (`n` starts one, `c` shows closed ones); a pursuit's screen carries its tasks, notices, and decision log, with `d` to finish the selected task, `t` to add one, `s` to assess it with the deep model, `g` for a gate decision, `b` to move back a stage, `w` for the outcome (or to reopen), `p` and `n` for PWin and notes, `a` and `i` for the office and the incumbent, `x` to accept the latest assessment's suggested tasks, and Enter on a notice for its context view. `4` is the recompete radar: awards in your profile's NAICS ending soonest with options included, `p` starts a pursuit from one with the award as its incumbent, `m` widens the window. An entity view shows awards made (an office) or won (a contractor), and Enter on one crosses to the other party. `5` is setup: Connections (every `MENTOR_*` setting as a form; `ctrl+s` writes `.env`, `ctrl+t` tests the service of the field you are in, and a setting supplied by a real environment variable shows as locked), Profile, Workflow (stages, gates, and task templates: `a` adds, Enter edits, `x` removes, shift+arrows reorder), Searches (`n`, Enter, `x`, `r` runs one), and Jobs (`j` from anywhere: every ingest, fetch, extract, embed, summarize, assess, and database operation with its parameters, last run, and log; `r` runs the selected one, `c` cancels between items). One job runs at a time, on its own database connection, and the dashboard's queues panel shows it. Escape returns to the tab bar (a focused field swallows the mode keys) and Enter steps from the tab bar into the active tab. `q` quits. The app draws in your terminal's own colours.
+The app draws in your terminal's own colours. Five tabs, selected by number:
+
+| Tab | Screen | What it shows |
+|---|---|---|
+| `1` | Dashboard | Quota against budget with a 30-day sparkline, the fetch queues, and store activity; this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first); what needs attention — a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks — with the open pursuits per stage; and the government's dates for the next 60 days as a strip. Enter on any row opens the pursuit. |
+| `2` | Opportunities | Deadline, agency, work type, set-aside fit against your profile, title with its summary beneath, and the matching source. |
+| `3` | Pursuit board | Open pursuits by stage. |
+| `4` | Recompete radar | Awards in your profile's NAICS ending soonest, options included. |
+| `5` | Setup | Connections, Profile, Workflow, Searches, and Jobs. |
+
+Global keys: `j` opens Jobs from anywhere, Escape returns to the tab bar (a
+focused field swallows the mode keys), Enter steps from the tab bar into the
+active tab, and `q` quits.
+
+### Opportunities (`2`)
+
+| Key | Does |
+|---|---|
+| `/` | Focus the search box |
+| Enter | Run a keyword search over notice and attachment text |
+| Escape | Return to the table |
+| Enter *on a row* | Open the context view of that notice |
+
+### Context view
+
+The agency chain, the notice's pursuit, the incumbent (the award that shares its
+solicitation or award number), the summary with its tags and set-aside fit, the
+description, the office's recent awards in the same NAICS, the government
+contacts named on the notice, and the documents.
+
+| Key | Does |
+|---|---|
+| `t` | Open the notice's pursuit, or attach the notice to one — or start one |
+| `a` | Open the office's entity view |
+| `i` | Open the incumbent's entity view |
+| `o` | Open the SAM.gov page in your browser |
+| Enter *on an award* | Open its vendor |
+| Escape | Go back |
+
+### Pursuit board (`3`)
+
+`n` starts a pursuit, `c` shows the closed ones. A pursuit's own screen carries
+its tasks, notices, and decision log:
+
+| Key | Does |
+|---|---|
+| `d` | Finish the selected task |
+| `t` | Add a task |
+| `s` | Assess the pursuit with the deep model |
+| `x` | Accept the latest assessment's suggested tasks |
+| `g` | Record a gate decision |
+| `b` | Move back a stage |
+| `w` | Record the outcome, or reopen |
+| `p` | PWin |
+| `n` | Notes |
+| `a` / `i` | The office / the incumbent |
+| Enter *on a notice* | Its context view |
+
+### Recompete radar (`4`)
+
+| Key | Does |
+|---|---|
+| `p` | Start a pursuit from an award, with that award as its incumbent |
+| `m` | Widen the window |
+
+An entity view shows awards made (an office) or won (a contractor); Enter on one
+crosses to the other party.
+
+### Setup (`5`)
+
+| Pane | Keys |
+|---|---|
+| Connections | Every `MENTOR_*` setting as a form. `ctrl+s` writes `.env`, `ctrl+t` tests the service of the field you are in. A setting supplied by a real environment variable shows as locked. |
+| Profile | Your company as a TOML document; every save is a version. |
+| Workflow | Stages, gates, and task templates. `a` adds, Enter edits, `x` removes, shift+arrows reorder. |
+| Searches | `n` new, Enter edit, `x` remove, `r` run one. |
+| Jobs | Every ingest, fetch, extract, embed, summarize, assess, and database operation with its parameters, last run, and log. `r` runs the selected one, `c` cancels between items. |
+
+One job runs at a time, on its own database connection, and the dashboard's
+queues panel shows it.
 
 <img width="1907" height="1044" alt="screenshot-2026-09-09_14-25-22" src="https://github.com/user-attachments/assets/899e57f5-8058-481d-9d2f-6d2ebf735654" />
 <img width="1910" height="1040" alt="screenshot-2026-09-09_14-25-37" src="https://github.com/user-attachments/assets/77fed22f-4e51-4455-84fa-56312db1aaee" />
