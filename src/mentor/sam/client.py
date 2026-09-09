@@ -33,6 +33,9 @@ EXTRACTS_PATH = "/data-services/v1/extracts"
 ENTITY_EXTRACT_PARAMS = {
     "fileType": "ENTITY", "sensitivity": "PUBLIC", "frequency": "MONTHLY", "charset": "UTF-8"
 }  # fmt: skip
+MANIFEST_PATH = "/api/prod/opps/v3/opportunities/{notice_id}/resources"
+MANIFEST_ACCEPT = "application/hal+json"  # a plain Accept header is answered with a 406
+FILE_PATH = "/api/prod/opps/v3/opportunities/resources/files/{resource_id}/download"
 ENTITIES_PER_REQUEST = 10  # the v3 page size cap
 MAX_WINDOW = timedelta(days=365)
 DATE_FORMAT = "%m/%d/%Y"
@@ -44,6 +47,35 @@ class SamError(Exception):
 
 class AttachmentTooLarge(SamError):
     """The file exceeds MENTOR_MAX_ATTACHMENT_BYTES; the queue records it as skipped."""
+
+
+class NoticeUnknown(SamError):
+    """SAM.gov has no notice with this id. Terminal for that notice, never retried."""
+
+
+class ManifestShapeError(SamError):
+    """The manifest response was not the shape this release pins to. The endpoint has no
+    published contract, so this is the expected way it breaks; the queue stops the manifest
+    stage on the first one rather than writing rows it does not understand."""
+
+
+@dataclass(frozen=True)
+class ManifestItem:
+    """One attachment as the manifest states it. ``raw`` is kept so a shape change is visible
+    in the store rather than only in a traceback."""
+
+    resource_id: str
+    name: str
+    mime_type: str | None
+    size: int | None
+    access_status: str | None
+    export_controlled: bool
+    deleted: bool
+    raw: dict
+
+    @property
+    def public(self) -> bool:
+        return self.access_status == "public" and not self.export_controlled
 
 
 @dataclass(frozen=True)
@@ -212,6 +244,42 @@ class SamClient:
         os.replace(tmp, path)
         return DownloadResult(path=path, filename=filename, sha256=sha256, size=size)
 
+    def attachment_url(self, resource_id: str) -> str:
+        """The public download URL for a manifest item; the same shape the API's
+        ``resourceLinks`` carry, so both discovery paths produce identical rows."""
+        return self._settings.sam_web_base_url + FILE_PATH.format(resource_id=resource_id)
+
+    def get_attachment_manifest(self, notice_id: str) -> list[ManifestItem]:
+        """Every attachment SAM.gov lists for a notice. No key, no quota, no api_requests row.
+
+        An empty list means the manifest was read and named nothing, which is a result and not
+        a failure -- the response omits ``_embedded`` entirely rather than carrying an empty
+        one. Raises ``NoticeUnknown`` when SAM.gov does not recognise the id (answered with a
+        400, not a 404), ``ManifestShapeError`` when the body is not the pinned shape, and
+        ``SamError`` for anything else. See docs/notes/sam-manifest-probe.md.
+        """
+        url = self._settings.sam_web_base_url + MANIFEST_PATH.format(notice_id=notice_id)
+        try:
+            response = self._http.get(url, headers={"Accept": MANIFEST_ACCEPT})
+        except httpx.HTTPError as exc:
+            raise SamError(f"{url}: {type(exc).__name__}: {exc}") from exc
+        if response.status_code == 400:
+            raise NoticeUnknown(f"{url}: SAM.gov has no notice {notice_id}")
+        if not response.is_success:
+            raise SamError(f"{url}: HTTP {response.status_code}")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ManifestShapeError(f"{url}: response is not JSON") from exc
+        if not isinstance(body, dict):
+            raise ManifestShapeError(f"{url}: response is not an object")
+        groups = (body.get("_embedded") or {}).get("opportunityAttachmentList") or []
+        items = []
+        for group in groups:
+            for raw in (group or {}).get("attachments") or []:
+                items.append(_manifest_item(raw, url))
+        return items
+
     def _keyed_request(
         self,
         url: str,
@@ -255,6 +323,28 @@ class SamClient:
         if self._key is None:
             return text
         return text.replace(self._key.get_secret_value(), "[api_key]")
+
+
+def _manifest_item(raw: object, url: str) -> ManifestItem:
+    """One manifest entry, strictly. The resource id is the only field the row cannot be built
+    without, so its absence is a shape change rather than a missing optional."""
+    if not isinstance(raw, dict):
+        raise ManifestShapeError(f"{url}: attachment entry is not an object")
+    resource_id = raw.get("resourceId")
+    if not isinstance(resource_id, str) or not resource_id:
+        raise ManifestShapeError(f"{url}: attachment entry has no resourceId")
+    size = raw.get("size")
+    name = raw.get("name")
+    return ManifestItem(
+        resource_id=resource_id,
+        name=name if isinstance(name, str) and name else "attachment",
+        mime_type=raw.get("mimeType") or None,
+        size=size if isinstance(size, int) else None,
+        access_status=raw.get("accessStatus") or None,
+        export_controlled=str(raw.get("exportControlled") or "0") not in ("0", "false", ""),
+        deleted=str(raw.get("deletedFlag") or "0") not in ("0", "false", ""),
+        raw=raw,
+    )
 
 
 def _filename_from(content_disposition: str | None) -> str:

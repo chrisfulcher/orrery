@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     sam_base_url: str = "https://api.sam.gov"
     """The only host the API key is ever sent to."""
 
+    sam_web_base_url: str = "https://sam.gov"
+    """Where the unkeyed attachment manifest and the attachment files are read from. No key is
+    ever sent here. Separate from ``sam_base_url`` because it is a different host."""
+
     naics: Annotated[list[str], NoDecode] = Field(default_factory=list)
     """The NAICS slice to ingest, comma-separated in MENTOR_NAICS. Each element is a prefix of
     two to six digits: ``5415`` takes the whole industry group, ``541512`` one code. Empty

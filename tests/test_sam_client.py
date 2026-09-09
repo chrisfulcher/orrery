@@ -12,7 +12,14 @@ from pytest_httpx import HTTPXMock, IteratorStream
 
 from mentor.config import Settings
 from mentor.quota import BudgetExceeded
-from mentor.sam.client import AttachmentTooLarge, SamClient, SamError, _filename_from
+from mentor.sam.client import (
+    AttachmentTooLarge,
+    ManifestShapeError,
+    NoticeUnknown,
+    SamClient,
+    SamError,
+    _filename_from,
+)
 
 FIXTURES = Path(__file__).with_name("fixtures")
 DOWNLOAD_URL = "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/abc/download"
@@ -280,3 +287,107 @@ def test_entity_extract_refuses_a_redirect_carrying_the_key(
     with pytest.raises(SamError, match="refusing to follow"):
         client.download_entity_extract(tmp_path)
     assert len(httpx_mock.get_requests()) == 1
+
+
+MANIFEST_URL = "https://sam.gov/api/prod/opps/v3/opportunities/N1/resources"
+
+
+def manifest_body(*attachments: dict) -> dict:
+    """The shape the endpoint returns when a notice has files (probe request 2)."""
+    return {"_embedded": {"opportunityAttachmentList": [{"attachments": list(attachments)}]}}
+
+
+ENTRY = {
+    "resourceId": "abc",
+    "name": "Statement of Work.pdf",
+    "mimeType": ".pdf",
+    "size": 261041,
+    "accessStatus": "public",
+    "exportControlled": "0",
+    "deletedFlag": "0",
+}
+
+
+def keyless(settings: Settings) -> Settings:
+    return settings.model_copy(update={"sam_api_key": None})
+
+
+def test_manifest_is_read_without_a_key_and_spends_nothing(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    httpx_mock.add_response(url=MANIFEST_URL, json=manifest_body(ENTRY))
+    with SamClient(keyless(settings), conn, run_id) as client:
+        (item,) = client.get_attachment_manifest("N1")
+        assert client.attachment_url(item.resource_id) == DOWNLOAD_URL
+    assert (item.name, item.mime_type, item.size) == ("Statement of Work.pdf", ".pdf", 261041)
+    assert item.public and not item.deleted
+    assert conn.execute("SELECT count(*) FROM api_requests").fetchone() == (0,)
+    assert httpx_mock.get_requests()[0].headers["Accept"] == "application/hal+json"
+
+
+def test_a_notice_with_no_attachments_is_an_empty_list_not_an_error(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    """The endpoint omits _embedded entirely rather than sending an empty one (probe 3). This
+    is a result, and recording it is what stops the notice being asked about forever."""
+    httpx_mock.add_response(url=MANIFEST_URL, json={"_links": {}})
+    with SamClient(keyless(settings), conn, run_id) as client:
+        assert client.get_attachment_manifest("N1") == []
+
+
+def test_an_unknown_notice_is_a_400_and_is_terminal(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    """SAM.gov answers an unknown id with 400, not 404 (probe 4)."""
+    httpx_mock.add_response(
+        url=MANIFEST_URL, status_code=400, json={"errors": {"details": "Record not found"}}
+    )
+    with SamClient(keyless(settings), conn, run_id) as client:
+        with pytest.raises(NoticeUnknown, match="N1"):
+            client.get_attachment_manifest("N1")
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        ("not json at all", "not JSON"),
+        ('["a list"]', "not an object"),
+    ],
+)
+def test_a_body_that_is_not_the_pinned_shape_is_a_shape_error(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    conn: sqlite3.Connection,
+    run_id: int,
+    body: str,
+    match: str,
+) -> None:
+    httpx_mock.add_response(url=MANIFEST_URL, content=body.encode())
+    with SamClient(keyless(settings), conn, run_id) as client:
+        with pytest.raises(ManifestShapeError, match=match):
+            client.get_attachment_manifest("N1")
+
+
+def test_an_entry_without_a_resource_id_is_a_shape_error(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    """The resource id is the only field the row cannot be built without."""
+    httpx_mock.add_response(url=MANIFEST_URL, json=manifest_body({"name": "orphan.pdf"}))
+    with SamClient(keyless(settings), conn, run_id) as client:
+        with pytest.raises(ManifestShapeError, match="resourceId"):
+            client.get_attachment_manifest("N1")
+
+
+def test_access_flags_are_strings_and_are_read_as_flags(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    """exportControlled and deletedFlag arrive as "0"/"1", not booleans."""
+    controlled = {**ENTRY, "resourceId": "c1", "exportControlled": "1"}
+    deleted = {**ENTRY, "resourceId": "d1", "deletedFlag": "1"}
+    restricted = {**ENTRY, "resourceId": "r1", "accessStatus": "restricted"}
+    httpx_mock.add_response(url=MANIFEST_URL, json=manifest_body(controlled, deleted, restricted))
+    with SamClient(keyless(settings), conn, run_id) as client:
+        items = {i.resource_id: i for i in client.get_attachment_manifest("N1")}
+    assert items["c1"].export_controlled and not items["c1"].public
+    assert items["d1"].deleted
+    assert not items["r1"].public
