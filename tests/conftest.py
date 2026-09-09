@@ -34,6 +34,21 @@ SEARCH_FIXTURE = json.loads(
 SEARCH_URL = re.compile(r".*/opportunities/v2/search.*")
 
 
+NOW = "2026-09-09T00:00:00Z"
+"""The instant every test runs at.
+
+The notice fixtures carry absolute response deadlines, so without this the suite's result
+depends on when it is run: on 2026-09-09 at 16:00 UTC one fixture deadline passed and four
+tests went red with no code change behind them. Freezing the clock also makes stored
+timestamps deterministic. A test that needs a different instant overrides db.utcnow itself,
+as several already do."""
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(db, "utcnow", lambda: NOW)
+
+
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
     return tmp_path / "mentor.sqlite"

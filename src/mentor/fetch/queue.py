@@ -125,7 +125,10 @@ ON CONFLICT (notice_id, url) DO UPDATE SET
 
 def _pending(conn: sqlite3.Connection, sql: str, limit: int) -> list[tuple]:
     now = db.utcnow()
-    due = (datetime.now(UTC) - timedelta(days=RECHECK_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    due = (
+        datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        - timedelta(days=RECHECK_DAYS)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     return conn.execute(sql, {"limit": limit, "now": now, "due": due}).fetchall()
 
 

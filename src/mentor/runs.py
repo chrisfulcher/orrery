@@ -4,6 +4,8 @@ import sqlite3
 from datetime import date
 from typing import Literal
 
+from mentor import db
+
 
 def start(
     conn: sqlite3.Connection,
@@ -14,11 +16,13 @@ def start(
 ) -> int:
     """Open a run and return its id."""
     cursor = conn.execute(
-        "INSERT INTO ingestion_runs (source_id, posted_from, posted_to) VALUES (?, ?, ?)",
+        "INSERT INTO ingestion_runs (source_id, posted_from, posted_to, started_at)"
+        " VALUES (?, ?, ?, ?)",
         (
             source_id,
             posted_from.isoformat() if posted_from else None,
             posted_to.isoformat() if posted_to else None,
+            db.utcnow(),
         ),
     )
     assert cursor.lastrowid is not None
