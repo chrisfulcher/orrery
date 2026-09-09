@@ -167,7 +167,7 @@ def extract(
     limit: Annotated[int | None, typer.Option(help="Cap attachments processed this run.")] = None,
     json_output: JsonFlag = False,
 ) -> None:
-    """Extract text from fetched attachments (PDF for now). Spends no quota."""
+    """Extract text from fetched attachments (PDF and Word). Spends no quota."""
     _run_job("extract", {"limit": limit}, json_output)
 
 

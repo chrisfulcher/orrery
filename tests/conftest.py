@@ -130,6 +130,29 @@ def make_pdf() -> Callable[[list[str]], bytes]:
     return _make_pdf
 
 
+def _make_docx(paragraphs: list[str], table: list[list[str]] | None = None) -> bytes:
+    """A .docx with the paragraphs, and a table after the first one when given, so document
+    order and table flattening can both be asserted."""
+    from docx import Document
+
+    document = Document()
+    for index, text in enumerate(paragraphs):
+        document.add_paragraph(text)
+        if table and index == 0:
+            grid = document.add_table(rows=len(table), cols=len(table[0]))
+            for row, cells in zip(grid.rows, table, strict=True):
+                for cell, value in zip(row.cells, cells, strict=True):
+                    cell.text = value
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def make_docx() -> Callable[..., bytes]:
+    return _make_docx
+
+
 MOST_LINKS_NOTICE = max(
     SEARCH_FIXTURE["opportunitiesData"], key=lambda r: len(r["resourceLinks"] or [])
 )["noticeId"]
