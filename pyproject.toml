@@ -1,6 +1,6 @@
 [project]
 name = "mentor"
-version = "0.0.1"
+version = "0.1.0"
 description = "Free, open source, self-hosted business development intelligence for U.S. federal government contracting."
 readme = "README.md"
 license = "Apache-2.0"
