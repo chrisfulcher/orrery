@@ -14,6 +14,8 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from mentor.naics import validate_slice
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -33,7 +35,9 @@ class Settings(BaseSettings):
     """The only host the API key is ever sent to."""
 
     naics: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    """NAICS codes to ingest, comma-separated in MENTOR_NAICS. Empty means nothing to ingest."""
+    """The NAICS slice to ingest, comma-separated in MENTOR_NAICS. Each element is a prefix of
+    two to six digits: ``5415`` takes the whole industry group, ``541512`` one code. Empty
+    means nothing to ingest."""
 
     fetch_delay: float = 1.0
     """Seconds to pause between attachment downloads (public files; politeness, not quota)."""
@@ -96,6 +100,11 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [code.strip() for code in value.split(",") if code.strip()]
         return value
+
+    @field_validator("naics")
+    @classmethod
+    def _valid_prefixes(cls, value: list[str]) -> list[str]:
+        return validate_slice(value)
 
     @property
     def db_path(self) -> Path:

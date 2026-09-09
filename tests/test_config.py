@@ -58,3 +58,14 @@ def test_env_example_lists_every_setting() -> None:
 
 def test_env_example_is_the_defaults() -> None:
     assert Settings(_env_file=EXAMPLE).model_dump() == Settings(_env_file=None).model_dump()
+
+
+def test_naics_accepts_prefixes_of_two_to_six_digits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MENTOR_NAICS", "54,5415,541512")
+    assert Settings(_env_file=None).naics == ["54", "5415", "541512"]
+
+
+def test_naics_rejects_a_malformed_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MENTOR_NAICS", "5415,54a")
+    with pytest.raises(ValueError, match="'54a'"):
+        Settings(_env_file=None)
