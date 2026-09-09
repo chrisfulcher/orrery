@@ -327,3 +327,39 @@ def test_an_ingest_from_a_supplied_file_records_no_window(
     assert conn.execute(
         "SELECT posted_from, posted_to FROM ingestion_runs WHERE run_id = ?", (result.run_id,)
     ).fetchone() == (None, None)
+
+
+def test_members_are_ordered_by_number_not_lexicographically() -> None:
+    names = [f"Contracts_PrimeAwardSummaries_x_{n}.csv" for n in (1, 2, 10, 11)]
+    assert sorted(reversed(names), key=awards._member_order) == names
+
+
+def test_every_prime_member_of_the_zip_is_read(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> None:
+    """USAspending splits a large download across numbered members, each with its own header;
+    reading only the first stops silently at its end."""
+    rows = [{"award_id_piid": f"P{n}"} for n in range(6)]
+    path = tmp_path / "split.zip"
+    path.write_bytes(make_awards_zip(rows, members=3))
+    result = ingest_awards(conn, settings, path)
+    assert (result.rows_read, result.contracts_new) == (6, 6)
+    assert [p for (p,) in conn.execute("SELECT piid FROM contracts ORDER BY piid")] == [
+        f"P{n}" for n in range(6)
+    ]
+
+
+def test_a_resume_lands_inside_a_later_member(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> None:
+    """The cursor is a row offset across the whole file, so it has to survive the seam."""
+    rows = [{"award_id_piid": f"P{n}"} for n in range(6)]
+    path = tmp_path / "split.zip"
+    path.write_bytes(make_awards_zip(rows, members=3))
+    first = ingest_awards(conn, settings, path, limit=4)
+    assert (first.rows_read, first.resumed_from) == (4, 0)
+    second = ingest_awards(conn, settings, path)
+    assert (second.rows_read, second.resumed_from) == (2, 4)
+    assert [p for (p,) in conn.execute("SELECT piid FROM contracts ORDER BY piid")] == [
+        f"P{n}" for n in range(6)
+    ]

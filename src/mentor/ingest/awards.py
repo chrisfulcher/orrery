@@ -187,12 +187,8 @@ def ingest_awards(
 
     try:
         csv.field_size_limit(1 << 24)
-        with _open_summary(path) as handle:
-            reader = csv.DictReader(handle, restkey="_extra")
-            missing = REQUIRED_COLUMNS - set(reader.fieldnames or [])
-            if missing:
-                raise AwardsError(f"{path.name}: missing columns {sorted(missing)}")
-            for position, row in enumerate(reader, 1):
+        with _open_summary(path) as rows:
+            for position, row in enumerate(rows, 1):
                 if position <= resumed_from:
                     continue
                 read += 1
@@ -363,19 +359,49 @@ def _ingest_row(
     return existing is None, created, office_id, vendor_id
 
 
+def _member_order(name: str) -> tuple[int, str]:
+    """Members sort by their trailing number, not lexicographically: ``_10`` would otherwise
+    come before ``_2`` and the rows would be read out of order, which the resume cursor -- a
+    row offset across the whole file -- cannot survive."""
+    stem = Path(name).stem
+    tail = stem.rsplit("_", 1)[-1]
+    return (int(tail) if tail.isdigit() else 0, stem)
+
+
+def _member_rows(handle: TextIO, label: str) -> Iterator[dict]:
+    """One CSV member. Every member carries its own header, so every member is checked."""
+    reader = csv.DictReader(handle, restkey="_extra")
+    missing = REQUIRED_COLUMNS - set(reader.fieldnames or [])
+    if missing:
+        raise AwardsError(f"{label}: missing columns {sorted(missing)}")
+    yield from reader
+
+
 @contextmanager
-def _open_summary(path: Path) -> Iterator[TextIO]:
-    """The award-summary CSV, read straight out of the zip or from a bare CSV file."""
+def _open_summary(path: Path) -> Iterator[Iterator[dict]]:
+    """The award-summary rows in order, across every member of the zip. USAspending splits a
+    large download into numbered members, so reading only the first silently stops at its end
+    -- invisible until a slice is wide enough to split the file, which is exactly what prefix
+    matching makes reachable."""
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            names = [n for n in archive.namelist() if Path(n).name.startswith(MEMBER_PREFIX)]
+            names = sorted(
+                (n for n in archive.namelist() if Path(n).name.startswith(MEMBER_PREFIX)),
+                key=_member_order,
+            )
             if not names:
                 raise AwardsError(f"{path.name}: no {MEMBER_PREFIX}*.csv member")
-            with archive.open(names[0]) as member:
-                yield io.TextIOWrapper(member, encoding="utf-8-sig", newline="")
+
+            def rows() -> Iterator[dict]:
+                for name in names:
+                    with archive.open(name) as member:
+                        wrapper = io.TextIOWrapper(member, encoding="utf-8-sig", newline="")
+                        yield from _member_rows(wrapper, f"{path.name}:{Path(name).name}")
+
+            yield rows()
     else:
         with open(path, encoding="utf-8-sig", newline="") as handle:
-            yield handle
+            yield _member_rows(handle, path.name)
 
 
 def _free_cage(conn: sqlite3.Connection, cage: str | None) -> str | None:

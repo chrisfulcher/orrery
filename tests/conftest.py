@@ -311,15 +311,21 @@ def make_awards_csv(rows: list[dict]) -> bytes:
     return "﻿".encode() + out.getvalue().encode("utf-8")
 
 
-def make_awards_zip(rows: list[dict]) -> bytes:
-    """The zip USAspending serves: the award summary plus a subawards file we ignore."""
+def make_awards_zip(rows: list[dict], *, members: int = 1) -> bytes:
+    """The zip USAspending serves: the award summary plus a subawards file we ignore. A large
+    download is split across numbered members, each with its own header; ``members`` spreads
+    the rows over that many, in order."""
     import zipfile
 
     buffer = io.BytesIO()
+    size = -(-len(rows) // members) if rows else 0
+    chunks = [rows[i * size : (i + 1) * size] for i in range(members)] if size else [rows]
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "Contracts_PrimeAwardSummaries_2026-09-07_H14M26S52_1.csv", make_awards_csv(rows)
-        )
+        for index, chunk in enumerate(chunks, 1):
+            archive.writestr(
+                f"Contracts_PrimeAwardSummaries_2026-09-07_H14M26S52_{index}.csv",
+                make_awards_csv(chunk),
+            )
         archive.writestr("Contracts_Subawards_2026-09-07_H14M29S15_1.csv", "ignored\r\n")
     return buffer.getvalue()
 
