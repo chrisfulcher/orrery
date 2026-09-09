@@ -36,13 +36,11 @@ v1 deliberately does not include a hosted service, accounts, telemetry, third-pa
 
 ## Before you start
 
-**SAM.gov access.** The API quota depends on how your key was issued, and the difference is the difference between a working tool and a broken one:
+**Nothing.** mentor runs with no SAM.gov account and no credentials of any kind. The daily bulk extract is a public file carrying every active contract opportunity with its description, and a notice's attachments are listed and downloaded from public URLs that take no key. `mentor ingest bulk` followed by `mentor fetch` gives you a working store with full-text search inside the solicitation documents.
 
-1. Register your entity on SAM.gov and obtain a Unique Entity ID (UEI). Registration alone can take up to 10 business days, so start it first.
-2. Obtain a role on that entity registration for your SAM.gov user account. The exact role name is still being confirmed and will be stated here once verified.
-3. Request your public API key from your SAM.gov account profile.
+**A SAM.gov API key (optional)** buys same-day notices and the API's own notice descriptions. Measured over one NAICS slice on 2026-09-09, every notice posted before the current day was already in the bulk extract; what a key closes is latency, not coverage. Request one from your SAM.gov account profile.
 
-A personal key with no role is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000. Each search page and each notice description is one request; attachment files download without a key and do not count. Ten a day is enough to try a narrow slice, and a thousand is the budget the tool is designed around.
+A personal key is limited to roughly 10 requests per day. A key backed by a role on an active entity registration gets roughly 1,000 — but that registration requires a business and can take up to 10 business days, and this project is for individuals as much as for companies, so nothing is designed around having one. Each search page and each notice description is one request; attachment manifests and the files themselves use no key and do not count.
 
 Every setting below can be entered in the app (`mentor top`, key `5`), which also tests each connection with the smallest possible request (`ctrl+t`): one keyed one-day SAM.gov search page, one embedding of the word "mentor", one tiny structured completion from a chat model.
 
@@ -50,11 +48,11 @@ Every setting below can be entered in the app (`mentor top`, key `5`), which als
 
 **A chat model** (optional; needed only for `mentor pursuit assess`). Two slots, `fast` for grunt work and `deep` for judgment, each any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM, OpenAI, OpenRouter) or Anthropic through its official SDK, set with `MENTOR_AI_FAST_*` and `MENTOR_AI_DEEP_*`. The default is a local Ollama running `qwen3:14b` (`ollama pull qwen3:14b`); run Ollama with `OLLAMA_CONTEXT_LENGTH=16384` or more, because its default context of 4,096 tokens silently truncates a long prompt from the front. Leave the deep slot unset to use the fast one for everything, or point it at `claude-opus-5` with `MENTOR_AI_DEEP_PROVIDER=anthropic` and a key in `MENTOR_AI_DEEP_API_KEY` or `ANTHROPIC_API_KEY`. On Arch with an AMD GPU, the `ollama-rocm` package is the one that uses the card; the plain `ollama` package runs on the CPU.
 
-What leaves your machine: `mentor ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `mentor ingest entities` sends your SAM.gov key to `api.sam.gov` like every other keyed command, and `--uei` sends the UEIs you name. `mentor embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `mentor search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else. `mentor pursuit assess` sends your profile document, the pursuit's summary and notes, and public notice and attachment text to the chat model you configured, and nothing else; `mentor summarize` sends each notice's public title, typed fields, and description to the fast model, and never your profile. With the local default nothing leaves the machine.
+What leaves your machine: `mentor ingest bulk` downloads a public file from `sam.gov` and sends no key. `mentor fetch` asks `sam.gov` for each notice's attachment list and downloads the files, both without a key, and sends your key to `api.sam.gov` only for notice descriptions. `mentor ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `mentor ingest entities` sends your SAM.gov key to `api.sam.gov` like every other keyed command, and `--uei` sends the UEIs you name. `mentor embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `mentor search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else. `mentor pursuit assess` sends your profile document, the pursuit's summary and notes, and public notice and attachment text to the chat model you configured, and nothing else; `mentor summarize` sends each notice's public title, typed fields, and description to the fast model, and never your profile. With the local default nothing leaves the machine.
 
 ## Quickstart
 
-Setup happens inside the app. On first run it opens on its Connections tab; enter your SAM.gov key (see [Before you start](#before-you-start)) and NAICS codes, press `ctrl+s`, and the app writes `.env` next to it (mode 0600, only `MENTOR_*` lines, never logged). Every operation below then runs from the Jobs tab (`j`) with a log, and every setting, your profile, your workflow, and your saved searches are forms under `5`. The CLI is the same engine for scripts and cron; if you would rather start from a file, copy `.env.example` to `.env` and fill it in.
+Setup happens inside the app. On first run it opens on its Connections tab; enter the NAICS codes you want (and a SAM.gov key if you have one, see [Before you start](#before-you-start)), press `ctrl+s`, and the app writes `.env` next to it (mode 0600, only `MENTOR_*` lines, never logged). Every operation below then runs from the Jobs tab (`j`) with a log, and every setting, your profile, your workflow, and your saved searches are forms under `5`. The CLI is the same engine for scripts and cron; if you would rather start from a file, copy `.env.example` to `.env` and fill it in.
 
 ### From source
 
@@ -68,12 +66,12 @@ uv run mentor top                 # first run: Connections tab, then j for the j
 The same operations from a shell:
 
 ```
-uv run mentor ingest notices      # yesterday's notices for your NAICS codes; one request per page
-uv run mentor ingest bulk         # today's full extract (~250 MB, no key, no quota), your NAICS codes only
-uv run mentor ingest awards       # three years of USAspending award history for your NAICS codes (no key, no quota)
-uv run mentor ingest entities     # SAM.gov registrations of the vendors seen and your NAICS codes (one request per month)
+uv run mentor ingest notices      # optional, needs a key: yesterday's notices, one request per page
+uv run mentor ingest bulk         # start here: today's full extract (~250 MB, no key, no quota), your slice only
+uv run mentor ingest awards       # three years of USAspending award history for your slice (no key, no quota)
+uv run mentor ingest entities     # optional, needs a key: SAM.gov registrations (one request per month)
 uv run mentor fetch --dry-run     # what would be fetched, and today's remaining budget
-uv run mentor fetch               # descriptions within the budget, then attachments (free)
+uv run mentor fetch               # attachment manifests and files (no key); descriptions too if you have one
 uv run mentor extract             # PDF text; spends no quota
 uv run mentor embed               # optional: chunk and embed via your endpoint
 uv run mentor summarize           # optional: a summary and tags per notice from the fast model

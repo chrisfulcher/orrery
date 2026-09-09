@@ -209,7 +209,7 @@ def test_fetch_dry_run(
         assert conn.execute("SELECT count(*) FROM ingestion_runs").fetchone() == (1,)
 
 
-def test_fetch_json_and_missing_key(
+def test_fetch_json_and_the_keyless_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -242,8 +242,15 @@ def test_fetch_json_and_missing_key(
     }
     assert payload["descriptions_fetched"] == 5 and payload["attachments_fetched"] == 1
 
-    result = runner.invoke(app, ["fetch"], env={**env, "MENTOR_SAM_API_KEY": ""})
-    assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output
+    # Without a key the run still goes ahead: only the description stage stands aside, and it
+    # says so. This is what a keyless install rests on.
+    result = runner.invoke(
+        app,
+        ["fetch", "--max-attachments", "0", "--max-manifests", "0"],
+        env={**env, "MENTOR_SAM_API_KEY": ""},
+    )
+    assert result.exit_code == 0, result.output
+    assert "descriptions: skipped, MENTOR_SAM_API_KEY is not set" in result.output
 
 
 def test_extract_search_and_reindex(

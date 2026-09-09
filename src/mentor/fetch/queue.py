@@ -202,9 +202,14 @@ def fetch_pending(
     shape_error: ManifestShapeError | None = None
     try:
         with SamClient(settings, conn, run_id) as client:
-            d_fetched, d_failed, exhausted = _fetch_descriptions(
-                conn, client, -1 if budget is None else budget, report, cancelled
-            )
+            if settings.sam_api_key is None:
+                # The rest of this run needs no key. Say so rather than failing: a store built
+                # from the bulk extract has its descriptions already.
+                report("descriptions: skipped, MENTOR_SAM_API_KEY is not set")
+            else:
+                d_fetched, d_failed, exhausted = _fetch_descriptions(
+                    conn, client, -1 if budget is None else budget, report, cancelled
+                )
             m_checked, m_failed, found, shape_error = _fetch_manifests(
                 conn, client, settings, -1 if max_manifests is None else max_manifests,
                 report, cancelled,

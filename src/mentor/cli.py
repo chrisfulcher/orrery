@@ -47,7 +47,7 @@ def print_json(payload: object) -> None:
 
 
 MILESTONES = {
-    "fetch": ("manifests: ",),
+    "fetch": ("manifests: ", "descriptions: "),
     "ingest-bulk": ("extract: ", "NAICS "),
     "ingest-awards": ("awards: ", "NAICS "),
     "ingest-entities": ("extract: ", "NAICS "),

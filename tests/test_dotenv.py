@@ -124,9 +124,11 @@ def test_environment_overrides_and_setup_needed(
     assert environment_overrides() == {"sam_daily_budget"}
 
     env = tmp_path / ".env"
-    assert setup_needed(Settings(_env_file=None), env) == "MENTOR_SAM_API_KEY is not set"
+    # The key is not an essential: without one the bulk extract still carries notices and
+    # their descriptions, and attachments are read from URLs that take no key.
+    assert setup_needed(Settings(_env_file=None), env) == "MENTOR_NAICS is empty"
     assert setup_needed(Settings(_env_file=None, sam_api_key="k"), env) == "MENTOR_NAICS is empty"
-    ready = Settings(_env_file=None, sam_api_key="k", naics=["541512"])
+    ready = Settings(_env_file=None, naics=["541512"])
     assert setup_needed(ready, env) is None  # a variable in the environment counts as configured
     monkeypatch.delenv("MENTOR_SAM_DAILY_BUDGET")
     assert setup_needed(ready, env) == f"{env} not found"

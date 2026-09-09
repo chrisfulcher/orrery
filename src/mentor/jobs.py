@@ -428,7 +428,7 @@ JOBS: dict[str, Job] = {
             True, _run_entities, unmet=_entities_unmet,
         ),
         Job(
-            "fetch", "Fetch descriptions and attachments", frozenset({"sam_key"}),
+            "fetch", "Fetch descriptions and attachments", frozenset(),
             (Param("budget", "Description budget", "int"),
              Param("max_attachments", "Attachment limit", "int"),
              Param("max_manifests", "Discovery limit", "int", default=MANIFESTS_PER_RUN)),

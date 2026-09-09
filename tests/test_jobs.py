@@ -36,7 +36,8 @@ def test_registry_lists_the_operations_with_their_needs() -> None:
     ]  # fmt: skip
     assert JOBS["probe-sam"].needs == {"sam_key", "naics"} and not JOBS["probe-sam"].cancellable
     assert JOBS["ingest-notices"].needs == {"sam_key", "naics"}
-    assert JOBS["fetch"].needs == {"sam_key"} and JOBS["ingest-awards"].needs == {"naics"}
+    # fetch needs no key: only its description stage is keyed, and that stage stands aside.
+    assert JOBS["fetch"].needs == set() and JOBS["ingest-awards"].needs == {"naics"}
     assert not JOBS["assess"].cancellable and JOBS["fetch"].cancellable
 
 

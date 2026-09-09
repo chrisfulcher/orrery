@@ -145,9 +145,13 @@ def environment_overrides() -> set[str]:
 
 
 def setup_needed(settings: Settings, env_path: Path | None) -> str | None:
-    """Why first-run setup is needed, or None when the essentials are in place."""
-    if settings.sam_api_key is None:
-        return f"{env_key('sam_api_key')} is not set"
+    """Why first-run setup is needed, or None when the essentials are in place.
+
+    The SAM.gov key is deliberately not an essential. A store can be built without one: the
+    bulk extract carries notices and their descriptions, and attachments and their manifests
+    are read from public URLs that take no key. The key buys same-day freshness and the API's
+    notice descriptions, so its absence is a smaller store rather than no store at all.
+    """
     if not settings.naics:
         return f"{env_key('naics')} is empty"
     if env_path is not None and not env_path.is_file() and not environment_overrides():

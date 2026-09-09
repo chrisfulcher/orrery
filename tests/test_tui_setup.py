@@ -30,7 +30,7 @@ async def test_first_run_opens_setup_and_saves_the_env_file(
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, SetupScreen)
-        assert "MENTOR_SAM_API_KEY is not set" in text(app, "#setup_banner")
+        assert "MENTOR_NAICS is empty" in text(app, "#setup_banner")
 
         app.screen.query_one("#field-sam-api-key", Input).value = "sk-live"
         app.screen.query_one("#field-naics", Input).value = "541512, 541511"
