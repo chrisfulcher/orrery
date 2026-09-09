@@ -55,7 +55,13 @@ class DownloadResult:
 
 
 class SamClient:
-    """One client per ingestion run; every keyed request is attributed to ``run_id``."""
+    """One client per ingestion run; every keyed request is attributed to ``run_id``.
+
+    The client has a keyed half (search, descriptions, entities, the entity extract) and an
+    unkeyed half (attachment downloads). The unkeyed half costs no quota and needs no key, so
+    the key is optional here and required by ``_keyed_request`` instead: a store can be built
+    from the free bulk extract and its attachments with no SAM.gov credentials at all.
+    """
 
     def __init__(
         self,
@@ -64,9 +70,10 @@ class SamClient:
         run_id: int,
         http: httpx.Client | None = None,
     ) -> None:
-        if settings.sam_api_key is None:
-            raise SamError("MENTOR_SAM_API_KEY is not set")
         self._key = settings.sam_api_key
+        """None is allowed: the unkeyed half of this client (attachment downloads, and the
+        attachment manifest) is free and must work without an API key. Every keyed method
+        refuses in ``_keyed_request`` instead."""
         self._api_host = httpx.URL(settings.sam_base_url).host
         self._settings = settings
         self._conn = conn
@@ -213,6 +220,8 @@ class SamClient:
         notice_id: str | None = None,
         redirect_ok: bool = False,
     ) -> httpx.Response:
+        if self._key is None:
+            raise SamError("MENTOR_SAM_API_KEY is not set")
         target = httpx.URL(url).copy_merge_params(params or {})
         endpoint = str(target)
         if target.host != self._api_host:
@@ -243,6 +252,8 @@ class SamClient:
         return response
 
     def _redact(self, text: str) -> str:
+        if self._key is None:
+            return text
         return text.replace(self._key.get_secret_value(), "[api_key]")
 
 

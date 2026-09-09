@@ -160,9 +160,34 @@ def test_download_failure_leaves_no_file(
     assert list(dest.iterdir()) == []
 
 
-def test_missing_key_is_refused(settings: Settings, conn: sqlite3.Connection, run_id: int) -> None:
-    with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
-        SamClient(settings.model_copy(update={"sam_api_key": None}), conn, run_id)
+def test_keyed_calls_are_refused_without_a_key(
+    settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    """The key gates the keyed half only. Constructing must work, so that the free half is
+    reachable with no credentials at all."""
+    keyless = settings.model_copy(update={"sam_api_key": None})
+    with SamClient(keyless, conn, run_id) as client:
+        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+            client.get_description("https://api.sam.gov/prod/opportunities/v1/noticedesc?n=1")
+        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+            next(client.search_pages(date(2026, 9, 1), date(2026, 9, 2), "541512"))
+        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+            client.get_entities(["UE9QJD4KK1L6"])
+    assert conn.execute("SELECT count(*) FROM api_requests").fetchone() == (0,)
+
+
+def test_attachments_download_without_a_key(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int, tmp_path: Path
+) -> None:
+    """The download half sends no key and writes no api_requests row, so it must work when
+    none is configured -- this is what a keyless install rests on."""
+    httpx_mock.add_response(url=DOWNLOAD_URL, content=b"%PDF-1.7 body")
+    keyless = settings.model_copy(update={"sam_api_key": None})
+    with SamClient(keyless, conn, run_id) as client:
+        result = client.download(DOWNLOAD_URL, tmp_path / "attachments")
+    assert result.size == len(b"%PDF-1.7 body")
+    assert result.path.read_bytes() == b"%PDF-1.7 body"
+    assert conn.execute("SELECT count(*) FROM api_requests").fetchone() == (0,)
 
 
 @pytest.mark.parametrize(
