@@ -47,13 +47,14 @@ def print_json(payload: object) -> None:
 
 
 MILESTONES = {
-    "ingest-bulk": ("extract: ",),
-    "ingest-awards": ("awards: ",),
-    "ingest-entities": ("extract: ",),
+    "ingest-bulk": ("extract: ", "NAICS "),
+    "ingest-awards": ("awards: ", "NAICS "),
+    "ingest-entities": ("extract: ", "NAICS "),
     "assess": ("",),
 }
 """The report lines each command has always printed to stderr; the rest is progress the
-app's log shows."""
+app's log shows. ``NAICS `` carries what the slice did and did not take, which is the
+difference between a quiet market and a filter that selects nothing."""
 
 
 def _run_job(

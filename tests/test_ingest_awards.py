@@ -293,3 +293,37 @@ def test_a_prefix_slice_takes_the_whole_industry_group(
         assert ingest_awards(conn, wide, write(tmp_path, [{}])).rows_matched == 1
     miss = settings.model_copy(update={"naics": ["5416"]})
     assert ingest_awards(conn, miss, write(tmp_path, [{}])).rows_matched == 0
+
+
+def test_the_run_records_its_window_and_what_each_slice_element_took(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """Without this a zero-row run is indistinguishable from a quiet market."""
+    seed()
+    wide = settings.model_copy(update={"naics": ["5415", "5416"]})
+    lines: list[str] = []
+    result = ingest_awards(
+        conn,
+        wide,
+        write(tmp_path, [{}]),
+        since=date(2023, 9, 7),
+        until=date(2026, 9, 7),
+        report=lines.append,
+    )
+    row = conn.execute(
+        "SELECT posted_from, posted_to, filter_json FROM ingestion_runs WHERE run_id = ?",
+        (result.run_id,),
+    ).fetchone()
+    assert row[0] == "2023-09-07" and row[1] == "2026-09-07"
+    assert json.loads(row[2]) == {"naics": {"5415": 1, "5416": 0}}
+    assert "NAICS 5416 matched nothing in this file" in lines
+
+
+def test_an_ingest_from_a_supplied_file_records_no_window(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    seed()
+    result = ingest_awards(conn, settings, write(tmp_path, [{}]))
+    assert conn.execute(
+        "SELECT posted_from, posted_to FROM ingestion_runs WHERE run_id = ?", (result.run_id,)
+    ).fetchone() == (None, None)

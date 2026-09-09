@@ -53,6 +53,7 @@ MIGRATIONS = [
     "0011_recompetes.sql",
     "0012_assessments.sql",
     "0013_notice_summaries.sql",
+    "0014_run_filter.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"

@@ -32,13 +32,14 @@ def finish(
     status: Literal["succeeded", "failed"],
     records_returned: int | None = None,
     error: str | None = None,
+    filter_json: str | None = None,
 ) -> None:
     """Close a run. ``requests_spent`` is derived from ``api_requests``, never counted by hand."""
     conn.execute(
         "UPDATE ingestion_runs SET"
         " finished_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),"
-        " status = ?, records_returned = ?, error = ?,"
+        " status = ?, records_returned = ?, error = ?, filter_json = ?,"
         " requests_spent = (SELECT count(*) FROM api_requests WHERE run_id = ?)"
         " WHERE run_id = ?",
-        (status, records_returned, error, run_id, run_id),
+        (status, records_returned, error, filter_json, run_id, run_id),
     )

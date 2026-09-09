@@ -236,7 +236,7 @@ def ingest_extract(
 ) -> EntitiesResult:
     """Stream one extract, keeping the slice, in batches of ``BATCH`` records. Resumable
     through the run cursor, as the bulk adapter is."""
-    naics_slice = tuple(settings.naics)
+    tally = naics.SliceTally(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     wanted = wanted_ueis(conn)
@@ -265,7 +265,7 @@ def ingest_extract(
                     malformed += 1
                     continue
                 uei, primary = fields[UEI].strip(), fields[NAICS_PRIMARY].strip()
-                if uei not in wanted and not naics.matches(primary, naics_slice):
+                if uei not in wanted and not tally.take(primary):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")
@@ -285,9 +285,15 @@ def ingest_extract(
     except Exception as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
-        runs.finish(conn, run_id, status="failed", records_returned=matched, error=str(exc))
+        runs.finish(
+            conn, run_id, status="failed", records_returned=matched, error=str(exc),
+            filter_json=tally.as_json(),
+        )  # fmt: skip
         raise
-    runs.finish(conn, run_id, status="succeeded", records_returned=matched)
+    naics.report_empty(tally, report, rows_read=read)
+    runs.finish(
+        conn, run_id, status="succeeded", records_returned=matched, filter_json=tally.as_json()
+    )
     return EntitiesResult(
         run_id, read, matched, malformed, new, registrations, facts, 0, resumed_from
     )

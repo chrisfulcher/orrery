@@ -59,3 +59,39 @@ def test_match_sql_does_not_read_the_slice_as_a_wildcard() -> None:
     assert conn.execute(sql, ('["%"]',)).fetchone()[0] == 0
     assert conn.execute(sql, ('["_41512"]',)).fetchone()[0] == 0
     conn.close()
+
+
+def test_the_vintage_warning_is_a_calendar_not_a_probe() -> None:
+    from datetime import date
+
+    assert naics.vintage_warning(date(2026, 12, 31)) is None
+    due = naics.vintage_warning(date(naics.VINTAGE + naics.REVISION_YEARS, 1, 1))
+    assert due is not None and str(naics.VINTAGE + naics.REVISION_YEARS) in due
+
+
+def test_the_tally_counts_every_element_that_took_a_row() -> None:
+    tally = naics.SliceTally(["54", "541512", "5416"])
+    assert tally.take("541512") is True  # counted against both 54 and 541512
+    assert tally.take("541330") is True  # 54 alone
+    assert tally.take("236220") is False
+    assert tally.counts == {"54": 2, "541512": 1, "5416": 0}
+    assert tally.empty() == ["5416"]
+    assert json.loads(tally.as_json()) == {"naics": {"54": 2, "541512": 1, "5416": 0}}
+
+
+def test_an_empty_element_is_reported_never_raised() -> None:
+    """A resumed run legitimately reads no new rows, so this can only ever be a report."""
+    lines: list[str] = []
+    naics.report_empty(naics.SliceTally(["5415", "5416"]), lines.append, rows_read=3)
+    assert lines == [
+        "NAICS 5415 matched nothing in this file",
+        "NAICS 5416 matched nothing in this file",
+    ]
+
+
+def test_a_run_that_read_nothing_says_nothing_about_the_slice() -> None:
+    """A resume already at the end of its file has no evidence either way; naming every
+    element there would report a live slice as dead on every rerun."""
+    lines: list[str] = []
+    naics.report_empty(naics.SliceTally(["5415"]), lines.append, rows_read=0)
+    assert lines == []

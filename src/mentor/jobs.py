@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
-from mentor import assess, db, query, summaries, workspace
+from mentor import assess, db, naics, query, summaries, workspace
 from mentor.ai import AIError
 from mentor.config import Settings
 from mentor.embed.client import EmbeddingError
@@ -88,6 +88,8 @@ def run(
     """Run the job. Raises ``JobFailed`` for usage and adapter errors, ``JobCancelled`` when
     the user stopped it; the run rows in the store are closed either way."""
     values = coerce(job, params)
+    if "naics" in job.needs and (warning := naics.vintage_warning()):
+        report(warning)
     try:
         return job.run(conn, settings, values, report, cancelled)
     except JobCancelled:
@@ -232,7 +234,14 @@ def _run_awards(conn, settings, values, report, cancelled) -> object:
     )
     report(f"awards: {path}")
     return awards.ingest_awards(
-        conn, settings, path, limit=values.get("limit"), report=report, cancelled=cancelled
+        conn,
+        settings,
+        path,
+        limit=values.get("limit"),
+        since=None if file else posted_from,
+        until=None if file else posted_to,
+        report=report,
+        cancelled=cancelled,
     )
 
 

@@ -177,7 +177,7 @@ def ingest_bulk(
     """
     if not settings.naics:
         raise ValueError("no NAICS codes configured (MENTOR_NAICS)")
-    naics_slice = tuple(settings.naics)
+    tally = naics.SliceTally(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     run_id = runs.start(conn, SOURCE_ID)
@@ -206,7 +206,7 @@ def ingest_bulk(
                 if position <= resumed_from:
                     continue  # rows must be parsed to skip: quoted fields span lines
                 read += 1
-                if not naics.matches(_opt(row["NaicsCode"]), naics_slice):
+                if not tally.take(_opt(row["NaicsCode"])):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")
@@ -232,9 +232,15 @@ def ingest_bulk(
     except Exception as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
-        runs.finish(conn, run_id, status="failed", records_returned=matched, error=str(exc))
+        runs.finish(
+            conn, run_id, status="failed", records_returned=matched, error=str(exc),
+            filter_json=tally.as_json(),
+        )  # fmt: skip
         raise
-    runs.finish(conn, run_id, status="succeeded", records_returned=matched)
+    naics.report_empty(tally, report, rows_read=read)
+    runs.finish(
+        conn, run_id, status="succeeded", records_returned=matched, filter_json=tally.as_json()
+    )
     return BulkResult(
         run_id, read, matched, new, updated, filled, versions, deactivated, resumed_from
     )

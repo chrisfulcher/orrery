@@ -155,18 +155,22 @@ def ingest_awards(
     path: Path,
     *,
     limit: int | None = None,
+    since: date | None = None,
+    until: date | None = None,
     report: Report = quiet,
     cancelled: Cancelled = never,
 ) -> AwardsResult:
     """Stream one award summary file (the zip, or its CSV), writing rows in the NAICS slice in
-    batches of ``BATCH``. ``limit`` caps matched rows this run. The run is closed as failed
-    with the error on any exception; committed batches and their cursor stand."""
+    batches of ``BATCH``. ``limit`` caps matched rows this run. ``since`` and ``until`` are the
+    window the file was requested for, recorded on the run; an ingest from a file the user
+    supplied has none. The run is closed as failed with the error on any exception; committed
+    batches and their cursor stand."""
     if not settings.naics:
         raise ValueError("no NAICS codes configured (MENTOR_NAICS)")
-    naics_slice = tuple(settings.naics)
+    tally = naics.SliceTally(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
-    run_id = runs.start(conn, SOURCE_ID)
+    run_id = runs.start(conn, SOURCE_ID, posted_from=since, posted_to=until)
     now = db.utcnow()
     read = matched = new = updated = contractors = offices_unresolved = vendors_unresolved = 0
     in_batch = 0
@@ -192,7 +196,7 @@ def ingest_awards(
                 if position <= resumed_from:
                     continue
                 read += 1
-                if not naics.matches(_opt(row["naics_code"]), naics_slice):
+                if not tally.take(_opt(row["naics_code"])):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")
@@ -214,9 +218,15 @@ def ingest_awards(
     except Exception as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
-        runs.finish(conn, run_id, status="failed", records_returned=matched, error=str(exc))
+        runs.finish(
+            conn, run_id, status="failed", records_returned=matched, error=str(exc),
+            filter_json=tally.as_json(),
+        )  # fmt: skip
         raise
-    runs.finish(conn, run_id, status="succeeded", records_returned=matched)
+    naics.report_empty(tally, report, rows_read=read)
+    runs.finish(
+        conn, run_id, status="succeeded", records_returned=matched, filter_json=tally.as_json()
+    )
     return AwardsResult(
         run_id, read, matched, new, updated, contractors, offices_unresolved, vendors_unresolved,
         resumed_from,
