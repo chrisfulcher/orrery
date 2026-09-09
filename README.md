@@ -2,7 +2,8 @@
 
 *Working title.* Free, open source, self-hosted business development intelligence for U.S. federal government contracting.
 
-<img width="1917" height="1050" alt="screenshot-2026-09-09_14-25-09" src="https://github.com/user-attachments/assets/b030cbe0-2947-4100-9400-c379ab932bd2" />
+![The dashboard: quota, queues, store activity, this week's work, and what needs attention](https://github.com/user-attachments/assets/b030cbe0-2947-4100-9400-c379ab932bd2)
+
 
 ## Status
 
@@ -205,7 +206,8 @@ A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadl
 ```
 uv run mentor top
 ```
-<img width="1917" height="1050" alt="screenshot-2026-09-09_14-25-09" src="https://github.com/user-attachments/assets/5731cc79-39ea-4090-bcdb-04005e392af9" />
+
+![The dashboard, tab 1](https://github.com/user-attachments/assets/5731cc79-39ea-4090-bcdb-04005e392af9)
 
 The app draws in your terminal's own colours. Five tabs, selected by number:
 
@@ -222,6 +224,8 @@ focused field swallows the mode keys), Enter steps from the tab bar into the
 active tab, and `q` quits.
 
 ### Opportunities (`2`)
+
+![The opportunities table: deadline, agency, work type, set-aside fit, and title with its summary](https://github.com/user-attachments/assets/899e57f5-8058-481d-9d2f-6d2ebf735654)
 
 | Key | Does |
 |---|---|
@@ -248,6 +252,8 @@ contacts named on the notice, and the documents.
 
 ### Pursuit board (`3`)
 
+![The pursuit board: open pursuits by stage, with PWin and the next date due](https://github.com/user-attachments/assets/77fed22f-4e51-4455-84fa-56312db1aaee)
+
 `n` starts a pursuit, `c` shows the closed ones. A pursuit's own screen carries
 its tasks, notices, and decision log:
 
@@ -267,6 +273,8 @@ its tasks, notices, and decision log:
 
 ### Recompete radar (`4`)
 
+![The recompete radar: awards ending soonest, with vendor, office, value, set-aside and PIID](https://github.com/user-attachments/assets/0349204e-d9a7-41e9-9ac4-1022d9341c27)
+
 | Key | Does |
 |---|---|
 | `p` | Start a pursuit from an award, with that award as its incumbent |
@@ -276,6 +284,8 @@ An entity view shows awards made (an office) or won (a contractor); Enter on one
 crosses to the other party.
 
 ### Setup (`5`)
+
+![Setup, Connections tab: every MENTOR_* setting as a form, the SAM.gov key masked](https://github.com/user-attachments/assets/5bda0dba-80b3-4dc0-b236-7dcbe00d1da6)
 
 | Pane | Keys |
 |---|---|
@@ -288,10 +298,6 @@ crosses to the other party.
 One job runs at a time, on its own database connection, and the dashboard's
 queues panel shows it.
 
-<img width="1907" height="1044" alt="screenshot-2026-09-09_14-25-22" src="https://github.com/user-attachments/assets/899e57f5-8058-481d-9d2f-6d2ebf735654" />
-<img width="1910" height="1040" alt="screenshot-2026-09-09_14-25-37" src="https://github.com/user-attachments/assets/77fed22f-4e51-4455-84fa-56312db1aaee" />
-<img width="1910" height="1042" alt="screenshot-2026-09-09_14-25-52" src="https://github.com/user-attachments/assets/0349204e-d9a7-41e9-9ac4-1022d9341c27" />
-<img width="1912" height="1042" alt="screenshot-2026-09-09_14-26-10" src="https://github.com/user-attachments/assets/5bda0dba-80b3-4dc0-b236-7dcbe00d1da6" />
 
 To use it from a browser tab instead, on the same machine or a home server:
 
@@ -299,7 +305,8 @@ To use it from a browser tab instead, on the same machine or a home server:
 uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
-<img width="1908" height="1043" alt="screenshot-2026-09-09_14-36-50" src="https://github.com/user-attachments/assets/f0cd49c4-ee9b-4e7d-97c0-aa2ff6c80619" />
+
+![The same dashboard served to a browser tab](https://github.com/user-attachments/assets/f0cd49c4-ee9b-4e7d-97c0-aa2ff6c80619)
 
 Each browser tab is its own `mentor top` process in the server's working directory: two tabs can each run a job (the store serializes them and the quota is per request) and both write the same `.env`, which the app re-reads before every write.
 
