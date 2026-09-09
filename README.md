@@ -2,6 +2,8 @@
 
 *Working title.* Free, open source, self-hosted business development intelligence for U.S. federal government contracting.
 
+<img width="1917" height="1050" alt="screenshot-2026-09-09_14-25-09" src="https://github.com/user-attachments/assets/b030cbe0-2947-4100-9400-c379ab932bd2" />
+
 ## Status
 
 Early, and usable from the command line. The first feature loop works: ingest a NAICS slice of SAM.gov notices, fetch their descriptions within the API quota and their attachments outside it, extract PDF text, and search across all of it, by keyword or by meaning through an embedding endpoint you choose. Saved searches, an opportunity pipeline with PWin history, and your company profile are in. The Dockerfile and compose file are new.
