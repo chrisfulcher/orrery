@@ -321,3 +321,32 @@ def test_cancel_between_batches_keeps_the_first_and_resumes(
     ).fetchone()
     assert (status, error) == ("failed", "cancelled") and cursor.endswith(":1")
     assert ingest_bulk(conn, settings, path).resumed_from == 1
+
+
+def test_a_prefix_slice_takes_the_whole_industry_group(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> None:
+    rows = [{"NoticeId": HRSA["noticeId"]}]
+    for prefix in ("5415", "54"):
+        wide = settings.model_copy(update={"naics": [prefix]})
+        assert ingest_bulk(conn, wide, write(tmp_path, rows)).rows_matched == 1
+    miss = settings.model_copy(update={"naics": ["5416"]})
+    assert ingest_bulk(conn, miss, write(tmp_path, rows)).rows_matched == 0
+
+
+def test_the_active_pass_clears_notices_under_a_prefix_slice(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """The deactivation clause filters by the slice too, so an exact-match clause under a
+    prefix slice would quietly never deactivate anything."""
+    seed()
+    conn.execute("UPDATE notices SET last_seen_at = '2026-01-01T00:00:00Z'")
+    wide = settings.model_copy(update={"naics": ["5415"]})
+    seen = [{"NoticeId": r["noticeId"]} for r in SEARCH_FIXTURE["opportunitiesData"][:2]]
+
+    assert ingest_bulk(conn, wide, write(tmp_path, seen, "a.csv")).notices_deactivated == 0
+    result = ingest_bulk(conn, wide, write(tmp_path, seen, "b.csv"), mark_inactive=True)
+    assert result.notices_deactivated > 0
+    assert (
+        count(conn, "SELECT count(*) FROM notices WHERE active = 0") == result.notices_deactivated
+    )

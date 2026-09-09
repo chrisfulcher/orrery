@@ -20,7 +20,7 @@ from urllib.parse import unquote
 
 import httpx
 
-from mentor import __version__, db, runs
+from mentor import __version__, db, naics, runs
 from mentor.config import Settings
 from mentor.ingest.notices import _deadline_utc, resolve_agency_segments
 from mentor.progress import Cancelled, Report, check, never, quiet
@@ -83,9 +83,9 @@ ON CONFLICT(notice_id) DO UPDATE SET
     raw_json = excluded.raw_json
 """
 
-DEACTIVATE = """
+DEACTIVATE = f"""
 UPDATE notices SET active = 0
-WHERE active = 1 AND naics_code IN ({placeholders})
+WHERE active = 1 AND {naics.match_sql("naics_code", "?")}
   AND last_seen_at < (SELECT min(started_at) FROM ingestion_runs WHERE cursor LIKE ? || ':%')
 """
 
@@ -177,7 +177,7 @@ def ingest_bulk(
     """
     if not settings.naics:
         raise ValueError("no NAICS codes configured (MENTOR_NAICS)")
-    naics = set(settings.naics)
+    naics_slice = tuple(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     run_id = runs.start(conn, SOURCE_ID)
@@ -206,7 +206,7 @@ def ingest_bulk(
                 if position <= resumed_from:
                     continue  # rows must be parsed to skip: quoted fields span lines
                 read += 1
-                if _opt(row["NaicsCode"]) not in naics:
+                if not naics.matches(_opt(row["NaicsCode"]), naics_slice):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")
@@ -227,10 +227,7 @@ def ingest_bulk(
         commit_batch()
         if complete and mark_inactive:
             conn.execute("BEGIN")
-            placeholders = ", ".join("?" * len(settings.naics))
-            deactivated = conn.execute(
-                DEACTIVATE.format(placeholders=placeholders), (*settings.naics, key)
-            ).rowcount
+            deactivated = conn.execute(DEACTIVATE, (json.dumps(list(settings.naics)), key)).rowcount
             conn.execute("COMMIT")
     except Exception as exc:
         if conn.in_transaction:

@@ -404,6 +404,9 @@ def test_recompetes_window_order_and_filters(
     assert rows[0].pop_potential_end == "2027-02-28" and rows[0].pop_end == "2026-02-28"
     assert [r.piid for r in query.recompetes(conn, set_aside="SBA")] == ["75R60222F00009"]
     assert query.recompetes(conn, naics=("111111",)) == []
+    assert len(query.recompetes(conn, naics=("5415",))) == 2  # the slice is a prefix
+    assert len(query.recompetes(conn, naics=("54",))) == 2
+    assert query.recompetes(conn, naics=("5416",)) == []
     assert [r.piid for r in query.recompetes(conn, office_code="75R602", limit=1)] == [
         "75R60222F00009"
     ]

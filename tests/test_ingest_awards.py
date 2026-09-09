@@ -281,3 +281,15 @@ def test_cancel_between_batches_keeps_committed_awards(
     assert lines == ["1 awards in slice, 1 rows read"]
     assert [p for (p,) in conn.execute("SELECT piid FROM contracts")] == ["A"]
     assert ingest_awards(conn, settings, path).resumed_from == 1
+
+
+def test_a_prefix_slice_takes_the_whole_industry_group(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """Before this, a four-digit slice matched nothing and the run still reported success."""
+    seed()
+    for prefix in ("5415", "54"):
+        wide = settings.model_copy(update={"naics": [prefix]})
+        assert ingest_awards(conn, wide, write(tmp_path, [{}])).rows_matched == 1
+    miss = settings.model_copy(update={"naics": ["5416"]})
+    assert ingest_awards(conn, miss, write(tmp_path, [{}])).rows_matched == 0

@@ -221,3 +221,15 @@ def test_cancel_between_batches_and_lookup_progress(
     assert lines == ["looked up 1 of 1"]
     with pytest.raises(JobCancelled):
         lookup_entities(conn, settings, [LEIDOS], cancelled=lambda: True)
+
+
+def test_a_prefix_slice_takes_the_whole_industry_group(
+    conn: sqlite3.Connection, settings: Settings, seed_awards: SeedAwards
+) -> None:
+    seed_awards()
+    wide = settings.model_copy(update={"naics": ["6113"]})
+    result = ingest_extract(conn, wide, EXTRACT_SAMPLE)
+    assert (result.rows_matched, result.entities_new) == (3, 1)
+    assert conn.execute(
+        "SELECT count(*) FROM entities WHERE uei = ?", (UNIVERSITY,)
+    ).fetchone() == (1,)

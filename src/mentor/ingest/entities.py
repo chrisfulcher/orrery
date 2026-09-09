@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from mentor import db, runs, workspace
+from mentor import db, naics, runs, workspace
 from mentor.config import Settings
 from mentor.ingest.awards import resolve_contractor
 from mentor.ingest.notices import record_alias
@@ -113,11 +113,11 @@ def parse_extract_row(fields: list[str]) -> Registration:
     for index in range(POC_FIRST, POC_END):
         fields[index] = ""
     expires = fields[EXPIRES]
-    naics = []
+    naics_codes = []
     for entry in _list(fields[NAICS_LIST]):
         code = entry[:6]
-        if code.isdigit() and code not in naics:
-            naics.append(code)
+        if code.isdigit() and code not in naics_codes:
+            naics_codes.append(code)
     return Registration(
         uei=fields[UEI],
         cage=fields[CAGE] or None,
@@ -130,7 +130,7 @@ def parse_extract_row(fields: list[str]) -> Registration:
         business_types=tuple(_list(fields[BUSINESS_TYPES])),
         sba_types=tuple(_list(fields[SBA_TYPES])),
         naics_primary=fields[NAICS_PRIMARY] or None,
-        naics=tuple(naics),
+        naics=tuple(naics_codes),
         psc=tuple(_list(fields[PSC_LIST])),
         address=_address(
             fields[ADDRESS_1],
@@ -155,11 +155,11 @@ def parse_api_record(entity: dict) -> Registration:
     goods = (entity.get("assertions") or {}).get("goodsAndServices") or {}
     record = {key: value for key, value in entity.items() if key != "pointsOfContact"}
     uei = registration.get("ueiSAM") or ""
-    naics = []
+    naics_codes = []
     for item in goods.get("naicsList") or []:
         code = item.get("naicsCode")
-        if code and code not in naics:
-            naics.append(code)
+        if code and code not in naics_codes:
+            naics_codes.append(code)
     return Registration(
         uei=uei,
         cage=registration.get("cageCode") or None,
@@ -180,7 +180,7 @@ def parse_api_record(entity: dict) -> Registration:
             if (code := item.get("sbaBusinessTypeCode"))
         ),  # fmt: skip
         naics_primary=goods.get("primaryNaics") or None,
-        naics=tuple(naics),
+        naics=tuple(naics_codes),
         psc=tuple(code for item in goods.get("pscList") or [] if (code := item.get("pscCode"))),
         address=_address(
             address.get("addressLine1"),
@@ -236,7 +236,7 @@ def ingest_extract(
 ) -> EntitiesResult:
     """Stream one extract, keeping the slice, in batches of ``BATCH`` records. Resumable
     through the run cursor, as the bulk adapter is."""
-    naics = set(settings.naics)
+    naics_slice = tuple(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     wanted = wanted_ueis(conn)
@@ -265,7 +265,7 @@ def ingest_extract(
                     malformed += 1
                     continue
                 uei, primary = fields[UEI].strip(), fields[NAICS_PRIMARY].strip()
-                if uei not in wanted and primary not in naics:
+                if uei not in wanted and not naics.matches(primary, naics_slice):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")

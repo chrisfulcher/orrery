@@ -10,7 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from mentor import db
+from mentor import db, naics
 
 
 class InvalidQuery(ValueError):
@@ -69,8 +69,9 @@ NO_FILTERS = Filters()
 def notice_filter_sql(src: str) -> str:
     """Predicates on ``notices AS n`` reading filter values from ``src``: ``:`` for bound
     parameters, or a table alias such as ``s.`` whose columns carry the same names."""
+    naics_match = naics.match_sql("n.naics_code", f"{src}naics")
     return f"""
-    AND ({src}naics IS NULL OR n.naics_code IN (SELECT value FROM json_each({src}naics)))
+    AND ({src}naics IS NULL OR {naics_match})
     AND ({src}set_asides IS NULL
          OR n.set_aside_code IN (SELECT value FROM json_each({src}set_asides)))
     AND ({src}agency_path_prefixes IS NULL OR EXISTS (
@@ -82,6 +83,10 @@ def notice_filter_sql(src: str) -> str:
 
 
 FILTERS = notice_filter_sql(":") + " AND (:active_only = 0 OR n.active = 1)"
+
+CONTRACT_NAICS_MATCH = naics.match_sql("naics_code", ":naics")
+"""The slice predicate over ``v_contracts``, hoisted so that callers whose own parameter is
+named ``naics`` can still reach it."""
 
 SEARCH = f"""
 WITH hits AS (
@@ -583,7 +588,7 @@ def recompetes(
     rows = conn.execute(
         f"SELECT {CONTRACT_COLUMNS} FROM v_contracts"
         " WHERE coalesce(pop_potential_end, pop_end) BETWEEN :today AND date(:today, :horizon)"
-        " AND (:naics IS NULL OR naics_code IN (SELECT value FROM json_each(:naics)))"
+        f" AND (:naics IS NULL OR {CONTRACT_NAICS_MATCH})"
         " AND (:office IS NULL OR awarding_office_code = :office)"
         " AND (:set_aside IS NULL OR set_aside_code = :set_aside)"
         " ORDER BY coalesce(pop_potential_end, pop_end), contract_id LIMIT :limit",

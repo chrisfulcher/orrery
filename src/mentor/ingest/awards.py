@@ -25,7 +25,7 @@ from typing import TextIO
 
 import httpx
 
-from mentor import db, runs
+from mentor import db, naics, runs
 from mentor.config import Settings
 from mentor.ingest.notices import record_alias
 from mentor.progress import Cancelled, Report, check, never, quiet
@@ -163,7 +163,7 @@ def ingest_awards(
     with the error on any exception; committed batches and their cursor stand."""
     if not settings.naics:
         raise ValueError("no NAICS codes configured (MENTOR_NAICS)")
-    naics = set(settings.naics)
+    naics_slice = tuple(settings.naics)
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     run_id = runs.start(conn, SOURCE_ID)
@@ -192,7 +192,7 @@ def ingest_awards(
                 if position <= resumed_from:
                     continue
                 read += 1
-                if _opt(row["naics_code"]) not in naics:
+                if not naics.matches(_opt(row["naics_code"]), naics_slice):
                     continue
                 if in_batch == 0:
                     conn.execute("BEGIN")
