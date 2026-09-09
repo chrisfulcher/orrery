@@ -165,6 +165,7 @@ To use it from a browser tab instead, on the same machine or a home server:
 uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
+<img width="1908" height="1043" alt="screenshot-2026-09-09_14-36-50" src="https://github.com/user-attachments/assets/f0cd49c4-ee9b-4e7d-97c0-aa2ff6c80619" />
 
 Each browser tab is its own `mentor top` process in the server's working directory: two tabs can each run a job (the store serializes them and the quota is per request) and both write the same `.env`, which the app re-reads before every write.
 
