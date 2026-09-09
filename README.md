@@ -2,7 +2,7 @@
 
 *Working title.* Free, open source, self-hosted business development intelligence for U.S. federal government contracting.
 
-![The dashboard: quota, queues, store activity, this week's work, and what needs attention](https://github.com/user-attachments/assets/b030cbe0-2947-4100-9400-c379ab932bd2)
+![The dashboard: quota, queues, store activity, this week's work, and what needs attention](docs/images/dashboard.png)
 
 
 ## Status
@@ -208,7 +208,7 @@ A saved search is text plus filters (NAICS, set-aside, agency path prefix, deadl
 uv run mentor top
 ```
 
-![The dashboard, tab 1](https://github.com/user-attachments/assets/5731cc79-39ea-4090-bcdb-04005e392af9)
+![The dashboard, tab 1](docs/images/dashboard.png)
 
 The app draws in your terminal's own colours. Five tabs, selected by number:
 
@@ -226,7 +226,7 @@ active tab, and `q` quits.
 
 ### Opportunities (`2`)
 
-![The opportunities table: deadline, agency, work type, set-aside fit, and title with its summary](https://github.com/user-attachments/assets/899e57f5-8058-481d-9d2f-6d2ebf735654)
+![The opportunities table: deadline, agency, work type, set-aside fit, and title with its summary](docs/images/opportunities.png)
 
 | Key | Does |
 |---|---|
@@ -253,7 +253,7 @@ contacts named on the notice, and the documents.
 
 ### Pursuit board (`3`)
 
-![The pursuit board: open pursuits by stage, with PWin and the next date due](https://github.com/user-attachments/assets/77fed22f-4e51-4455-84fa-56312db1aaee)
+![The pursuit board: open pursuits by stage, with PWin and the next date due](docs/images/pursuits.png)
 
 `n` starts a pursuit, `c` shows the closed ones. A pursuit's own screen carries
 its tasks, notices, and decision log:
@@ -274,7 +274,7 @@ its tasks, notices, and decision log:
 
 ### Recompete radar (`4`)
 
-![The recompete radar: awards ending soonest, with vendor, office, value, set-aside and PIID](https://github.com/user-attachments/assets/0349204e-d9a7-41e9-9ac4-1022d9341c27)
+![The recompete radar: awards ending soonest, with vendor, office, value, set-aside and PIID](docs/images/radar.png)
 
 | Key | Does |
 |---|---|
@@ -286,7 +286,7 @@ crosses to the other party.
 
 ### Setup (`5`)
 
-![Setup, Connections tab: every MENTOR_* setting as a form, the SAM.gov key masked](https://github.com/user-attachments/assets/5bda0dba-80b3-4dc0-b236-7dcbe00d1da6)
+![Setup, Connections tab: every MENTOR_* setting as a form, the SAM.gov key masked](docs/images/setup-connections.png)
 
 | Pane | Keys |
 |---|---|
@@ -307,7 +307,7 @@ uv sync --extra serve
 uv run mentor top --serve          # then open http://localhost:8000
 ```
 
-![The same dashboard served to a browser tab](https://github.com/user-attachments/assets/f0cd49c4-ee9b-4e7d-97c0-aa2ff6c80619)
+![The same dashboard served to a browser tab](docs/images/dashboard-browser.png)
 
 Each browser tab is its own `mentor top` process in the server's working directory: two tabs can each run a job (the store serializes them and the quota is per request) and both write the same `.env`, which the app re-reads before every write.
 
