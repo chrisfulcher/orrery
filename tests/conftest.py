@@ -13,19 +13,19 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mentor import db, runs
-from mentor.config import Settings
-from mentor.ingest.awards import AwardsResult
-from mentor.ingest.bulk import COLUMNS
-from mentor.ingest.entities import EntitiesResult
-from mentor.ingest.notices import ingest_notices
-from mentor.sam.client import SamClient
+from orrery import db, runs
+from orrery.config import Settings
+from orrery.ingest.awards import AwardsResult
+from orrery.ingest.bulk import COLUMNS
+from orrery.ingest.entities import EntitiesResult
+from orrery.ingest.notices import ingest_notices
+from orrery.sam.client import SamClient
 
 # The Anthropic SDK talks httpx2, which pytest-httpx does not intercept: a stray real call
 # must fail fast rather than reach the network.
 os.environ.setdefault("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
 os.environ.pop("ANTHROPIC_API_KEY", None)
-for _name in [n for n in os.environ if n.startswith("MENTOR_")]:
+for _name in [n for n in os.environ if n.startswith("ORRERY_")]:
     del os.environ[_name]  # a developer's shell must not leak settings into the tests
 
 SEARCH_FIXTURE = json.loads(
@@ -51,7 +51,7 @@ def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> Path:
-    return tmp_path / "mentor.sqlite"
+    return tmp_path / "orrery.sqlite"
 
 
 @pytest.fixture
@@ -397,7 +397,7 @@ def seed_awards(
 ) -> Callable[[list[dict] | None], AwardsResult]:
     """Seed the notices, then ingest an award file: by default one incumbent contract for the
     fixture's HRSA notice and one older award at the same office by another vendor."""
-    from mentor.ingest.awards import ingest_awards
+    from orrery.ingest.awards import ingest_awards
 
     hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
     default_rows = [
@@ -437,7 +437,7 @@ def seed_registrations(
     conn: sqlite3.Connection, settings: Settings, seed_awards: Callable[..., AwardsResult]
 ) -> Callable[[], EntitiesResult]:
     """Seed notices and awards, then the fixture extract: registrations for the two vendors."""
-    from mentor.ingest.entities import ingest_extract
+    from orrery.ingest.entities import ingest_extract
 
     def _seed() -> EntitiesResult:
         seed_awards()

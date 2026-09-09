@@ -10,9 +10,9 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock, IteratorStream
 
-from mentor.config import Settings
-from mentor.quota import BudgetExceeded
-from mentor.sam.client import (
+from orrery.config import Settings
+from orrery.quota import BudgetExceeded
+from orrery.sam.client import (
     AttachmentTooLarge,
     ManifestShapeError,
     NoticeUnknown,
@@ -174,11 +174,11 @@ def test_keyed_calls_are_refused_without_a_key(
     reachable with no credentials at all."""
     keyless = settings.model_copy(update={"sam_api_key": None})
     with SamClient(keyless, conn, run_id) as client:
-        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+        with pytest.raises(SamError, match="ORRERY_SAM_API_KEY"):
             client.get_description("https://api.sam.gov/prod/opportunities/v1/noticedesc?n=1")
-        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+        with pytest.raises(SamError, match="ORRERY_SAM_API_KEY"):
             next(client.search_pages(date(2026, 9, 1), date(2026, 9, 2), "541512"))
-        with pytest.raises(SamError, match="MENTOR_SAM_API_KEY"):
+        with pytest.raises(SamError, match="ORRERY_SAM_API_KEY"):
             client.get_entities(["UE9QJD4KK1L6"])
     assert conn.execute("SELECT count(*) FROM api_requests").fetchone() == (0,)
 

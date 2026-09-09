@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from mentor import naics
+from orrery import naics
 
 
 def test_a_six_digit_prefix_matches_only_itself() -> None:

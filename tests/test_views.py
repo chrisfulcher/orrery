@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
-from mentor.ingest.awards import AwardsResult
+from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
 SeedAwards = Callable[[list[dict] | None], AwardsResult]

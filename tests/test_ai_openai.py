@@ -6,8 +6,8 @@ from conftest import CHAT_URL, register_fake_chat
 from pydantic import BaseModel, SecretStr
 from pytest_httpx import HTTPXMock
 
-from mentor import ai
-from mentor.ai import (
+from orrery import ai
+from orrery.ai import (
     AIError,
     Completion,
     InvalidResponse,
@@ -16,8 +16,8 @@ from mentor.ai import (
     resolve_slot,
     strip_thinking,
 )
-from mentor.ai.openai_compat import OpenAIChatBackend
-from mentor.config import Settings
+from orrery.ai.openai_compat import OpenAIChatBackend
+from orrery.config import Settings
 
 
 class Verdict(BaseModel):
@@ -54,7 +54,7 @@ def test_deep_slot_falls_back_to_fast_and_anthropic_defaults() -> None:
         "http://localhost:11434/v1",
         90_000,
     )
-    with pytest.raises(AIError, match="MENTOR_AI_DEEP_MODEL"):
+    with pytest.raises(AIError, match="ORRERY_AI_DEEP_MODEL"):
         resolve_slot(Settings(_env_file=None, ai_deep_provider="openai"), "deep")
 
 
@@ -132,7 +132,7 @@ def test_backend_for_anthropic_without_the_sdk_explains(monkeypatch: pytest.Monk
     real_import = builtins.__import__
 
     def missing(name: str, *args: object, **kwargs: object) -> object:
-        if name.startswith("mentor.ai.anthropic_backend") or name == "anthropic":
+        if name.startswith("orrery.ai.anthropic_backend") or name == "anthropic":
             raise ImportError(name)
         return real_import(name, *args, **kwargs)
 

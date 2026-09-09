@@ -5,11 +5,11 @@ from collections.abc import Callable
 import pytest
 from conftest import MOST_LINKS_NOTICE, SEARCH_FIXTURE
 
-from mentor import assess, db, query, workspace
-from mentor.ai import AIError, Completion, Slot
-from mentor.assess import Assessment, gather, render
-from mentor.config import Settings
-from mentor.ingest.awards import AwardsResult
+from orrery import assess, db, query, workspace
+from orrery.ai import AIError, Completion, Slot
+from orrery.assess import Assessment, gather, render
+from orrery.config import Settings
+from orrery.ingest.awards import AwardsResult
 
 SeedAwards = Callable[[list[dict] | None], AwardsResult]
 HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]

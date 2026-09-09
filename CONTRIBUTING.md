@@ -1,4 +1,4 @@
-# Contributing to mentor
+# Contributing to orrery
 
 ## Status
 
@@ -42,7 +42,7 @@ The sign-off adds a `Signed-off-by:` line with your name and email and certifies
 
 ## Security
 
-Do not open a public issue for a vulnerability. Report it privately through GitHub's security advisories: [Report a vulnerability](https://github.com/chrisfulcher/mentor/security/advisories/new), which only the maintainer can read. You will get an acknowledgement, a fix or a reasoned response, and credit in the advisory if you want it.
+Do not open a public issue for a vulnerability. Report it privately through GitHub's security advisories: [Report a vulnerability](https://github.com/chrisfulcher/orrery/security/advisories/new), which only the maintainer can read. You will get an acknowledgement, a fix or a reasoned response, and credit in the advisory if you want it.
 
 ## License
 

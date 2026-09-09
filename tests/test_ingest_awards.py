@@ -9,11 +9,11 @@ import pytest
 from conftest import make_awards_csv, make_awards_zip, make_extract
 from pytest_httpx import HTTPXMock
 
-from mentor import db
-from mentor.config import Settings
-from mentor.ingest import awards
-from mentor.ingest.awards import AwardsError, AwardsResult, ingest_awards
-from mentor.ingest.bulk import ingest_bulk
+from orrery import db
+from orrery.config import Settings
+from orrery.ingest import awards
+from orrery.ingest.awards import AwardsError, AwardsResult, ingest_awards
+from orrery.ingest.bulk import ingest_bulk
 
 Seed = Callable[[dict | None], None]
 SeedAwards = Callable[[list[dict] | None], AwardsResult]
@@ -271,7 +271,7 @@ def test_fetch_awards_requests_waits_and_downloads(
 def test_cancel_between_batches_keeps_committed_awards(
     conn: sqlite3.Connection, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     monkeypatch.setattr(awards, "BATCH", 1)
     path = write(tmp_path, [{"award_id_piid": "A"}, {"award_id_piid": "B"}])

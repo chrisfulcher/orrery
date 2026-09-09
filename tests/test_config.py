@@ -3,13 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from mentor.config import Settings
+from orrery.config import Settings
 
 
 def test_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.data_dir == Path("data")
-    assert settings.db_path == Path("data") / "mentor.sqlite"
+    assert settings.db_path == Path("data") / "orrery.sqlite"
     assert settings.sam_api_key is None
     assert settings.sam_daily_budget == 10
     assert settings.sam_base_url == "https://api.sam.gov"
@@ -28,17 +28,17 @@ def test_defaults() -> None:
 
 
 def test_naics_is_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MENTOR_NAICS", "541512, 541511,")
+    monkeypatch.setenv("ORRERY_NAICS", "541512, 541511,")
     assert Settings(_env_file=None).naics == ["541512", "541511"]
 
 
 def test_data_dir_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
-    assert Settings(_env_file=None).db_path == tmp_path / "mentor.sqlite"
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
+    assert Settings(_env_file=None).db_path == tmp_path / "orrery.sqlite"
 
 
 def test_api_key_is_read_but_never_shown(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MENTOR_SAM_API_KEY", "hunter2")
+    monkeypatch.setenv("ORRERY_SAM_API_KEY", "hunter2")
     settings = Settings(_env_file=None)
     assert settings.sam_api_key is not None
     assert settings.sam_api_key.get_secret_value() == "hunter2"
@@ -51,7 +51,7 @@ EXAMPLE = Path(__file__).parents[1] / ".env.example"
 
 
 def test_env_example_lists_every_setting() -> None:
-    names = re.findall(r"^MENTOR_([A-Z_]+)=", EXAMPLE.read_text(), flags=re.MULTILINE)
+    names = re.findall(r"^ORRERY_([A-Z_]+)=", EXAMPLE.read_text(), flags=re.MULTILINE)
     assert len(names) == len(set(names))
     assert {name.lower() for name in names} == set(Settings.model_fields)
 
@@ -61,11 +61,11 @@ def test_env_example_is_the_defaults() -> None:
 
 
 def test_naics_accepts_prefixes_of_two_to_six_digits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MENTOR_NAICS", "54,5415,541512")
+    monkeypatch.setenv("ORRERY_NAICS", "54,5415,541512")
     assert Settings(_env_file=None).naics == ["54", "5415", "541512"]
 
 
 def test_naics_rejects_a_malformed_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MENTOR_NAICS", "5415,54a")
+    monkeypatch.setenv("ORRERY_NAICS", "5415,54a")
     with pytest.raises(ValueError, match="'54a'"):
         Settings(_env_file=None)

@@ -7,9 +7,9 @@ import pytest
 from conftest import SEARCH_FIXTURE, make_extract
 from pytest_httpx import HTTPXMock
 
-from mentor.config import Settings
-from mentor.ingest import bulk
-from mentor.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, BulkError, fetch_extract, ingest_bulk
+from orrery.config import Settings
+from orrery.ingest import bulk
+from orrery.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, BulkError, fetch_extract, ingest_bulk
 
 Seed = Callable[[dict | None], None]
 HRSA = SEARCH_FIXTURE["opportunitiesData"][0]
@@ -306,8 +306,8 @@ def test_fetch_extract_failure_leaves_nothing(httpx_mock: HTTPXMock, tmp_path: P
 def test_cancel_between_batches_keeps_the_first_and_resumes(
     conn: sqlite3.Connection, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from mentor.ingest import bulk as bulk_module
-    from mentor.progress import JobCancelled
+    from orrery.ingest import bulk as bulk_module
+    from orrery.progress import JobCancelled
 
     monkeypatch.setattr(bulk_module, "BATCH", 1)
     path = write(tmp_path, [{}, {}, {}])

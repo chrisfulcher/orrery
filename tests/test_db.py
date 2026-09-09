@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mentor import db, query
+from orrery import db, query
 
 EXPECTED_TABLES = {
     "sources",

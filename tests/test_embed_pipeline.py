@@ -5,10 +5,10 @@ import pytest
 from conftest import EMBED_URL, register_fake_embeddings
 from pytest_httpx import HTTPXMock
 
-from mentor.config import Settings
-from mentor.embed.client import EmbeddingError
-from mentor.embed.pipeline import EmbedResult, embed_pending
-from mentor.extract.text import extract_pending
+from orrery.config import Settings
+from orrery.embed.client import EmbeddingError
+from orrery.embed.pipeline import EmbedResult, embed_pending
+from orrery.extract.text import extract_pending
 
 Fetched = Callable[..., int]
 MakePdf = Callable[[list[str]], bytes]
@@ -103,7 +103,7 @@ def test_model_change_embeds_again(
 def test_embed_reports_and_cancels_between_sources(
     conn: sqlite3.Connection, settings: Settings, sources: tuple[str, int], fake_embeddings: list
 ) -> None:
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     notice_id, attachment_id = sources
     lines: list[str] = []

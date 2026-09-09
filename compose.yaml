@@ -1,13 +1,13 @@
 # No daemon yet: every command is one-shot, so the verb is
-#   docker compose run --rm mentor <command>
+#   docker compose run --rm orrery <command>
 # `docker compose up` is not useful until a long-running service exists.
 services:
-  mentor:
+  orrery:
     build: .
     environment:
-      MENTOR_DATA_DIR: /data   # always the mount below, whatever .env says
+      ORRERY_DATA_DIR: /data   # always the mount below, whatever .env says
     volumes:
       - ./data:/data
       - ./.env:/app/.env       # settings; the app's Setup tab writes it in place (touch .env first)
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # a host Ollama, for MENTOR_EMBED_BASE_URL
+      - "host.docker.internal:host-gateway"   # a host Ollama, for ORRERY_EMBED_BASE_URL

@@ -6,8 +6,8 @@ from conftest import EMBED_URL, register_fake_embeddings
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from mentor.config import Settings
-from mentor.embed.client import EmbeddingClient, EmbeddingError, pack
+from orrery.config import Settings
+from orrery.embed.client import EmbeddingClient, EmbeddingError, pack
 
 
 def test_batches_in_order(httpx_mock: HTTPXMock, settings: Settings) -> None:

@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mentor import workspace
-from mentor.config import Settings
-from mentor.fetch.queue import _html_to_text, fetch_pending, queue_status
-from mentor.ingest.notices import _deadline_utc
-from mentor.query import Filters
-from mentor.sam.client import ManifestShapeError
+from orrery import workspace
+from orrery.config import Settings
+from orrery.fetch.queue import _html_to_text, fetch_pending, queue_status
+from orrery.ingest.notices import _deadline_utc
+from orrery.query import Filters
+from orrery.sam.client import ManifestShapeError
 
 FIXTURE = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
 DESC_BODY = json.loads(
@@ -288,7 +288,7 @@ def test_saved_search_leads_the_queue(
 def test_fetch_reports_and_cancels_between_items(
     conn: sqlite3.Connection, settings: Settings, seed: Seed, httpx_mock: HTTPXMock
 ) -> None:
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     seed()
     httpx_mock.add_response(url=NOTICEDESC, json=DESC_BODY, is_reusable=True)
@@ -511,4 +511,4 @@ def test_off_site_links_are_recorded_where_they_live_and_never_fetched(
     assert conn.execute(
         "SELECT filename FROM attachments WHERE fetch_status = 'skipped'"
     ).fetchone() == ("PIEE Solicitation Module Link",)
-    assert "manifests: 1 live on portals mentor does not fetch" in lines
+    assert "manifests: 1 live on portals orrery does not fetch" in lines

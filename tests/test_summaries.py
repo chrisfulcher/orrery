@@ -5,11 +5,11 @@ from collections.abc import Callable
 import pytest
 from test_assess import FakeBackend
 
-from mentor import summaries
-from mentor.ai import AIError, Completion
-from mentor.config import Settings
-from mentor.progress import JobCancelled
-from mentor.summaries import NoticeInputs, SummarizeResult, render, set_aside_fit
+from orrery import summaries
+from orrery.ai import AIError, Completion
+from orrery.config import Settings
+from orrery.progress import JobCancelled
+from orrery.summaries import NoticeInputs, SummarizeResult, render, set_aside_fit
 
 Seed = Callable[[dict | None], None]
 
@@ -119,7 +119,7 @@ def test_invalid_answer_is_recorded_and_the_walk_continues(
 
 class RefusingBackend(FakeBackend):
     def complete(self, *, system: str, user: str, schema: dict, max_tokens: int) -> Completion:
-        from mentor.ai import InvalidResponse
+        from orrery.ai import InvalidResponse
 
         self.calls.append((system, user))
         raise InvalidResponse("fake-model declined the request (cyber)")
@@ -173,7 +173,7 @@ def test_owned_backend_is_closed(
     conn: sqlite3.Connection, settings: Settings, described: list[str], monkeypatch
 ) -> None:
     backend = FakeBackend([json.dumps(GOOD)])
-    monkeypatch.setattr("mentor.ai.backend_for", lambda slot: backend)
+    monkeypatch.setattr("orrery.ai.backend_for", lambda slot: backend)
     assert summaries.summarize_pending(conn, settings, limit=1).summarized == 1
     assert backend.closed
 

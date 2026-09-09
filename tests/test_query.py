@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 from conftest import SEARCH_FIXTURE, fake_vector
 
-from mentor import db, query
-from mentor.config import Settings
-from mentor.embed.client import pack
-from mentor.embed.pipeline import embed_pending
-from mentor.ingest.awards import AwardsResult
+from orrery import db, query
+from orrery.config import Settings
+from orrery.embed.client import pack
+from orrery.embed.pipeline import embed_pending
+from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
 SeedAwards = Callable[[list[dict] | None], AwardsResult]
@@ -302,7 +302,7 @@ def test_officials_from_an_extract_row_count_other_notices(
 ) -> None:
     from conftest import make_extract
 
-    from mentor.ingest.bulk import ingest_bulk
+    from orrery.ingest.bulk import ingest_bulk
 
     seed_awards()
     path = tmp_path / "extract.csv"

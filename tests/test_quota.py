@@ -1,7 +1,7 @@
 import sqlite3
 
-from mentor import quota, runs
-from mentor.config import Settings
+from orrery import quota, runs
+from orrery.config import Settings
 
 
 def insert_request(conn: sqlite3.Connection, run_id: int, requested_at: str | None = None) -> None:

@@ -4,8 +4,8 @@ from collections.abc import Callable
 import pytest
 from conftest import SEARCH_FIXTURE
 
-from mentor import db, documents, query, workspace
-from mentor.query import Filters
+from orrery import db, documents, query, workspace
+from orrery.query import Filters
 
 Seed = Callable[[dict | None], None]
 NOTICES = SEARCH_FIXTURE["opportunitiesData"]
@@ -154,7 +154,7 @@ def test_run_search_with_text_intersects_filters(seeded: sqlite3.Connection) -> 
 
 def test_profile_document_projects_into_the_profile_row(conn: sqlite3.Connection) -> None:
     assert workspace.get_profile(conn) is None
-    assert workspace.profile_document(conn).startswith("# mentor company profile")
+    assert workspace.profile_document(conn).startswith("# orrery company profile")
     body = (
         '[company]\nname = "Example LLC"\ncage = "1abc2"\n'
         '[offerings]\nnaics = ["541512", "541511"]\ncapability_statement = "We do IT."\n'

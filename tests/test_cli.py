@@ -10,9 +10,9 @@ from conftest import CHAT_URL, EMBED_URL, make_extract, register_fake_chat, regi
 from pytest_httpx import HTTPXMock
 from typer.testing import CliRunner
 
-from mentor import __version__, db, runs
-from mentor.cli import app
-from mentor.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, archive_name
+from orrery import __version__, db, runs
+from orrery.cli import app
+from orrery.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, archive_name
 
 runner = CliRunner()
 
@@ -20,7 +20,7 @@ runner = CliRunner()
 def test_version_prints_package_version() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.output.strip() == f"mentor {__version__}"
+    assert result.output.strip() == f"orrery {__version__}"
 
 
 def test_no_arguments_shows_help() -> None:
@@ -30,7 +30,7 @@ def test_no_arguments_shows_help() -> None:
 
 
 def test_db_migrate_and_status(tmp_path: Path) -> None:
-    env = {"MENTOR_DATA_DIR": str(tmp_path)}
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
 
     result = runner.invoke(app, ["db", "migrate"], env=env)
     assert result.exit_code == 0, result.output
@@ -51,7 +51,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0014_run_filter.sql",
         "applied 0015_attachment_manifest.sql",
     ]
-    assert (tmp_path / "mentor.sqlite").exists()
+    assert (tmp_path / "orrery.sqlite").exists()
 
     result = runner.invoke(app, ["db", "migrate"], env=env)
     assert result.exit_code == 0, result.output
@@ -60,7 +60,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
     result = runner.invoke(app, ["db", "status"], env=env)
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == [
-        f"database: {tmp_path / 'mentor.sqlite'}",
+        f"database: {tmp_path / 'orrery.sqlite'}",
         "applied  0001_initial.sql",
         "applied  0002_description_queue.sql",
         "applied  0003_extraction_and_search.sql",
@@ -80,14 +80,14 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
 
 
 def test_quota_text_and_json(tmp_path: Path) -> None:
-    env = {"MENTOR_DATA_DIR": str(tmp_path)}
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
     assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
 
     result = runner.invoke(app, ["quota"], env=env)
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "spent 0 of 10 today (UTC), 10 remaining"
 
-    with closing(db.connect(tmp_path / "mentor.sqlite")) as conn:
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
         run_id = runs.start(conn)
         for _ in range(2):
             conn.execute(
@@ -107,10 +107,10 @@ def test_ingest_notices_command(
 ) -> None:
     monkeypatch.chdir(tmp_path)  # away from the repo's own .env
     env = {
-        "MENTOR_DATA_DIR": str(tmp_path),
-        "MENTOR_SAM_API_KEY": "test-key",
-        "MENTOR_NAICS": "541512",
-        "MENTOR_SAM_DAILY_BUDGET": "10",
+        "ORRERY_DATA_DIR": str(tmp_path),
+        "ORRERY_SAM_API_KEY": "test-key",
+        "ORRERY_NAICS": "541512",
+        "ORRERY_SAM_DAILY_BUDGET": "10",
     }
     assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
     fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
@@ -136,11 +136,11 @@ def test_ingest_notices_command(
     }
     assert payload["notices_new"] == 0
 
-    result = runner.invoke(app, ["ingest", "notices"], env={**env, "MENTOR_NAICS": ""})
-    assert result.exit_code == 2 and "MENTOR_NAICS" in result.output
+    result = runner.invoke(app, ["ingest", "notices"], env={**env, "ORRERY_NAICS": ""})
+    assert result.exit_code == 2 and "ORRERY_NAICS" in result.output
 
-    result = runner.invoke(app, ["ingest", "notices"], env={**env, "MENTOR_SAM_API_KEY": ""})
-    assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output
+    result = runner.invoke(app, ["ingest", "notices"], env={**env, "ORRERY_SAM_API_KEY": ""})
+    assert result.exit_code == 2 and "ORRERY_SAM_API_KEY" in result.output
 
 
 def test_ingest_notices_budget_stop_exits_nonzero(
@@ -148,10 +148,10 @@ def test_ingest_notices_budget_stop_exits_nonzero(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     env = {
-        "MENTOR_DATA_DIR": str(tmp_path),
-        "MENTOR_SAM_API_KEY": "test-key",
-        "MENTOR_NAICS": "541512,541511",
-        "MENTOR_SAM_DAILY_BUDGET": "1",
+        "ORRERY_DATA_DIR": str(tmp_path),
+        "ORRERY_SAM_API_KEY": "test-key",
+        "ORRERY_NAICS": "541512,541511",
+        "ORRERY_SAM_DAILY_BUDGET": "1",
     }
     assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
     fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
@@ -161,21 +161,21 @@ def test_ingest_notices_budget_stop_exits_nonzero(
 
     assert result.exit_code == 1
     assert "ingestion stopped" in result.output
-    with closing(db.connect(tmp_path / "mentor.sqlite")) as conn:
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
         assert conn.execute("SELECT status FROM ingestion_runs").fetchone() == ("failed",)
 
 
 FETCH_ENV = {
-    "MENTOR_SAM_API_KEY": "test-key",
-    "MENTOR_NAICS": "541512",
-    "MENTOR_SAM_DAILY_BUDGET": "10",
-    "MENTOR_FETCH_DELAY": "0",
+    "ORRERY_SAM_API_KEY": "test-key",
+    "ORRERY_NAICS": "541512",
+    "ORRERY_SAM_DAILY_BUDGET": "10",
+    "ORRERY_FETCH_DELAY": "0",
 }
 SEARCH = re.compile(r".*/opportunities/v2/search.*")
 
 
 def seed_via_cli(tmp_path: Path, httpx_mock: HTTPXMock) -> dict[str, str]:
-    env = {**FETCH_ENV, "MENTOR_DATA_DIR": str(tmp_path)}
+    env = {**FETCH_ENV, "ORRERY_DATA_DIR": str(tmp_path)}
     assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
     fixture = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
     httpx_mock.add_response(url=SEARCH, json=fixture)
@@ -205,7 +205,7 @@ def test_fetch_dry_run(
         "budget_remaining",
     }
     assert len(httpx_mock.get_requests()) == 1  # only the seed's search
-    with closing(db.connect(tmp_path / "mentor.sqlite")) as conn:
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
         assert conn.execute("SELECT count(*) FROM ingestion_runs").fetchone() == (1,)
 
 
@@ -247,10 +247,10 @@ def test_fetch_json_and_the_keyless_path(
     result = runner.invoke(
         app,
         ["fetch", "--max-attachments", "0", "--max-manifests", "0"],
-        env={**env, "MENTOR_SAM_API_KEY": ""},
+        env={**env, "ORRERY_SAM_API_KEY": ""},
     )
     assert result.exit_code == 0, result.output
-    assert "descriptions: skipped, MENTOR_SAM_API_KEY is not set" in result.output
+    assert "descriptions: skipped, ORRERY_SAM_API_KEY is not set" in result.output
 
 
 def test_extract_search_and_reindex(
@@ -428,7 +428,7 @@ def test_ingest_bulk_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    env = {**FETCH_ENV, "MENTOR_DATA_DIR": str(tmp_path)}
+    env = {**FETCH_ENV, "ORRERY_DATA_DIR": str(tmp_path)}
     assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
     local = tmp_path / "local.csv"
     local.write_bytes(make_extract([{}, {"NaicsCode": "236220"}]))
@@ -448,7 +448,7 @@ def test_ingest_bulk_command(
     assert result.exit_code == 0, result.output
     assert (tmp_path / "extracts" / "ContractOpportunitiesFullCSV.csv").exists()
 
-    assert runner.invoke(app, ["ingest", "bulk"], env={**env, "MENTOR_NAICS": ""}).exit_code == 2
+    assert runner.invoke(app, ["ingest", "bulk"], env={**env, "ORRERY_NAICS": ""}).exit_code == 2
     httpx_mock.add_response(url=EXTRACT_URL.format(name=archive_name(2025)), status_code=500)
     result = runner.invoke(app, ["ingest", "bulk", "--archived", "2025"], env=env)
     assert result.exit_code == 1 and "bulk ingest stopped" in result.output
@@ -512,7 +512,7 @@ def test_workspace_commands(
     assert run("pipeline").output.startswith("qualify (1)")
     assert len(json.loads(run("pipeline", "--json").output)) == 1
 
-    assert run("profile", "show").output.startswith("# mentor company profile")
+    assert run("profile", "show").output.startswith("# orrery company profile")
     toml = tmp_path / "profile.toml"
     toml.write_text(
         '[company]\nname = "Example LLC"\n[offerings]\nnaics = ["541512", "541511"]\n'
@@ -529,7 +529,7 @@ def test_workspace_commands(
 
     assert run("search", "xylophone", "--naics", "999999").output.strip() == "no matches"
     assert run("search", "x", "--semantic", "--naics", "1").exit_code == 2
-    assert run("workflow", "show").output.startswith("# mentor workflow")
+    assert run("workflow", "show").output.startswith("# orrery workflow")
     assert json.loads(run("workflow", "show", "--json").output)["stages"][0]["key"] == "identify"
     workflow_toml = tmp_path / "workflow.toml"
     workflow_toml.write_text('[[stages]]\nkey = "find"\nname = "Find"\ngate = "Go"\n')
@@ -547,7 +547,7 @@ def test_workspace_commands(
 def test_ingest_awards_from_file(tmp_path: Path) -> None:
     from conftest import make_awards_csv
 
-    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    env = {"ORRERY_DATA_DIR": str(tmp_path), "ORRERY_NAICS": "541512"}
     runner.invoke(app, ["db", "migrate"], env=env)
     path = tmp_path / "awards.csv"
     path.write_bytes(make_awards_csv([{}, {"award_id_piid": "B", "recipient_uei": "PHZDZ8SJ5CM1"}]))
@@ -569,7 +569,7 @@ def test_ingest_awards_from_file(tmp_path: Path) -> None:
 
 
 def test_ingest_awards_refuses_a_backwards_window(tmp_path: Path) -> None:
-    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    env = {"ORRERY_DATA_DIR": str(tmp_path), "ORRERY_NAICS": "541512"}
     result = runner.invoke(
         app, ["ingest", "awards", "--since", "2026-01-02", "--until", "2026-01-01"], env=env
     )
@@ -580,7 +580,7 @@ def test_ingest_awards_refuses_a_backwards_window(tmp_path: Path) -> None:
 def test_awards_and_contractor_commands(tmp_path: Path) -> None:
     from conftest import make_awards_csv
 
-    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    env = {"ORRERY_DATA_DIR": str(tmp_path), "ORRERY_NAICS": "541512"}
     runner.invoke(app, ["db", "migrate"], env=env)
     path = tmp_path / "awards.csv"
     path.write_bytes(make_awards_csv([{}]))
@@ -615,8 +615,8 @@ def test_ingest_entities_from_file_and_key_guard(
     from conftest import EXTRACT_SAMPLE
 
     monkeypatch.chdir(tmp_path)  # no .env here: the key must come from the environment
-    monkeypatch.delenv("MENTOR_SAM_API_KEY", raising=False)
-    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "611310"}
+    monkeypatch.delenv("ORRERY_SAM_API_KEY", raising=False)
+    env = {"ORRERY_DATA_DIR": str(tmp_path), "ORRERY_NAICS": "611310"}
     runner.invoke(app, ["db", "migrate"], env=env)
 
     result = runner.invoke(app, ["ingest", "entities", "--file", str(EXTRACT_SAMPLE)], env=env)
@@ -627,7 +627,7 @@ def test_ingest_entities_from_file_and_key_guard(
     )
 
     result = runner.invoke(app, ["ingest", "entities", "--uei", "C39LJA3KD378"], env=env)
-    assert result.exit_code == 2 and "MENTOR_SAM_API_KEY" in result.output
+    assert result.exit_code == 2 and "ORRERY_SAM_API_KEY" in result.output
 
     result = runner.invoke(app, ["ingest", "entities"], env=env)  # nothing on disk, no key
     assert result.exit_code == 2
@@ -636,9 +636,9 @@ def test_ingest_entities_from_file_and_key_guard(
 def test_profile_edit_reopens_the_editor_until_valid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from mentor import cli
+    from orrery import cli
 
-    env = {"MENTOR_DATA_DIR": str(tmp_path)}
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
     runner.invoke(app, ["db", "migrate"], env=env)
     shown: list[str] = []
     answers = iter(['[company]\nname = "X"\ntypo = 1\n', '[company]\nname = "Fixed LLC"\n'])
@@ -718,7 +718,7 @@ def test_pursuit_commands_walk_the_lifecycle(
 def test_recompetes_command_defaults_to_the_profile_naics(tmp_path: Path) -> None:
     from conftest import make_awards_csv
 
-    env = {"MENTOR_DATA_DIR": str(tmp_path), "MENTOR_NAICS": "541512"}
+    env = {"ORRERY_DATA_DIR": str(tmp_path), "ORRERY_NAICS": "541512"}
     runner.invoke(app, ["db", "migrate"], env=env)
     path = tmp_path / "awards.csv"
     path.write_bytes(

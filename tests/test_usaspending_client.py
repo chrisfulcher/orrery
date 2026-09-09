@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mentor.config import Settings
-from mentor.usaspending.client import DownloadTicket, UsaspendingClient, UsaspendingError
+from orrery.config import Settings
+from orrery.usaspending.client import DownloadTicket, UsaspendingClient, UsaspendingError
 
 FIXTURES = Path(__file__).with_name("fixtures")
 TICKET_JSON = json.loads((FIXTURES / "usaspending_download_awards.json").read_text())

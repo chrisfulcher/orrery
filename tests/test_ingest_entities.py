@@ -8,11 +8,11 @@ import pytest
 from conftest import EXTRACT_SAMPLE
 from pytest_httpx import HTTPXMock
 
-from mentor import db
-from mentor.config import Settings
-from mentor.ingest import entities
-from mentor.ingest.awards import AwardsResult
-from mentor.ingest.entities import (
+from orrery import db
+from orrery.config import Settings
+from orrery.ingest import entities
+from orrery.ingest.awards import AwardsResult
+from orrery.ingest.entities import (
     EntitiesError,
     ingest_extract,
     lookup_entities,
@@ -201,7 +201,7 @@ def test_cancel_between_batches_and_lookup_progress(
     monkeypatch: pytest.MonkeyPatch,
     httpx_mock: HTTPXMock,
 ) -> None:
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     seed_awards()
     monkeypatch.setattr(entities, "BATCH", 1)

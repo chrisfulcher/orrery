@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mentor import db
-from mentor.config import Settings
-from mentor.ingest.notices import _deadline_utc, ingest_notices
-from mentor.quota import BudgetExceeded
+from orrery import db
+from orrery.config import Settings
+from orrery.ingest.notices import _deadline_utc, ingest_notices
+from orrery.quota import BudgetExceeded
 
 FIXTURE = json.loads((Path(__file__).with_name("fixtures") / "sam_search_v2.json").read_text())
 SEARCH = re.compile(r".*/opportunities/v2/search.*")
@@ -169,7 +169,7 @@ def test_budget_stop_keeps_committed_pages(
 
 
 def test_empty_naics_is_refused(conn: sqlite3.Connection, settings: Settings) -> None:
-    with pytest.raises(ValueError, match="MENTOR_NAICS"):
+    with pytest.raises(ValueError, match="ORRERY_NAICS"):
         ingest_notices(conn, settings.model_copy(update={"naics": []}), **WINDOW)
     assert count(conn, "ingestion_runs") == 0
 
@@ -190,7 +190,7 @@ def test_deadline_utc(value: str | None, expected: str | None) -> None:
 def test_progress_lines_and_cancellation(
     conn: sqlite3.Connection, settings: Settings, httpx_mock: HTTPXMock
 ) -> None:
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     httpx_mock.add_response(
         url=re.compile(r".*/opportunities/v2/search.*"), json=FIXTURE, is_reusable=True

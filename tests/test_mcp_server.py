@@ -6,8 +6,8 @@ import pytest
 from conftest import SEARCH_FIXTURE
 from mcp import Client
 
-from mentor import mcp_server, workspace
-from mentor.ingest.awards import AwardsResult
+from orrery import mcp_server, workspace
+from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
 SeedAwards = Callable[[list[dict] | None], AwardsResult]
@@ -25,7 +25,7 @@ def store(
     conn: sqlite3.Connection, seed: Seed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> sqlite3.Connection:
     seed()
-    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
     return conn
 
 
@@ -90,7 +90,7 @@ def test_award_tools(
     seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_awards()
-    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
     rows = mcp_server.awards(office="75R602")
     assert [row.piid for row in rows] == ["75R60222F00009", "75R60224F00021"]
     assert mcp_server.awards(uei="PHZDZ8SJ5CM1")[0].vendor == "CDW GOVERNMENT LLC"
@@ -108,7 +108,7 @@ async def test_pursuit_tools(
     seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_awards()
-    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
     opened = mcp_server.new_pursuit("Help desk recompete", office_code="75R602", naics="541512")
     assert (opened.stage, opened.office, opened.open_tasks) == ("identify", "HRSA HEADQUARTERS", 3)
     linked = mcp_server.link_notice(opened.pursuit_id, HRSA)
@@ -129,7 +129,7 @@ def test_assessments_are_read_only(
     seed_awards: SeedAwards, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_awards()
-    monkeypatch.setenv("MENTOR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
     opened = mcp_server.new_pursuit("X")
     assert mcp_server.assessments(opened.pursuit_id) == []
     with mcp_server._conn() as conn:

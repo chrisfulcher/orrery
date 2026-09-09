@@ -1,6 +1,6 @@
 import pytest
 
-from mentor.embed.chunks import Chunk, chunk_text
+from orrery.embed.chunks import Chunk, chunk_text
 
 
 def test_empty_and_separator_only_text() -> None:

@@ -1,5 +1,5 @@
 [project]
-name = "mentor"
+name = "orrery"
 version = "0.1.0"
 description = "Free, open source, self-hosted business development intelligence for U.S. federal government contracting."
 readme = "README.md"
@@ -36,12 +36,12 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/chrisfulcher/mentor"
-Issues = "https://github.com/chrisfulcher/mentor/issues"
-Design = "https://github.com/chrisfulcher/mentor/blob/main/docs/DESIGN.md"
+Repository = "https://github.com/chrisfulcher/orrery"
+Issues = "https://github.com/chrisfulcher/orrery/issues"
+Design = "https://github.com/chrisfulcher/orrery/blob/main/docs/DESIGN.md"
 
 [project.scripts]
-mentor = "mentor.cli:app"
+orrery = "orrery.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.8"]

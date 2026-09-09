@@ -3,17 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from mentor import jobs
-from mentor.config import Settings
-from mentor.embed.pipeline import EmbedResult
-from mentor.extract.text import ExtractResult
-from mentor.fetch.queue import FetchResult
-from mentor.ingest import awards, bulk, entities, notices
-from mentor.ingest.awards import AwardsResult
-from mentor.ingest.bulk import BulkResult
-from mentor.ingest.entities import EntitiesResult
-from mentor.ingest.notices import IngestResult
-from mentor.jobs import (
+from orrery import jobs
+from orrery.config import Settings
+from orrery.embed.pipeline import EmbedResult
+from orrery.extract.text import ExtractResult
+from orrery.fetch.queue import FetchResult
+from orrery.ingest import awards, bulk, entities, notices
+from orrery.ingest.awards import AwardsResult
+from orrery.ingest.bulk import BulkResult
+from orrery.ingest.entities import EntitiesResult
+from orrery.ingest.notices import IngestResult
+from orrery.jobs import (
     JOBS,
     OPERATIONS,
     JobFailed,
@@ -22,8 +22,8 @@ from mentor.jobs import (
     needs_unmet,
     summarize,
 )
-from mentor.progress import JobCancelled
-from mentor.sam.client import SamError
+from orrery.progress import JobCancelled
+from orrery.sam.client import SamError
 
 
 def test_registry_lists_the_operations_with_their_needs() -> None:
@@ -44,20 +44,20 @@ def test_registry_lists_the_operations_with_their_needs() -> None:
 def test_needs_unmet_uses_the_cli_words(tmp_path: Path) -> None:
     bare = Settings(_env_file=None, data_dir=tmp_path)
     assert needs_unmet(JOBS["ingest-notices"], bare, {}) == [
-        "MENTOR_SAM_API_KEY is not set", "MENTOR_NAICS is empty; nothing to ingest",
+        "ORRERY_SAM_API_KEY is not set", "ORRERY_NAICS is empty; nothing to ingest",
     ]  # fmt: skip
     assert needs_unmet(JOBS["extract"], bare, {}) == []
     # entities need the key only when something must be downloaded or looked up
-    assert needs_unmet(JOBS["ingest-entities"], bare, {}) == ["MENTOR_SAM_API_KEY is not set"]
+    assert needs_unmet(JOBS["ingest-entities"], bare, {}) == ["ORRERY_SAM_API_KEY is not set"]
     assert needs_unmet(JOBS["ingest-entities"], bare, {"file": "x.zip"}) == []
     (tmp_path / "extracts" / "sam").mkdir(parents=True)
     (tmp_path / "extracts" / "sam" / "SAM_PUBLIC_UTF-8_MONTHLY_V2_20260906.ZIP").write_bytes(b"")
     assert needs_unmet(JOBS["ingest-entities"], bare, {}) == []
     assert needs_unmet(JOBS["ingest-entities"], bare, {"refresh": "true"}) == [
-        "MENTOR_SAM_API_KEY is not set"
+        "ORRERY_SAM_API_KEY is not set"
     ]
     assert needs_unmet(JOBS["ingest-entities"], bare, {"uei": "A"}) == [
-        "MENTOR_SAM_API_KEY is not set"
+        "ORRERY_SAM_API_KEY is not set"
     ]
 
 

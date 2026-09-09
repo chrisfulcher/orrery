@@ -6,16 +6,16 @@ from pathlib import Path
 import pytest
 from textual.widgets import Input, Select, Static, TabbedContent, Tabs, TextArea
 
-from mentor import db, documents, dotenv, workspace
-from mentor.config import Settings, env_values
-from mentor.documents import ProfileDocument
-from mentor.tui.app import DashboardScreen, MentorTop, RadarScreen
-from mentor.tui.setup import FormModal, SetupScreen
+from orrery import db, documents, dotenv, workspace
+from orrery.config import Settings, env_values
+from orrery.documents import ProfileDocument
+from orrery.tui.app import DashboardScreen, OrreryTop, RadarScreen
+from orrery.tui.setup import FormModal, SetupScreen
 
 Seed = Callable[[dict | None], None]
 
 
-def text(app: MentorTop, selector: str) -> str:
+def text(app: OrreryTop, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).content)
 
 
@@ -26,11 +26,11 @@ async def test_first_run_opens_setup_and_saves_the_env_file(
     conn.close()
     bare = Settings(_env_file=None, data_dir=tmp_path)  # no key, no NAICS
     env_path = tmp_path / ".env"
-    app = MentorTop(bare, env_path=env_path)
+    app = OrreryTop(bare, env_path=env_path)
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, SetupScreen)
-        assert "MENTOR_NAICS is empty" in text(app, "#setup_banner")
+        assert "ORRERY_NAICS is empty" in text(app, "#setup_banner")
 
         app.screen.query_one("#field-sam-api-key", Input).value = "sk-live"
         app.screen.query_one("#field-naics", Input).value = "541512, 541511"
@@ -40,9 +40,9 @@ async def test_first_run_opens_setup_and_saves_the_env_file(
 
         assert env_path.is_file() and stat.S_IMODE(env_path.stat().st_mode) == 0o600
         stored = dotenv.read(env_path)
-        assert stored["MENTOR_SAM_API_KEY"] == "sk-live"
-        assert stored["MENTOR_NAICS"] == "541512,541511"
-        assert stored["MENTOR_DATA_DIR"] == str(tmp_path)  # the locked value is carried, not lost
+        assert stored["ORRERY_SAM_API_KEY"] == "sk-live"
+        assert stored["ORRERY_NAICS"] == "541512,541511"
+        assert stored["ORRERY_DATA_DIR"] == str(tmp_path)  # the locked value is carried, not lost
         assert app.settings.naics == ["541512", "541511"] and app.settings.sam_daily_budget == 1000
         assert app.settings.sam_api_key.get_secret_value() == "sk-live"
         assert text(app, "#setup_banner") == ""
@@ -68,8 +68,8 @@ async def test_environment_values_are_locked_and_bad_input_writes_nothing(
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(settings))
     before = env_path.read_text()
-    monkeypatch.setenv("MENTOR_SAM_DAILY_BUDGET", "99")
-    app = MentorTop(Settings(_env_file=env_path), env_path=env_path)
+    monkeypatch.setenv("ORRERY_SAM_DAILY_BUDGET", "99")
+    app = OrreryTop(Settings(_env_file=env_path), env_path=env_path)
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
@@ -92,8 +92,8 @@ async def test_environment_values_are_locked_and_bad_input_writes_nothing(
         await pilot.pause()
         assert text(app, "#connections_form-errors") == ""
         stored = dotenv.read(env_path)
-        assert stored["MENTOR_FETCH_DELAY"] == "2.5"
-        assert stored["MENTOR_SAM_DAILY_BUDGET"] == "10"  # the locked line is left as it was
+        assert stored["ORRERY_FETCH_DELAY"] == "2.5"
+        assert stored["ORRERY_SAM_DAILY_BUDGET"] == "10"  # the locked line is left as it was
         assert app.settings.fetch_delay == 2.5 and app.settings.sam_daily_budget == 99
 
         await pilot.press("escape")
@@ -109,7 +109,7 @@ async def test_migrations_run_on_start(settings: Settings, tmp_path: Path) -> No
     raw.close()
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(settings))
-    app = MentorTop(settings, env_path=env_path)
+    app = OrreryTop(settings, env_path=env_path)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
@@ -122,16 +122,16 @@ async def test_migrations_run_on_start(settings: Settings, tmp_path: Path) -> No
 @pytest.fixture
 def ready_app(
     conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
-) -> MentorTop:
+) -> OrreryTop:
     seed()
     conn.close()
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(settings))
-    return MentorTop(settings, env_path=env_path)
+    return OrreryTop(settings, env_path=env_path)
 
 
 async def test_profile_form_round_trips_the_document(
-    ready_app: MentorTop, settings: Settings
+    ready_app: OrreryTop, settings: Settings
 ) -> None:
     app = ready_app
     async with app.run_test(size=(120, 50)) as pilot:
@@ -169,7 +169,7 @@ async def test_profile_form_round_trips_the_document(
             ("PHZDZ8SJ5CM1", "CDW GOVERNMENT LLC", "incumbent at HRSA"),
             (None, "Partner Co", ""),
         ]
-        assert latest.body.startswith("# mentor company profile")  # the CLI sees the same document
+        assert latest.body.startswith("# orrery company profile")  # the CLI sees the same document
         assert workspace.get_profile(conn).naics == ("541512", "541511")
         conn.close()
 
@@ -190,23 +190,23 @@ async def test_profile_form_round_trips_the_document(
 @pytest.fixture
 def app_with_pursuit(
     conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
-) -> MentorTop:
+) -> OrreryTop:
     seed()
     hrsa = __import__("conftest").SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
     workspace.track(conn, hrsa, stage="pursuing")  # a pursuit in qualify
     workspace.save_search(
-        conn, "sba", filters=__import__("mentor.query").query.Filters(set_asides=("SBA",))
+        conn, "sba", filters=__import__("orrery.query").query.Filters(set_asides=("SBA",))
     )
     conn.close()
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(settings))
-    return MentorTop(settings, env_path=env_path)
+    return OrreryTop(settings, env_path=env_path)
 
 
 async def test_workflow_tab_edits_stages_and_refuses_removing_one_in_use(
-    app_with_pursuit: MentorTop, settings: Settings
+    app_with_pursuit: OrreryTop, settings: Settings
 ) -> None:
-    from mentor.tui.setup import FormModal
+    from orrery.tui.setup import FormModal
 
     app = app_with_pursuit
     async with app.run_test(size=(120, 50)) as pilot:
@@ -263,10 +263,10 @@ async def test_workflow_tab_edits_stages_and_refuses_removing_one_in_use(
 
 
 async def test_searches_tab_creates_edits_runs_and_deletes(
-    app_with_pursuit: MentorTop, settings: Settings
+    app_with_pursuit: OrreryTop, settings: Settings
 ) -> None:
-    from mentor.tui.app import OpportunitiesScreen
-    from mentor.tui.setup import ConfirmModal, FormModal
+    from orrery.tui.app import OpportunitiesScreen
+    from orrery.tui.setup import ConfirmModal, FormModal
 
     app = app_with_pursuit
     async with app.run_test(size=(120, 50)) as pilot:
@@ -332,7 +332,7 @@ async def test_searches_tab_creates_edits_runs_and_deletes(
 
 
 async def test_the_tab_bar_keeps_focus_until_enter_steps_into_the_tab(
-    app_with_pursuit: MentorTop,
+    app_with_pursuit: OrreryTop,
 ) -> None:
     app = app_with_pursuit
     async with app.run_test(size=(120, 50)) as pilot:

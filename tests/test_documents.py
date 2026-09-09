@@ -1,7 +1,7 @@
 import pytest
 
-from mentor import documents
-from mentor.documents import (
+from orrery import documents
+from orrery.documents import (
     DEFAULT_WORKFLOW,
     DocumentError,
     ProfileDocument,
@@ -50,7 +50,7 @@ def test_profile_round_trips_with_prose_and_parties() -> None:
     parsed = parse(text, ProfileDocument)
     assert parsed == doc
     assert parsed.company.uei == "UE9QJD4KK1L6" and parsed.company.cage == "5UTE1"
-    assert text.startswith("# mentor company profile")
+    assert text.startswith("# orrery company profile")
 
 
 @pytest.mark.parametrize(
@@ -112,7 +112,7 @@ def test_search_document_round_trips_and_treats_zero_as_unset() -> None:
 
 
 def test_validate_reports_like_parse() -> None:
-    from mentor.documents import validate
+    from orrery.documents import validate
 
     assert validate({"company": {"name": "X"}}, ProfileDocument).company.name == "X"
     with pytest.raises(DocumentError, match="company.uei: .*UEI 'x' is not 12 characters"):
@@ -120,7 +120,7 @@ def test_validate_reports_like_parse() -> None:
 
 
 def test_parties_lines_round_trip() -> None:
-    from mentor.tui.forms import parse_parties, parties_lines
+    from orrery.tui.forms import parse_parties, parties_lines
 
     parties = [
         {"uei": "UE9QJD4KK1L6", "name": "A", "notes": "n"},

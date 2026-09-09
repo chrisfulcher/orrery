@@ -1,4 +1,4 @@
-"""Jobs inside `mentor top`: the worker, the Jobs tab, the dashboard line, `s` on a pursuit."""
+"""Jobs inside `orrery top`: the worker, the Jobs tab, the dashboard line, `s` on a pursuit."""
 
 import json
 import sqlite3
@@ -13,25 +13,25 @@ from test_assess import GOOD
 from test_tui_setup import Seed, text
 from textual.widgets import Input, RichLog
 
-from mentor import db, dotenv, jobs, workspace
-from mentor.config import Settings, env_values
-from mentor.tui.app import DashboardScreen, MentorTop, PursuitScreen
-from mentor.tui.setup import SetupScreen
-from mentor.tui.widgets import WrapTable
+from orrery import db, dotenv, jobs, workspace
+from orrery.config import Settings, env_values
+from orrery.tui.app import DashboardScreen, OrreryTop, PursuitScreen
+from orrery.tui.setup import SetupScreen
+from orrery.tui.widgets import WrapTable
 
 
 @pytest.fixture
-def app(conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path) -> MentorTop:
+def app(conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path) -> OrreryTop:
     seed()
     hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
     workspace.track(conn, hrsa, stage="pursuing")
     conn.close()
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(settings))
-    return MentorTop(settings, env_path=env_path)
+    return OrreryTop(settings, env_path=env_path)
 
 
-async def wait_idle(pilot, app: MentorTop, seconds: float = 10.0) -> None:
+async def wait_idle(pilot, app: OrreryTop, seconds: float = 10.0) -> None:
     deadline = time.monotonic() + seconds
     while app.current is not None and app.current.finished_at is None:
         assert time.monotonic() < deadline, "the job never finished"
@@ -46,7 +46,7 @@ def install_fake_job(monkeypatch: pytest.MonkeyPatch, run) -> None:
 
 
 async def test_jobs_tab_runs_a_job_on_its_own_connection_and_logs_it(
-    app: MentorTop, monkeypatch: pytest.MonkeyPatch
+    app: OrreryTop, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: dict = {}
 
@@ -88,7 +88,7 @@ async def test_jobs_tab_runs_a_job_on_its_own_connection_and_logs_it(
 
 
 async def test_cancel_stops_a_job_between_items(
-    app: MentorTop, monkeypatch: pytest.MonkeyPatch
+    app: OrreryTop, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     started = threading.Event()
     go_on = threading.Event()
@@ -126,7 +126,7 @@ async def test_cancel_stops_a_job_between_items(
 
 
 async def test_a_failing_job_reports_and_the_app_survives(
-    app: MentorTop, monkeypatch: pytest.MonkeyPatch
+    app: OrreryTop, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def run(conn, settings, values, report, cancelled) -> object:
         raise jobs.JobFailed("ingestion stopped: quota")
@@ -142,7 +142,7 @@ async def test_a_failing_job_reports_and_the_app_survives(
         await wait_idle(pilot, app)
 
 
-async def test_the_real_db_jobs_run_from_the_tab(app: MentorTop) -> None:
+async def test_the_real_db_jobs_run_from_the_tab(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         assert app.run_job("db-migrate", {})
@@ -154,7 +154,7 @@ async def test_the_real_db_jobs_run_from_the_tab(app: MentorTop) -> None:
 
 
 async def test_s_on_the_pursuit_screen_assesses_and_reloads(
-    app: MentorTop, httpx_mock: HTTPXMock
+    app: OrreryTop, httpx_mock: HTTPXMock
 ) -> None:
     requests: list[dict] = []
     register_fake_chat(httpx_mock, [json.dumps(GOOD)], requests)
@@ -181,7 +181,7 @@ async def test_missing_needs_open_connections_instead_of_running(
     bare = Settings(_env_file=None, data_dir=tmp_path, naics=["541512"])  # no key
     env_path = tmp_path / ".env"
     dotenv.write(env_path, env_values(bare))
-    app = MentorTop(bare, env_path=env_path)
+    app = OrreryTop(bare, env_path=env_path)
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         await pilot.press("1")
@@ -194,7 +194,7 @@ async def test_missing_needs_open_connections_instead_of_running(
 
 
 async def test_ingest_notices_runs_through_the_worker(
-    app: MentorTop, httpx_mock: HTTPXMock
+    app: OrreryTop, httpx_mock: HTTPXMock
 ) -> None:
     httpx_mock.add_response(url=SEARCH_URL, json=SEARCH_FIXTURE)
     async with app.run_test(size=(120, 50)) as pilot:

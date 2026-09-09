@@ -11,9 +11,9 @@ import pytest
 from anthropic import DefaultHttpxClient
 from pydantic import SecretStr
 
-from mentor import ai
-from mentor.ai import AIError, InvalidResponse, Slot
-from mentor.ai.anthropic_backend import FALLBACK_BETA, AnthropicBackend
+from orrery import ai
+from orrery.ai import AIError, InvalidResponse, Slot
+from orrery.ai.anthropic_backend import FALLBACK_BETA, AnthropicBackend
 
 
 def slot(**overrides: object) -> Slot:

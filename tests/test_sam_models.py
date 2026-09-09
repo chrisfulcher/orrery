@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from mentor.sam.models import Opportunity, SearchPage
+from orrery.sam.models import Opportunity, SearchPage
 
 FIXTURE = Path(__file__).with_name("fixtures") / "sam_search_v2.json"
 

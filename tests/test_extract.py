@@ -1,8 +1,8 @@
 import sqlite3
 from collections.abc import Callable
 
-from mentor.config import Settings
-from mentor.extract.text import ExtractResult, extract_pending
+from orrery.config import Settings
+from orrery.extract.text import ExtractResult, extract_pending
 
 Fetched = Callable[..., int]
 MakePdf = Callable[[list[str]], bytes]
@@ -65,7 +65,7 @@ def test_extract_reports_and_cancels_between_files(
 ) -> None:
     import pytest
 
-    from mentor.progress import JobCancelled
+    from orrery.progress import JobCancelled
 
     fetched("a.pdf", make_pdf(["one"]))
     fetched("b.pdf", make_pdf(["two"]))

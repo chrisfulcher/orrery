@@ -6,15 +6,15 @@ import pytest
 from conftest import SEARCH_FIXTURE
 from textual.widgets import DataTable, Static
 
-from mentor import db, dotenv, workspace
-from mentor.config import Settings, env_values
-from mentor.ingest.awards import AwardsResult
-from mentor.tui.app import (
+from orrery import db, dotenv, workspace
+from orrery.config import Settings, env_values
+from orrery.ingest.awards import AwardsResult
+from orrery.tui.app import (
     ContextScreen,
     DashboardScreen,
     EntityScreen,
-    MentorTop,
     OpportunitiesScreen,
+    OrreryTop,
     PursueModal,
     PursuitScreen,
     PursuitsScreen,
@@ -33,7 +33,7 @@ def app(
     seed: Seed,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> MentorTop:
+) -> OrreryTop:
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     seed()
     workspace.track(conn, HRSA, stage="pursuing", pwin=40)
@@ -57,7 +57,7 @@ def app(
         },
     )  # fmt: skip
     conn.close()
-    return MentorTop(settings, env_path=write_env(settings, tmp_path))
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path))
 
 
 def write_env(settings: Settings, tmp_path: Path) -> Path:
@@ -67,7 +67,7 @@ def write_env(settings: Settings, tmp_path: Path) -> Path:
     return path
 
 
-def text(app: MentorTop, selector: str) -> str:
+def text(app: OrreryTop, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).content)
 
 
@@ -77,7 +77,7 @@ SENTINEL = SEARCH_FIXTURE["opportunitiesData"][1]["noticeId"]  # SBA set-aside, 
 @pytest.fixture
 def app_with_summary(
     conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
-) -> MentorTop:
+) -> OrreryTop:
     """The Sentinel notice summarized, and a small-business profile eligible for its SBA code."""
     seed()
     workspace.save_profile(
@@ -91,10 +91,10 @@ def app_with_summary(
         (SENTINEL,),
     )
     conn.close()
-    return MentorTop(settings, env_path=write_env(settings, tmp_path))
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path))
 
 
-async def test_opportunities_and_context_show_the_summary(app_with_summary: MentorTop) -> None:
+async def test_opportunities_and_context_show_the_summary(app_with_summary: OrreryTop) -> None:
     app = app_with_summary
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
@@ -122,10 +122,10 @@ async def test_opportunities_and_context_show_the_summary(app_with_summary: Ment
         await pilot.pause()
         app.push_screen(ContextScreen(other_id))
         await pilot.pause()
-        assert text(app, "#summary") == "none yet (mentor summarize)"
+        assert text(app, "#summary") == "none yet (orrery summarize)"
 
 
-async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
+async def test_dashboard_search_context_and_entity(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
@@ -186,7 +186,7 @@ async def test_dashboard_search_context_and_entity(app: MentorTop) -> None:
     assert not app.is_running
 
 
-async def test_dashboard_refresh_keeps_the_selected_row(app: MentorTop) -> None:
+async def test_dashboard_refresh_keeps_the_selected_row(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         work = app.screen.query_one("#work", DataTable)
@@ -206,7 +206,7 @@ async def test_dashboard_refresh_keeps_the_selected_row(app: MentorTop) -> None:
         assert work.coordinate_to_cell_key(work.cursor_coordinate).row_key.value == selected
 
 
-async def test_screenshot(app: MentorTop, tmp_path: Path) -> None:
+async def test_screenshot(app: OrreryTop, tmp_path: Path) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         saved = app.save_screenshot("top.svg", path=str(tmp_path))
@@ -221,14 +221,14 @@ def app_with_awards(
     seed_awards: SeedAwards,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> MentorTop:
+) -> OrreryTop:
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     seed_awards()
     conn.close()
-    return MentorTop(settings, env_path=write_env(settings, tmp_path))
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path))
 
 
-async def test_context_view_awards_panels_and_contractor_screen(app_with_awards: MentorTop) -> None:
+async def test_context_view_awards_panels_and_contractor_screen(app_with_awards: OrreryTop) -> None:
     app = app_with_awards
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
@@ -268,7 +268,7 @@ async def test_context_view_awards_panels_and_contractor_screen(app_with_awards:
         assert "none in the store" in app.screen.query_one("#awards", DataTable).border_title
 
 
-async def test_pursuit_screen_drives_the_lifecycle(app: MentorTop) -> None:
+async def test_pursuit_screen_drives_the_lifecycle(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         app.push_screen(PursuitScreen(1))
@@ -313,7 +313,7 @@ async def test_pursuit_screen_drives_the_lifecycle(app: MentorTop) -> None:
 
 
 async def test_radar_starts_a_pursuit_from_an_award(
-    app_with_awards: MentorTop, monkeypatch: pytest.MonkeyPatch
+    app_with_awards: OrreryTop, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
     app = app_with_awards
@@ -342,7 +342,7 @@ async def test_radar_starts_a_pursuit_from_an_award(
         assert "identify 1" in app.screen.query_one("#attention", DataTable).border_title
 
 
-async def test_pursuit_screen_shows_the_assessment_and_accepts_tasks(app: MentorTop) -> None:
+async def test_pursuit_screen_shows_the_assessment_and_accepts_tasks(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
         app.push_screen(PursuitScreen(1))
