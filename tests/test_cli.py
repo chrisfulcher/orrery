@@ -222,13 +222,18 @@ def test_fetch_json_and_missing_key(
         headers={"Content-Disposition": "attachment; filename=a.pdf"},
     )
 
-    result = runner.invoke(app, ["fetch", "--json", "--max-attachments", "1"], env=env)
+    result = runner.invoke(
+        app, ["fetch", "--json", "--max-attachments", "1", "--max-manifests", "0"], env=env
+    )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert set(payload) == {
         "run_id",
         "descriptions_fetched",
         "descriptions_failed",
+        "manifests_checked",
+        "manifests_failed",
+        "attachments_found",
         "attachments_fetched",
         "attachments_failed",
         "attachments_skipped",
@@ -252,7 +257,11 @@ def test_extract_search_and_reindex(
         headers={"Content-Disposition": "attachment; filename=sow.pdf"},
     )
     assert (
-        runner.invoke(app, ["fetch", "--budget", "0", "--max-attachments", "1"], env=env).exit_code
+        runner.invoke(
+            app,
+            ["fetch", "--budget", "0", "--max-attachments", "1", "--max-manifests", "0"],
+            env=env,
+        ).exit_code
         == 0
     )
 
@@ -303,7 +312,12 @@ def test_summarize_command(
     env = seed_via_cli(tmp_path, httpx_mock)
     desc = json.loads((Path(__file__).with_name("fixtures") / "sam_noticedesc_v1.json").read_text())
     httpx_mock.add_response(url=re.compile(r".*noticedesc.*"), json=desc, is_reusable=True)
-    assert runner.invoke(app, ["fetch", "--max-attachments", "0"], env=env).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["fetch", "--max-attachments", "0", "--max-manifests", "0"], env=env
+        ).exit_code
+        == 0
+    )
 
     result = runner.invoke(app, ["summarize", "--slot", "medium"], env=env)
     assert result.exit_code == 2 and "must be one of fast, deep" in result.output
@@ -343,7 +357,12 @@ def test_embed_command_and_unreachable_endpoint(
     env = seed_via_cli(tmp_path, httpx_mock)
     desc = json.loads((Path(__file__).with_name("fixtures") / "sam_noticedesc_v1.json").read_text())
     httpx_mock.add_response(url=re.compile(r".*noticedesc.*"), json=desc, is_reusable=True)
-    assert runner.invoke(app, ["fetch", "--max-attachments", "0"], env=env).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["fetch", "--max-attachments", "0", "--max-manifests", "0"], env=env
+        ).exit_code
+        == 0
+    )
 
     httpx_mock.add_exception(httpx.ConnectError("refused"), url=EMBED_URL)
     result = runner.invoke(app, ["embed"], env=env)
@@ -377,7 +396,11 @@ def test_semantic_search_command(
         headers={"Content-Disposition": "attachment; filename=sow.pdf"},
     )
     assert (
-        runner.invoke(app, ["fetch", "--budget", "0", "--max-attachments", "1"], env=env).exit_code
+        runner.invoke(
+            app,
+            ["fetch", "--budget", "0", "--max-attachments", "1", "--max-manifests", "0"],
+            env=env,
+        ).exit_code
         == 0
     )
     assert runner.invoke(app, ["extract"], env=env).exit_code == 0

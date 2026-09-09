@@ -47,6 +47,7 @@ def print_json(payload: object) -> None:
 
 
 MILESTONES = {
+    "fetch": ("manifests: ",),
     "ingest-bulk": ("extract: ", "NAICS "),
     "ingest-awards": ("awards: ", "NAICS "),
     "ingest-entities": ("extract: ", "NAICS "),
@@ -127,12 +128,16 @@ def fetch(
     max_attachments: Annotated[
         int | None, typer.Option(help="Cap attachment downloads this run.")
     ] = None,
+    max_manifests: Annotated[
+        int | None, typer.Option(help="Cap notices asked for an attachment manifest this run.")
+    ] = None,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Show the queue; fetch nothing.")
     ] = False,
     json_output: JsonFlag = False,
 ) -> None:
-    """Fetch pending notice descriptions (within today's budget) and attachments (free)."""
+    """Fetch pending notice descriptions (within today's budget), then attachment manifests and
+    the attachments themselves (both free of the budget)."""
     settings = Settings()
     if dry_run:
         with closing(db.connect(settings.db_path)) as conn:
@@ -150,7 +155,11 @@ def fetch(
                 deadline = item.response_deadline or "-"
                 typer.echo(f"  {item.notice_id}  {deadline:20}  {item.title}")
         return
-    _run_job("fetch", {"budget": budget, "max_attachments": max_attachments}, json_output)
+    _run_job(
+        "fetch",
+        {"budget": budget, "max_attachments": max_attachments, "max_manifests": max_manifests},
+        json_output,
+    )
 
 
 @app.command()

@@ -218,8 +218,9 @@ def test_summaries_match_the_cli() -> None:
         "run 6: 3 registrants read, 2 in slice, 0 malformed, 1 contractors new, 2 registrations,"
         " 11 facts, 0 requests"
     )
-    assert summarize(JOBS["fetch"], FetchResult(7, 2, 1, 3, 0, 1, 2, True)) == (
-        "run 7: 2 descriptions fetched, 1 failed; 3 attachments fetched, 0 failed, 1 skipped;"
+    assert summarize(JOBS["fetch"], FetchResult(7, 2, 1, 9, 4, 12, 3, 0, 1, 2, True)) == (
+        "run 7: 2 descriptions fetched, 1 failed; 9 manifests read, 4 failed,"
+        " 12 attachments found; 3 attachments fetched, 0 failed, 1 skipped;"
         " 2 requests (daily budget exhausted; attachments still fetched)"
     )
     assert (

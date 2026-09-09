@@ -104,6 +104,15 @@ def run(
         raise JobFailed(f"{_prefix(job)}{exc}") from exc
 
 
+MANIFESTS_PER_RUN = 200
+"""Notices asked about per fetch run, unless the caller says otherwise.
+
+Bounded rather than unlimited, unlike the other two limits. Steady state is a few dozen checks
+a day, but a first run on a backfilled store faces every notice in it at once, against an
+endpoint whose rate limits are not published (docs/notes/sam-manifest-probe.md). Nothing is
+lost by stopping early: unchecked notices stay due and the next run continues.
+"""
+
 PREFIXES = {
     "ingest-notices": "ingestion stopped: ",
     "ingest-bulk": "bulk ingest stopped: ",
@@ -275,7 +284,9 @@ def _run_entities(conn, settings, values, report, cancelled) -> object:
 
 def _run_fetch(conn, settings, values, report, cancelled) -> object:
     return queue.fetch_pending(
-        conn, settings, budget=values.get("budget"), max_attachments=values.get("max_attachments"),
+        conn, settings, budget=values.get("budget"),
+        max_attachments=values.get("max_attachments"),
+        max_manifests=values.get("max_manifests"),
         report=report, cancelled=cancelled,
     )  # fmt: skip
 
@@ -419,7 +430,8 @@ JOBS: dict[str, Job] = {
         Job(
             "fetch", "Fetch descriptions and attachments", frozenset({"sam_key"}),
             (Param("budget", "Description budget", "int"),
-             Param("max_attachments", "Attachment limit", "int")),
+             Param("max_attachments", "Attachment limit", "int"),
+             Param("max_manifests", "Discovery limit", "int", default=MANIFESTS_PER_RUN)),
             True, _run_fetch,
         ),
         Job("extract", "Extract attachment text", frozenset(),
@@ -492,7 +504,9 @@ def summarize(job: Job, result: object) -> str:
             )
             return (
                 f"run {r.run_id}: {r.descriptions_fetched} descriptions fetched,"
-                f" {r.descriptions_failed} failed; {r.attachments_fetched} attachments"
+                f" {r.descriptions_failed} failed; {r.manifests_checked} manifests read,"
+                f" {r.manifests_failed} failed, {r.attachments_found} attachments found;"
+                f" {r.attachments_fetched} attachments"
                 f" fetched, {r.attachments_failed} failed, {r.attachments_skipped} skipped;"
                 f" {r.requests_spent} requests{note}"
             )

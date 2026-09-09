@@ -53,6 +53,15 @@ class NoticeUnknown(SamError):
     """SAM.gov has no notice with this id. Terminal for that notice, never retried."""
 
 
+class ManifestUnavailable(SamError):
+    """The manifest endpoint answered with a status we cannot use. ``status_code`` lets the
+    queue tell a per-notice problem from one that should stop the whole stage."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class ManifestShapeError(SamError):
     """The manifest response was not the shape this release pins to. The endpoint has no
     published contract, so this is the expected way it breaks; the queue stops the manifest
@@ -66,6 +75,12 @@ class ManifestItem:
 
     resource_id: str
     name: str
+    kind: str
+    """``file`` or ``link``. A link entry is a URL on another procurement portal (PIEE and
+    FedConnect are common), not a document SAM.gov holds: it has no name, no type and size 0.
+    Recording it is worth doing -- it says where the solicitation actually lives -- but it is
+    not something to download."""
+    uri: str | None
     mime_type: str | None
     size: int | None
     access_status: str | None
@@ -76,6 +91,12 @@ class ManifestItem:
     @property
     def public(self) -> bool:
         return self.access_status == "public" and not self.export_controlled
+
+    @property
+    def downloadable(self) -> bool:
+        """Whether fetching this would produce a document. See #5: an off-site link fetched
+        blind yields a portal's HTML, or a failure indistinguishable from a broken network."""
+        return self.kind == "file" and self.public and not self.deleted
 
 
 @dataclass(frozen=True)
@@ -266,7 +287,7 @@ class SamClient:
         if response.status_code == 400:
             raise NoticeUnknown(f"{url}: SAM.gov has no notice {notice_id}")
         if not response.is_success:
-            raise SamError(f"{url}: HTTP {response.status_code}")
+            raise ManifestUnavailable(f"{url}: HTTP {response.status_code}", response.status_code)
         try:
             body = response.json()
         except ValueError as exc:
@@ -335,9 +356,17 @@ def _manifest_item(raw: object, url: str) -> ManifestItem:
         raise ManifestShapeError(f"{url}: attachment entry has no resourceId")
     size = raw.get("size")
     name = raw.get("name")
+    kind = raw.get("type") or "file"
+    uri = raw.get("uri")
+    description = raw.get("description")
+    if not (isinstance(name, str) and name) and kind == "link":
+        # A link entry carries no name; its description is what a person would read.
+        name = description if isinstance(description, str) and description else None
     return ManifestItem(
         resource_id=resource_id,
         name=name if isinstance(name, str) and name else "attachment",
+        kind=kind if isinstance(kind, str) else "file",
+        uri=uri if isinstance(uri, str) and uri else None,
         mime_type=raw.get("mimeType") or None,
         size=size if isinstance(size, int) else None,
         access_status=raw.get("accessStatus") or None,
