@@ -6,7 +6,6 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
 dependencies = [
-    "anthropic>=1,<2",
     "click>=8.1",
     "httpx>=0.28",
     "mcp>=2.1",
@@ -22,9 +21,14 @@ dependencies = [
 
 [project.optional-dependencies]
 serve = ["textual-serve>=1.1"]
+# Only the `anthropic` provider needs a vendor SDK; every OpenAI-compatible
+# endpoint is reached over plain httpx (README: "Model-agnostic AI").
+anthropic = ["anthropic>=1,<2"]
 
 [dependency-groups]
 dev = [
+    # The anthropic backend is an optional extra for users; the tests always exercise it.
+    "anthropic>=1,<2",
     "pytest>=8",
     "pytest-asyncio>=1.4",
     "pytest-httpx>=0.36",

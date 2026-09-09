@@ -109,8 +109,8 @@ def backend_for(slot: Slot) -> ChatBackend:
             from mentor.ai.anthropic_backend import AnthropicBackend
         except ImportError as exc:
             raise AIError(
-                "the anthropic provider needs the SDK: add it with `uv add anthropic`"
-                " (or `pip install anthropic`)"
+                "the anthropic provider needs the SDK: install the extra with"
+                " `uv sync --extra anthropic` (or `pip install 'mentor[anthropic]'`)"
             ) from exc
         return AnthropicBackend(slot)
     raise AIError(f"unknown provider {slot.provider!r}")

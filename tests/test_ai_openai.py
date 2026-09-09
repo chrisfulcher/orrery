@@ -137,7 +137,7 @@ def test_backend_for_anthropic_without_the_sdk_explains(monkeypatch: pytest.Monk
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", missing)
-    with pytest.raises(AIError, match="uv add anthropic"):
+    with pytest.raises(AIError, match=r"uv sync --extra anthropic"):
         ai.backend_for(slot(provider="anthropic"))
     with pytest.raises(AIError, match="unknown provider"):
         ai.backend_for(slot(provider="nope"))

@@ -836,7 +836,6 @@ name = "mentor"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
     { name = "click" },
     { name = "httpx" },
     { name = "mcp" },
@@ -851,12 +850,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+anthropic = [
+    { name = "anthropic" },
+]
 serve = [
     { name = "textual-serve" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "anthropic" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-httpx" },
@@ -865,7 +868,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=1,<2" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=1,<2" },
     { name = "click", specifier = ">=8.1" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "mcp", specifier = ">=2.1" },
@@ -879,10 +882,11 @@ requires-dist = [
     { name = "textual-serve", marker = "extra == 'serve'", specifier = ">=1.1" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["serve"]
+provides-extras = ["serve", "anthropic"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "anthropic", specifier = ">=1,<2" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=1.4" },
     { name = "pytest-httpx", specifier = ">=0.36" },
