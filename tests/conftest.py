@@ -153,6 +153,26 @@ def make_docx() -> Callable[..., bytes]:
     return _make_docx
 
 
+def _make_xlsx(sheets: dict[str, list[list[object]]]) -> bytes:
+    """A workbook of {sheet name: rows of cell values}, in the order given."""
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for title, rows in sheets.items():
+        sheet = workbook.create_sheet(title)
+        for row in rows:
+            sheet.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def make_xlsx() -> Callable[..., bytes]:
+    return _make_xlsx
+
+
 MOST_LINKS_NOTICE = max(
     SEARCH_FIXTURE["opportunitiesData"], key=lambda r: len(r["resourceLinks"] or [])
 )["noticeId"]

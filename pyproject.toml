@@ -10,6 +10,7 @@ dependencies = [
     "click>=8.1",
     "httpx>=0.28",
     "mcp>=2.1",
+    "openpyxl>=3.1",
     "pydantic>=2.11",
     "pydantic-settings>=2.7",
     "pypdf>=6",
