@@ -24,6 +24,36 @@ git commit -s
 
 The sign-off adds a `Signed-off-by:` line with your name and email and certifies that you agree to the [Developer Certificate of Origin 1.1](DCO): that you wrote the contribution or otherwise have the right to submit it under the project's license. There is no contributor license agreement, and copyright stays with you. Commits without a sign-off are not merged.
 
+## Development
+
+Python 3.13 and [uv](https://docs.astral.sh/uv/); `mise install` provides both from
+`.mise.toml`. Then:
+
+```
+uv sync                     # install, including dev dependencies
+uv run orrery db migrate    # create the store
+uv run orrery --help
+```
+
+Four checks gate every commit, and CI runs the same four:
+
+```
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv lock --check             # the lockfile still answers pyproject.toml
+```
+
+A test belongs with the change it covers, and a test for a bug should be confirmed to fail
+without the fix — `git stash push -- src/` then run it. A fixture that is more forgiving
+than the real source is how bugs reach a release: if a test passes, it is worth asking what
+the fixture is not sending.
+
+Nothing needs credentials. The daily bulk extract and attachment downloads are public, so
+`orrery ingest bulk` then `orrery fetch` builds a real store to develop against without a
+SAM.gov key. Point `ORRERY_DATA_DIR` at a scratch directory to keep it away from a store you
+care about.
+
 ## How work happens
 
 - **Plan before code.** Non-trivial changes start as an issue or a short design note that names the design doc section they serve. Domain review happens at the plan level, where it is cheap.

@@ -38,6 +38,12 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+      # `uv sync --frozen` above installs from the lockfile without checking it
+      # still answers pyproject.toml, so a dependency added without relocking
+      # would pass every step above and only fail for whoever relocked next.
+      - name: Lockfile matches pyproject.toml
+        run: uv lock --check
+
   dco:
     name: DCO sign-off
     runs-on: ubuntu-latest
