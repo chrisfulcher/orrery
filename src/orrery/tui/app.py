@@ -826,7 +826,7 @@ class PursuitScreen(Screen):
         self.query_one("#tasks", WrapTable).set_rows(
             [
                 (
-                    ("x" if task.done_at else " ", task.due or "-", task.stage, task.title),
+                    ("x" if task.done_at else " ", task.due or "-", task.stage or "-", task.title),
                     str(task.task_id),
                 )
                 for task in detail.tasks

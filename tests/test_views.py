@@ -3,6 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
+from orrery import workspace
 from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
@@ -49,6 +50,10 @@ V1_COLUMNS = {
     "v_pursuit_tasks": {
         "user_id", "task_id", "pursuit_id", "pursuit_title", "pursuit_stage", "outcome",
         "closed_at", "stage", "title", "origin", "due", "done_at", "created_at",
+    },
+    "v_tasks": {
+        "user_id", "task_id", "subject_type", "subject_id", "subject", "pursuit_id", "stage",
+        "title", "origin", "precedence", "due", "done_at", "created_at",
     },
     "v_pipeline": {
         "user_id", "tracked_id", "notice_id", "stage", "stage_order", "pwin", "notes",
@@ -172,3 +177,46 @@ def test_v_contractors_sums_awards_and_reads_latest_facts(
         ("CDW GOVERNMENT LLC", 1, 48000.0, "2024-01-15", None, None),
         ("LEIDOS, INC.", 1, 125000.5, "2025-08-01", "Expired", None),
     ]
+
+
+def test_a_task_on_another_subject_never_counts_as_a_pursuit_task(
+    conn: sqlite3.Connection,
+) -> None:
+    """subject_id is one shared TEXT column, so an entity whose id equals a pursuit's would be
+    counted by any query that forgets ``subject_type = 'pursuit'`` -- silently, and without
+    error. This is the regression test for every such site."""
+    p = workspace.new_pursuit(conn, "Help desk recompete")
+    before = conn.execute(
+        "SELECT open_tasks, next_due FROM v_pursuits WHERE pursuit_id = ?", (p.pursuit_id,)
+    ).fetchone()
+    (tasks_before,) = conn.execute("SELECT count(*) FROM v_pursuit_tasks").fetchone()
+    assert workspace.pursuit(conn, p.pursuit_id).gate_ready is False
+
+    for subject_type in ("entity", "person"):
+        conn.execute(
+            "INSERT INTO tasks (user_id, subject_type, subject_id, title, origin, due, created_at)"
+            " VALUES (1, ?, ?, 'not a pursuit task', 'user', '2026-01-01', '2026-09-09T00:00:00Z')",
+            (subject_type, str(p.pursuit_id)),
+        )
+    conn.execute(
+        "INSERT INTO tasks (user_id, title, origin, due, created_at)"
+        " VALUES (1, 'a standalone to-do', 'user', '2026-01-01', '2026-09-09T00:00:00Z')"
+    )
+
+    after = conn.execute(
+        "SELECT open_tasks, next_due FROM v_pursuits WHERE pursuit_id = ?", (p.pursuit_id,)
+    ).fetchone()
+    assert after == before
+    assert conn.execute("SELECT count(*) FROM v_pursuit_tasks").fetchone() == (tasks_before,)
+    assert len(workspace.pursuit(conn, p.pursuit_id).tasks) == tasks_before
+    assert workspace.pursuit(conn, p.pursuit_id).gate_ready is False
+    assert conn.execute("SELECT count(*) FROM v_tasks").fetchone() == (tasks_before + 3,)
+
+
+def test_a_half_written_subject_is_refused(conn: sqlite3.Connection) -> None:
+    for columns, values in (
+        ("subject_type, title, origin, created_at", "'entity', 't', 'user', 'x'"),
+        ("subject_id, title, origin, created_at", "'4', 't', 'user', 'x'"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(f"INSERT INTO tasks (user_id, {columns}) VALUES (1, {values})")

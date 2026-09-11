@@ -322,7 +322,7 @@ uv run orrery top --serve          # then open http://localhost:8000
 
 Each browser tab is its own `orrery top` process in the server's working directory: two tabs can each run a job (the store serializes them and the quota is per request) and both write the same `.env`, which the app re-reads before every write.
 
-For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pursuits`, `v_pursuit_tasks`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/orrery.sqlite`.
+For a point-and-click table browser over the whole store, the read-only views (`v_notices`, `v_entities`, `v_contracts`, `v_contractors`, `v_pursuits`, `v_pursuit_tasks`, `v_tasks`, `v_pipeline`, `v_quota_daily`) are the stable interface: `uvx datasette data/orrery.sqlite`.
 
 ## Using orrery from an AI agent
 

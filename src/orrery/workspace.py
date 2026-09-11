@@ -35,6 +35,18 @@ class NotFound(LookupError):
 
 DOCUMENT_KINDS = ("profile", "workflow")
 
+SUBJECT_KINDS = ("pursuit", "entity", "person")
+"""What a task can be about. A task with no subject at all is a standalone to-do."""
+
+PRECEDENCE = ("flash", "immediate", "priority", "routine")
+"""Most urgent first. A task's precedence may also be unset, which is not a fifth level."""
+
+_TASK_COLUMNS = (
+    "task_id, subject_type, subject_id,"
+    " CASE WHEN subject_type = 'pursuit' THEN CAST(subject_id AS INTEGER) END,"
+    " stage, title, origin, precedence, due, done_at, created_at"
+)
+
 
 @dataclass(frozen=True)
 class Document:
@@ -310,10 +322,18 @@ class Pursuit:
 @dataclass(frozen=True)
 class Task:
     task_id: int
-    pursuit_id: int
-    stage: str
+    subject_type: str | None
+    """'pursuit', 'entity', 'person', or None for a standalone to-do."""
+    subject_id: str | None
+    pursuit_id: int | None
+    """The subject as an integer when it is a pursuit, else None. Kept as a field rather than a
+    property because the MCP tools serialise this dataclass and their fields are add-only."""
+    stage: str | None
+    """A key of the workflow document; None for a task outside a pursuit's workflow."""
     title: str
     origin: str
+    precedence: str | None
+    """One of PRECEDENCE, or None meaning the user has not said. Not a synonym for 'routine'."""
     due: str | None
     done_at: str | None
     created_at: str
@@ -437,16 +457,16 @@ def _seed_tasks(
     except KeyError:
         return 0
     (seeded,) = conn.execute(
-        "SELECT count(*) FROM pursuit_tasks WHERE pursuit_id = ? AND stage = ?"
-        " AND origin = 'template'",
-        (pursuit_id, stage),
+        "SELECT count(*) FROM tasks WHERE subject_type = 'pursuit' AND subject_id = ?"
+        " AND stage = ? AND origin = 'template'",
+        (str(pursuit_id), stage),
     ).fetchone()
     if seeded or not titles:
         return 0
     conn.executemany(
-        "INSERT INTO pursuit_tasks (pursuit_id, user_id, stage, title, origin, created_at)"
-        " VALUES (?, ?, ?, ?, 'template', ?)",
-        [(pursuit_id, user_id, stage, title, now) for title in titles],
+        "INSERT INTO tasks (subject_type, subject_id, user_id, stage, title, origin, created_at)"
+        " VALUES ('pursuit', ?, ?, ?, ?, 'template', ?)",
+        [(str(pursuit_id), user_id, stage, title, now) for title in titles],
     )
     return len(titles)
 
@@ -545,10 +565,10 @@ def pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID
     tasks = tuple(
         Task(*item)
         for item in conn.execute(
-            "SELECT task_id, pursuit_id, stage, title, origin, due, done_at, created_at"
-            " FROM pursuit_tasks WHERE pursuit_id = ?"
+            f"SELECT {_TASK_COLUMNS} FROM tasks"
+            " WHERE subject_type = 'pursuit' AND subject_id = ?"
             " ORDER BY done_at IS NOT NULL, due IS NULL, due, task_id",
-            (pursuit_id,),
+            (str(pursuit_id),),
         ).fetchall()
     )
     notices = tuple(
@@ -822,10 +842,10 @@ def add_task(
     now = db.utcnow()
     with _transaction(conn):
         item = conn.execute(
-            "INSERT INTO pursuit_tasks (pursuit_id, user_id, stage, title, origin, due,"
-            " created_at) VALUES (?, ?, ?, ?, 'user', ?, ?)"
-            " RETURNING task_id, pursuit_id, stage, title, origin, due, done_at, created_at",
-            (pursuit_id, user_id, stage or row.stage, title.strip(), due, now),
+            "INSERT INTO tasks (subject_type, subject_id, user_id, stage, title, origin, due,"
+            " created_at) VALUES ('pursuit', ?, ?, ?, ?, 'user', ?, ?)"
+            f" RETURNING {_TASK_COLUMNS}",
+            (str(pursuit_id), user_id, stage or row.stage, title.strip(), due, now),
         ).fetchone()
         _event(conn, pursuit_id, user_id, now, "task", None, title.strip(), "added")
         conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, pursuit_id))
@@ -834,21 +854,23 @@ def add_task(
 
 def complete_task(conn: sqlite3.Connection, task_id: int, *, user_id: int = USER_ID) -> Task:
     row = conn.execute(
-        "SELECT pursuit_id, title, done_at FROM pursuit_tasks WHERE task_id = ? AND user_id = ?",
+        "SELECT subject_type, CAST(subject_id AS INTEGER), title, done_at FROM tasks"
+        " WHERE task_id = ? AND user_id = ?",
         (task_id, user_id),
     ).fetchone()
     if row is None:
         raise NotFound(f"no task {task_id}")
     now = db.utcnow()
-    if row[2] is None:
+    if row[3] is None:
         with _transaction(conn):
-            conn.execute("UPDATE pursuit_tasks SET done_at = ? WHERE task_id = ?", (now, task_id))
-            _event(conn, row[0], user_id, now, "task", None, row[1], "done")
-            conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, row[0]))
+            conn.execute("UPDATE tasks SET done_at = ? WHERE task_id = ?", (now, task_id))
+            if row[0] == "pursuit":
+                _event(conn, row[1], user_id, now, "task", None, row[2], "done")
+                conn.execute(
+                    "UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, row[1])
+                )
     item = conn.execute(
-        "SELECT task_id, pursuit_id, stage, title, origin, due, done_at, created_at"
-        " FROM pursuit_tasks WHERE task_id = ?",
-        (task_id,),
+        f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ?", (task_id,)
     ).fetchone()
     return Task(*item)
 
@@ -954,8 +976,9 @@ def dashboard(
 
     work: list[WorkItem] = []
     for item in conn.execute(
-        "SELECT t.task_id, t.pursuit_id, t.title, t.due FROM pursuit_tasks AS t"
-        " JOIN pursuits AS p USING (pursuit_id) WHERE t.user_id = ? AND t.done_at IS NULL"
+        "SELECT t.task_id, p.pursuit_id, t.title, t.due FROM tasks AS t"
+        " JOIN pursuits AS p ON p.pursuit_id = CAST(t.subject_id AS INTEGER)"
+        " WHERE t.subject_type = 'pursuit' AND t.user_id = ? AND t.done_at IS NULL"
         " AND t.due IS NOT NULL AND t.due <= ? AND p.closed_at IS NULL ORDER BY t.due, t.task_id",
         (user_id, soon),
     ).fetchall():
@@ -993,8 +1016,9 @@ def dashboard(
     open_by_stage = {
         (pid, stage): n
         for pid, stage, n in conn.execute(
-            "SELECT pursuit_id, stage, count(*) FROM pursuit_tasks WHERE user_id = ?"
-            " AND done_at IS NULL GROUP BY pursuit_id, stage",
+            "SELECT CAST(subject_id AS INTEGER), stage, count(*) FROM tasks"
+            " WHERE subject_type = 'pursuit' AND user_id = ? AND done_at IS NULL"
+            " GROUP BY subject_id, stage",
             (user_id,),
         ).fetchall()
     }

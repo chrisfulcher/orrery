@@ -576,7 +576,7 @@ def _run_pursuit(
     elif isinstance(result, list):
         typer.echo(f"{done}: {len(result)}")
         for task in result:
-            typer.echo(f"  {task.task_id}  {task.stage:<10}  {task.title}")
+            typer.echo(f"  {task.task_id}  {task.stage or '-':<10}  {task.title}")
     elif isinstance(result, workspace.Pursuit):
         typer.echo(f"{done}: " + _pursuit_line(result) + f"  [{result.stage}]")
     else:
@@ -658,7 +658,8 @@ def pursuit_show(pursuit_id: PursuitId, json_output: JsonFlag = False) -> None:
     for task in detail.tasks:
         mark = "x" if task.done_at else " "
         typer.echo(
-            f"  [{mark}] {task.task_id:>4}  {task.due or '-':<10}  {task.stage:<10}  {task.title}"
+            f"  [{mark}] {task.task_id:>4}  {task.due or '-':<10}"
+            f"  {task.stage or '-':<10}  {task.title}"
         )
     if not detail.tasks:
         typer.echo("  (none)")
