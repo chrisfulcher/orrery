@@ -401,12 +401,18 @@ class WorkItem:
     kind: str
     """'task' (the user's) or 'response' (a linked notice's deadline)."""
     what: str
-    pursuit_id: int
-    pursuit_title: str
-    stage: str
+    pursuit_id: int | None
+    """The pursuit, or None for work that is not about one."""
+    pursuit_title: str | None
+    stage: str | None
     overdue: bool
     task_id: int | None = None
     notice_id: str | None = None
+    subject_type: str | None = None
+    subject: str | None = None
+    """The subject's display label: the pursuit's title, the office or contractor's name, the
+    person's name, or None for a standalone to-do."""
+    precedence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1080,17 +1086,28 @@ def dashboard(
     by_id = {p.pursuit_id: p for p in open_rows}
 
     work: list[WorkItem] = []
-    for item in conn.execute(
-        "SELECT t.task_id, p.pursuit_id, t.title, t.due FROM tasks AS t"
-        " JOIN pursuits AS p ON p.pursuit_id = CAST(t.subject_id AS INTEGER)"
-        " WHERE t.subject_type = 'pursuit' AND t.user_id = ? AND t.done_at IS NULL"
-        " AND t.due IS NOT NULL AND t.due <= ? AND p.closed_at IS NULL ORDER BY t.due, t.task_id",
+    for task_id, pursuit_id, kind, subject, what, due, precedence in conn.execute(
+        "SELECT t.task_id, t.pursuit_id, t.subject_type, t.subject, t.title, t.due, t.precedence"
+        " FROM v_tasks AS t LEFT JOIN pursuits AS p ON p.pursuit_id = t.pursuit_id"
+        " WHERE t.user_id = ? AND t.done_at IS NULL AND t.due IS NOT NULL AND t.due <= ?"
+        " AND (t.subject_type IS NOT 'pursuit' OR p.closed_at IS NULL)"
+        " ORDER BY t.due, t.task_id",
         (user_id, soon),
     ).fetchall():
-        p = by_id[item[1]]
+        p = by_id.get(pursuit_id)  # None for a task that is not about an open pursuit
         work.append(
             WorkItem(
-                item[3], "task", item[2], p.pursuit_id, p.title, p.stage, item[3] < today, item[0]
+                due,
+                "task",
+                what,
+                p.pursuit_id if p else None,
+                p.title if p else None,
+                p.stage if p else None,
+                due < today,
+                task_id,
+                subject_type=kind,
+                subject=subject,
+                precedence=precedence,
             )
         )
     for item in conn.execute(
@@ -1113,9 +1130,13 @@ def dashboard(
                     p.stage,
                     False,
                     notice_id=item[1],
+                    subject_type="pursuit",
+                    subject=p.title,
                 )  # fmt: skip
             )
-    work.sort(key=lambda w: (w.due, w.kind != "response", w.what))
+    # Precedence is a tiebreaker inside a due date, never above it: a ROUTINE item due
+    # today beats a FLASH item due Friday.
+    work.sort(key=lambda w: (w.due, precedence_rank(w.precedence), w.kind != "response", w.what))
 
     attention: list[Attention] = []
     open_by_stage = {

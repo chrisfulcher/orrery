@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from conftest import SEARCH_FIXTURE
+from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Static
 
 from orrery import db, dotenv, workspace
@@ -393,3 +394,23 @@ async def test_the_attention_panel_names_stages_with_work_waiting(app: OrreryTop
 
 def _attention_text(table: DataTable) -> str:
     return " ".join(str(cell) for key in table.rows for cell in table.get_row(key))
+
+
+async def test_a_standalone_task_shows_in_the_work_panel_and_opens_nothing(
+    app: OrreryTop,
+) -> None:
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        workspace.add_task(app.conn, "Renew the SAM registration", due="2026-09-06")
+        app.screen.refresh_panels()
+        await pilot.pause()
+        work = app.screen.query_one("#work", DataTable)
+        assert work.row_count == 3
+        row = next(key for key in work.rows if work.get_row(key)[2] == "Renew the SAM registration")
+        assert work.get_row(row)[1] == "-"
+
+        work.focus()
+        work.cursor_coordinate = Coordinate(list(work.rows).index(row), 0)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)  # a to-do names no pursuit to open

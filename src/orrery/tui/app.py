@@ -63,7 +63,7 @@ def _notice_row(hit: query.SearchHit) -> Row:
     return (_day(hit.response_deadline), hit.agency or "-", hit.title), hit.notice_id
 
 
-WORK_COLUMNS: list[tuple[str, int | None]] = [("due", 10), ("pursuit", 30), ("task", None)]
+WORK_COLUMNS: list[tuple[str, int | None]] = [("due", 10), ("subject", 30), ("task", None)]
 PURSUIT_COLUMNS: list[tuple[str, int | None]] = [
     ("stage", 11), ("pwin", 4), ("next due", 10), ("office", 24), ("title", None)
 ]  # fmt: skip
@@ -79,7 +79,10 @@ EVENT_COLUMNS: list[tuple[str, int | None]] = [("when", 20), ("field", 8), ("cha
 
 def _work_row(item: workspace.WorkItem, index: int) -> Row:
     due = ("! " if item.overdue else "") + item.due
-    return (due, item.pursuit_title, item.what), _pursuit_key(item.pursuit_id, index)
+    # Only a row about a pursuit gets a key that names one; the rest are keyed like the store
+    # gap rows so _pursuit_id() reads None and selecting them opens nothing.
+    key = _pursuit_key(item.pursuit_id, index) if item.pursuit_id else f"task:{index}"
+    return (due, item.subject or "-", item.what), key
 
 
 def _pursuit_key(pursuit_id: int, index: int) -> str:

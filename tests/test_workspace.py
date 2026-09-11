@@ -387,14 +387,29 @@ def test_dashboard_classifies_the_weeks_work(
     days = workspace._days_between("2026-09-01", deadline) + 1  # the window reaches it
     won = workspace.new_pursuit(conn, "Won")
     workspace.set_outcome(conn, won.pursuit_id, "won", "x")  # post-award is not gated
+    entity_id = an_entity(conn)
+    workspace.add_task(
+        conn, "Ask about the vehicle", subject_type="entity", subject_id=entity_id, due="2026-09-03"
+    )
+    workspace.add_task(conn, "Renew the registration", due="2026-09-02", precedence="flash")
+    closed = workspace.new_pursuit(conn, "Closed")
+    workspace.add_task(
+        conn, "Never shown", subject_type="pursuit", subject_id=closed.pursuit_id, due="2026-09-02"
+    )
+    workspace.close_pursuit(conn, closed.pursuit_id)
 
     board = workspace.dashboard(conn, days=days, stall_days=14, horizon_days=60)
 
-    assert [(w.due, w.kind, w.what, w.overdue) for w in board.work] == [
-        ("2026-08-30", "task", "Late", True),
-        ("2026-09-03", "task", "Call", False),
-        (deadline, "response", f"response due: {dated['title']}", False),
+    assert [(w.due, w.kind, w.what, w.overdue, w.subject) for w in board.work] == [
+        ("2026-08-30", "task", "Late", True, "Due soon"),
+        ("2026-09-02", "task", "Renew the registration", False, None),
+        ("2026-09-03", "task", "Ask about the vehicle", False, "NETWORK CONTRACT OFFICE 16"),
+        ("2026-09-03", "task", "Call", False, "Due soon"),
+        (deadline, "response", f"response due: {dated['title']}", False, "With a notice"),
     ]
+    standalone = board.work[1]
+    assert (standalone.pursuit_id, standalone.pursuit_title, standalone.stage) == (None, None, None)
+    assert standalone.precedence == "flash"
     assert [(a.reason, a.pursuit_title) for a in board.attention] == [
         ("gate ready", "Ready"),
         ("hold due", "Held"),
