@@ -128,6 +128,19 @@ class ManifestItem:
     raw: dict
 
     @property
+    def offsite_url(self) -> str | None:
+        """The entry's ``uri`` when it is somewhere that can actually be fetched.
+
+        For a link entry this is the portal the solicitation really lives on. For a file
+        entry SAM.gov puts its storage object key here -- a bare filename such as
+        ``ce0a05260d746d3426a35208d5fddcf3_.docx``, not a location -- so taking ``uri`` as a
+        URL writes a row that can never be downloaded. Only an absolute http(s) URL is one.
+        """
+        if self.uri and self.uri.startswith(("http://", "https://")):
+            return self.uri
+        return None
+
+    @property
     def public(self) -> bool:
         return self.access_status == "public" and not self.export_controlled
 

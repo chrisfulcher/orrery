@@ -185,6 +185,23 @@ def test_attachment_failure_marks_failed_and_continues(
     assert result.failures == {"gone": 1}
 
 
+def test_a_discovered_file_gets_a_download_url_not_its_storage_key(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """A file entry's uri is SAM.gov's storage object key, not a location. Preferring it
+    wrote rows no download could ever use, and the failure looked like a network problem."""
+    seed()
+    conn.execute("DELETE FROM attachments")
+    httpx_mock.add_response(url=MANIFEST, json=manifest(entry("r1")), is_reusable=True)
+    httpx_mock.add_response(url=FILES, content=PDF, headers=PDF_HEADERS, is_reusable=True)
+
+    result = fetch_pending(conn, settings, budget=0, max_attachments=1, max_manifests=1)
+
+    (url,) = conn.execute("SELECT url FROM attachments").fetchone()
+    assert url.startswith("https://") and url.endswith("/r1/download")
+    assert result.attachments_fetched == 1 and result.failures == {}
+
+
 def test_a_row_queued_with_no_description_url_is_recorded_not_fatal(
     httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
 ) -> None:
@@ -422,6 +439,9 @@ def entry(resource_id: str, **over: object) -> dict:
     base = {
         "resourceId": resource_id,
         "name": f"{resource_id}.pdf",
+        # SAM.gov puts its storage object key in uri, not a URL. The fixture said nothing
+        # here for a while, which is why a release shipped preferring it as a location.
+        "uri": f"{resource_id}_.pdf",
         "mimeType": ".pdf",
         "size": 1024,
         "accessStatus": "public",

@@ -373,8 +373,10 @@ def _fetch_manifests(
                 {
                     "notice_id": notice_id,
                     # A link entry lives on another portal; record where, not a download URL
-                    # that would fetch that portal's HTML.
-                    "url": item.uri or client.attachment_url(item.resource_id),
+                    # that would fetch that portal's HTML. A file entry's uri is SAM.gov's
+                    # storage key rather than a location, so the download URL is built from
+                    # the resource id instead.
+                    "url": item.offsite_url or client.attachment_url(item.resource_id),
                     "filename": item.name,
                     "status": "pending" if fetchable else "skipped",
                     "size": item.size,
