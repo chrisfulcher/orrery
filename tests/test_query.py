@@ -12,6 +12,7 @@ from orrery.embed.pipeline import embed_pending
 from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
+Fetched = Callable[..., int]
 SeedAwards = Callable[[list[dict] | None], AwardsResult]
 
 
@@ -410,3 +411,49 @@ def test_recompetes_window_order_and_filters(
     assert [r.piid for r in query.recompetes(conn, office_code="75R602", limit=1)] == [
         "75R60222F00009"
     ]
+
+
+def test_gaps_name_the_stage_and_the_command_that_clears_it(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    seed()
+
+    # Nothing is fetched yet, so no stage has anything waiting and the panel stays quiet.
+    assert query.gaps(conn, settings) == []
+
+    conn.execute("UPDATE notices SET description_status = 'fetched', description = 'text'")
+    stages = {gap.stage: gap for gap in query.gaps(conn, settings)}
+    assert set(stages) == {"notices to summarize", "notices to embed"}
+    assert stages["notices to summarize"].pending == 5
+    assert stages["notices to summarize"].command == "orrery summarize"
+    assert stages["notices to embed"].command == "orrery embed"
+
+
+def test_a_summarized_and_embedded_store_reports_no_gap(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """The count is the stage's own PENDING query, so satisfying the stage clears the row."""
+    from orrery import ai, summaries
+
+    seed()
+    conn.execute("UPDATE notices SET description_status = 'fetched', description = 'text'")
+    model = ai.resolve_slot(settings, "fast").model
+    for (notice_id,) in conn.execute("SELECT notice_id FROM notices").fetchall():
+        conn.execute(
+            "INSERT INTO notice_summaries (notice_id, slot, provider, model, prompt_version,"
+            " inputs_hash, raw_response, result, created_at)"
+            " VALUES (?, 'fast', 'ollama', ?, ?, 'h', '{}', '{}', '2026-09-09T00:00:00Z')",
+            (notice_id, model, summaries.PROMPT_VERSION),
+        )
+
+    stages = {gap.stage for gap in query.gaps(conn, settings)}
+    assert stages == {"notices to embed"}
+
+
+def test_an_unextracted_attachment_is_a_gap(
+    conn: sqlite3.Connection, settings: Settings, fetched: Fetched
+) -> None:
+    fetched("doc.pdf", b"%PDF-1.4")
+
+    stages = {gap.stage: gap.pending for gap in query.gaps(conn, settings)}
+    assert stages["attachments to extract"] == 1

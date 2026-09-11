@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from orrery import db, naics
+from orrery.config import Settings
 
 
 class InvalidQuery(ValueError):
@@ -375,6 +376,15 @@ class StoreCounts:
     notices: int
     active: int
     entities: int
+
+
+@dataclass(frozen=True)
+class StoreGap:
+    """One stage with work waiting, and the command that clears it."""
+
+    stage: str
+    pending: int
+    command: str
 
 
 CHAIN = """
@@ -776,6 +786,56 @@ def counts(conn: sqlite3.Connection) -> StoreCounts:
     (notices, active) = conn.execute("SELECT count(*), sum(active) FROM notices").fetchone()
     (entities,) = conn.execute("SELECT count(*) FROM entities").fetchone()
     return StoreCounts(notices, active or 0, entities)
+
+
+def gaps(conn: sqlite3.Connection, settings: Settings) -> list[StoreGap]:
+    """Stages with work waiting, in the order the loop runs them; stages with none are left
+    out entirely, so a store that is caught up returns nothing.
+
+    A store that has never been summarized looks exactly like one that is fully up to date:
+    the same dash in every column, and semantic search over a store with no embeddings
+    returns nothing in a way that reads as "no matches" rather than "this has not run". Each
+    count is the stage's own PENDING query wrapped in a count, so this cannot drift from what
+    the stage would actually do.
+    """
+    # Imported here: these modules are the front end's dependencies, not the query layer's.
+    from orrery import ai, summaries
+    from orrery.embed import pipeline
+    from orrery.extract import text
+
+    unlimited = {"limit": -1}
+    fast = ai.resolve_slot(settings, "fast")
+    found = [
+        StoreGap("attachments to extract", _count(conn, text.PENDING, (-1,)), "orrery extract"),
+        StoreGap(
+            "notices to summarize",
+            _count(
+                conn,
+                summaries.PENDING,
+                {"model": fast.model, "version": summaries.PROMPT_VERSION, **unlimited},
+            ),
+            "orrery summarize",
+        ),
+        StoreGap(
+            "notices to embed",
+            _count(conn, pipeline.PENDING_NOTICES, {"model": settings.embed_model, **unlimited}),
+            "orrery embed",
+        ),
+        StoreGap(
+            "documents to embed",
+            _count(
+                conn, pipeline.PENDING_ATTACHMENTS, {"model": settings.embed_model, **unlimited}
+            ),
+            "orrery embed",
+        ),
+    ]
+    return [gap for gap in found if gap.pending]
+
+
+def _count(conn: sqlite3.Connection, pending_sql: str, params: object) -> int:
+    """How many rows a stage's own PENDING query would return, unbounded."""
+    (n,) = conn.execute(f"SELECT count(*) FROM ({pending_sql})", params).fetchone()
+    return n
 
 
 def _chain(conn: sqlite3.Connection, entity_id: int | None) -> tuple[EntityRef, ...]:

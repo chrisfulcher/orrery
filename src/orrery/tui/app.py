@@ -88,7 +88,9 @@ def _pursuit_key(pursuit_id: int, index: int) -> str:
 
 
 def _pursuit_id(key: str | None) -> int | None:
-    return int(key.split(":")[0]) if key else None
+    """The pursuit a row belongs to, or None for a row that is not about one (a store gap)."""
+    head = key.split(":")[0] if key else ""
+    return int(head) if head.isdigit() else None
 
 
 def _pursuit_row(p: workspace.Pursuit) -> Row:
@@ -181,8 +183,16 @@ class DashboardScreen(Screen):
         attention.border_title = (
             f"attention · {stages}" if stages else "attention · no open pursuits"
         )
+        # Stages with work waiting come first and say the command that clears them: a store
+        # that has never been summarized otherwise looks exactly like one that is caught up.
+        # A caught-up store returns no gaps, so this adds nothing to a quiet panel.
+        gap_rows = [
+            (("ingest gap", f"{gap.pending}", f"{gap.stage} · {gap.command}"), f"gap:{i}")
+            for i, gap in enumerate(query.gaps(conn, settings))
+        ]
         attention.set_rows(
-            [
+            gap_rows
+            + [
                 (
                     (item.reason, item.stage, f"{item.pursuit_title} · {item.detail}"),
                     _pursuit_key(item.pursuit_id, i),

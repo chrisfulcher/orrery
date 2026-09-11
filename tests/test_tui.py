@@ -19,6 +19,7 @@ from orrery.tui.app import (
     PursuitScreen,
     PursuitsScreen,
     RadarScreen,
+    _pursuit_id,
 )
 
 Seed = Callable[[dict | None], None]
@@ -358,3 +359,25 @@ async def test_pursuit_screen_shows_the_assessment_and_accepts_tasks(app: Orrery
         await pilot.press("x")
         await pilot.pause()
         assert app.screen.query_one("#tasks", DataTable).row_count == before + 2
+
+
+async def test_the_attention_panel_names_stages_with_work_waiting(app: OrreryTop) -> None:
+    """A store that has never been summarized must not look like one that is caught up."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        attention = app.screen.query_one("#attention", DataTable)
+        assert attention.row_count == 0  # nothing fetched yet, so nothing is waiting
+
+        app.conn.execute("UPDATE notices SET description_status = 'fetched', description = 'text'")
+        app.screen.refresh_panels()
+        await pilot.pause()
+
+        rendered = _attention_text(attention)
+        assert "notices to summarize · orrery summarize" in rendered
+        assert "notices to embed · orrery embed" in rendered
+        # A gap row is not a pursuit; selecting it must not be read as one.
+        assert _pursuit_id("gap:0") is None
+
+
+def _attention_text(table: DataTable) -> str:
+    return " ".join(str(cell) for key in table.rows for cell in table.get_row(key))
