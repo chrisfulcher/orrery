@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from orrery.tui.app import (
     PursuitScreen,
     PursuitsScreen,
     RadarScreen,
+    TaskModal,
     _pursuit_id,
 )
 
@@ -308,8 +310,13 @@ async def test_pursuit_screen_drives_the_lifecycle(app: OrreryTop) -> None:
         await pilot.press("enter")
         await pilot.press(*"2026-09-09")
         await pilot.press("enter")
+        await pilot.press(*"immediate")
+        await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.query_one("#tasks", DataTable).row_count == 10
+        tasks = app.screen.query_one("#tasks", DataTable)
+        assert tasks.row_count == 10
+        added = next(r for r in range(tasks.row_count) if tasks.get_row_at(r)[4] == "Price to win")
+        assert tasks.get_row_at(added)[1:4] == ["2026-09-09", "qualify", "immediate"]
 
         await pilot.press("g")  # go, with a reason
         await pilot.press("enter")
@@ -414,3 +421,37 @@ async def test_a_standalone_task_shows_in_the_work_panel_and_opens_nothing(
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)  # a to-do names no pursuit to open
+
+
+async def test_the_dashboard_creates_a_task_about_anything(app: OrreryTop) -> None:
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+        work = app.screen.query_one("#work", DataTable)
+        assert work.row_count == 2
+
+        await pilot.press("t")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskModal)
+        await pilot.press(*"Renew the registration")
+        await pilot.press("enter")
+        await pilot.press(*"2026-09-06")
+        await pilot.press("enter")
+        await pilot.press(*"flash")
+        await pilot.press("enter")  # no subject: a standalone to-do
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, DashboardScreen)
+        work = app.screen.query_one("#work", DataTable)
+        assert work.row_count == 3
+        row = next(
+            r for r in range(work.row_count) if work.get_row_at(r)[2] == "Renew the registration"
+        )
+        assert work.get_row_at(row)[1] == "-"
+        with closing(db.connect(app.settings.db_path)) as conn:
+            (kind, precedence) = conn.execute(
+                "SELECT subject_type, precedence FROM tasks WHERE title = ?",
+                ("Renew the registration",),
+            ).fetchone()
+        assert (kind, precedence) == (None, "flash")

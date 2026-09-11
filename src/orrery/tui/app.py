@@ -71,6 +71,7 @@ TASK_COLUMNS: list[tuple[str, int | None]] = [
     ("done", 4),
     ("due", 10),
     ("stage", 10),
+    ("pri", 9),
     ("task", None),
 ]
 LINKED_COLUMNS: list[tuple[str, int | None]] = [("due", 10), ("role", 15), ("notice", None)]
@@ -108,7 +109,36 @@ def _pursuit_row(p: workspace.Pursuit) -> Row:
     return cells, str(p.pursuit_id)
 
 
+def _add_task(conn, result: dict) -> workspace.Task:
+    """Turn a TaskModal result into a task. A blank subject is a standalone to-do."""
+    kind, _, ident = (result.get("subject") or "").partition(":")
+    if kind and not ident:
+        raise ValueError(f"a subject is KIND:ID, not {result['subject']!r}")
+    return workspace.add_task(
+        conn,
+        result["title"],
+        subject_type=kind or None,
+        subject_id=ident or None,
+        due=result["due"],
+        precedence=result.get("precedence"),
+    )
+
+
 class DashboardScreen(Screen):
+    BINDINGS = [Binding("t", "task", "Task")]
+
+    def action_task(self) -> None:
+        self.app.push_screen(TaskModal(), self._task_added)
+
+    def _task_added(self, result: dict | None) -> None:
+        if not result:
+            return
+        try:
+            _add_task(self.app.conn, result)
+        except (ValueError, workspace.NotFound) as exc:
+            self.notify(str(exc), severity="error")
+        self.refresh_panels()
+
     def compose(self) -> ComposeResult:
         with Grid(id="panels"):
             with Vertical(id="quota", classes="panel"):
@@ -552,26 +582,58 @@ class DecisionModal(ModalScreen[dict | None]):
 
 
 class TaskModal(ModalScreen[dict | None]):
+    """A new task. Opened from a pursuit it is about that pursuit; opened from the dashboard
+    it is a standalone to-do unless a subject is typed in."""
+
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    FIELDS = ("title", "due", "precedence", "subject")
+
+    def __init__(self, *, subject: str | None = None) -> None:
+        super().__init__()
+        self.subject = subject
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal_box"):
-            yield Label("new task (Enter on the date to add, Escape to cancel)")
+            yield Label("new task (Enter on the last field to add, Escape to cancel)")
             yield Input(placeholder="what", id="title")
             yield Input(placeholder="due YYYY-MM-DD (optional)", id="due")
+            yield Input(
+                placeholder="precedence: flash, immediate, priority, routine (optional)",
+                id="precedence",
+            )
+            if self.subject is None:
+                yield Input(placeholder="about KIND:ID, e.g. entity:340 (optional)", id="subject")
 
     def on_mount(self) -> None:
         self.query_one("#title", Input).focus()
+
+    def _fields(self) -> list[str]:
+        return [f for f in self.FIELDS if f != "subject" or self.subject is None]
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         title = self.query_one("#title", Input).value.strip()
         if not title:
             self.query_one("#title", Input).focus()
             return
-        if event.input.id == "title":
-            self.query_one("#due", Input).focus()
+        fields = self._fields()
+        here = fields.index(event.input.id or "title")
+        if here < len(fields) - 1:
+            self.query_one(f"#{fields[here + 1]}", Input).focus()
             return
-        self.dismiss({"title": title, "due": self.query_one("#due", Input).value.strip() or None})
+        self.dismiss(
+            {
+                "title": title,
+                "due": self._value("due"),
+                "precedence": self._value("precedence"),
+                "subject": self.subject if self.subject else self._value("subject"),
+            }
+        )
+
+    def _value(self, field: str) -> str | None:
+        if field == "subject" and self.subject is not None:
+            return self.subject
+        return self.query_one(f"#{field}", Input).value.strip() or None
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -829,7 +891,13 @@ class PursuitScreen(Screen):
         self.query_one("#tasks", WrapTable).set_rows(
             [
                 (
-                    ("x" if task.done_at else " ", task.due or "-", task.stage or "-", task.title),
+                    (
+                        "x" if task.done_at else " ",
+                        task.due or "-",
+                        task.stage or "-",
+                        task.precedence or "-",
+                        task.title,
+                    ),
                     str(task.task_id),
                 )
                 for task in detail.tasks
@@ -888,19 +956,11 @@ class PursuitScreen(Screen):
             self.app.push_screen(ContextScreen(event.row_key.value))
 
     def action_task(self) -> None:
-        self.app.push_screen(TaskModal(), self._task_added)
+        self.app.push_screen(TaskModal(subject=f"pursuit:{self.pursuit_id}"), self._task_added)
 
     def _task_added(self, result: dict | None) -> None:
         if result:
-            self._apply(
-                lambda: workspace.add_task(
-                    self.app.conn,
-                    result["title"],
-                    subject_type="pursuit",
-                    subject_id=self.pursuit_id,
-                    due=result["due"],
-                )
-            )
+            self._apply(lambda: _add_task(self.app.conn, result))
 
     def action_gate(self) -> None:
         if self.detail and self.detail.gate:
