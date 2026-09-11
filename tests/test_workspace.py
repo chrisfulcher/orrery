@@ -274,7 +274,9 @@ def test_pursuit_lifecycle_records_every_decision(
     assert workspace.pursuit(conn, p.pursuit_id).gate_ready is False  # still held
     gone = workspace.gate(conn, p.pursuit_id, "go", "fits the profile")
     assert (gone.stage, gone.held_until, gone.open_tasks) == ("qualify", None, 4)
-    task = workspace.add_task(conn, p.pursuit_id, "Call the COR", due="2026-09-10")
+    task = workspace.add_task(
+        conn, "Call the COR", subject_type="pursuit", subject_id=p.pursuit_id, due="2026-09-10"
+    )
     assert (task.origin, task.stage, task.due) == ("user", "qualify", "2026-09-10")
 
     closed = workspace.gate(conn, p.pursuit_id, "no-go", "incumbent is entrenched")
@@ -362,9 +364,15 @@ def test_dashboard_classifies_the_weeks_work(
     stale = workspace.new_pursuit(conn, "Stale")
     monkeypatch.setattr(db, "utcnow", lambda: "2026-09-01T00:00:00Z")
     due = workspace.new_pursuit(conn, "Due soon")
-    workspace.add_task(conn, due.pursuit_id, "Call", due="2026-09-03")
-    workspace.add_task(conn, due.pursuit_id, "Late", due="2026-08-30")
-    workspace.add_task(conn, due.pursuit_id, "Far", due="2026-10-30")
+    workspace.add_task(
+        conn, "Call", subject_type="pursuit", subject_id=due.pursuit_id, due="2026-09-03"
+    )
+    workspace.add_task(
+        conn, "Late", subject_type="pursuit", subject_id=due.pursuit_id, due="2026-08-30"
+    )
+    workspace.add_task(
+        conn, "Far", subject_type="pursuit", subject_id=due.pursuit_id, due="2026-10-30"
+    )
     ready = workspace.new_pursuit(conn, "Ready")
     for task in workspace.pursuit(conn, ready.pursuit_id).tasks:
         workspace.complete_task(conn, task.task_id)
@@ -436,3 +444,117 @@ def test_assessments_are_stored_with_provenance_and_never_changed(
             profile_version=None, inputs_hash="x", input_tokens=None, output_tokens=None,
             raw_response="", result={},
         )  # fmt: skip
+
+
+def an_entity(conn: sqlite3.Connection) -> int:
+    (entity_id,) = conn.execute(
+        "INSERT INTO entities (kind, name, source_id, first_seen_at, last_seen_at)"
+        " VALUES ('office', 'NETWORK CONTRACT OFFICE 16', 'sam_opportunities_api', ?, ?)"
+        " RETURNING entity_id",
+        (db.utcnow(), db.utcnow()),
+    ).fetchone()
+    return entity_id
+
+
+def a_person(conn: sqlite3.Connection, entity_id: int) -> int:
+    (person_id,) = conn.execute(
+        "INSERT INTO people (name, role_title, entity_id, source_id, first_seen_at, last_seen_at)"
+        " VALUES ('A Contracting Officer', 'CO', ?, 'sam_opportunities_api', ?, ?)"
+        " RETURNING person_id",
+        (entity_id, db.utcnow(), db.utcnow()),
+    ).fetchone()
+    return person_id
+
+
+def test_a_task_can_be_about_an_entity_a_person_or_nothing(conn: sqlite3.Connection) -> None:
+    entity_id = an_entity(conn)
+    person_id = a_person(conn, entity_id)
+
+    office = workspace.add_task(
+        conn, "Call the CO before the industry day", subject_type="entity", subject_id=entity_id
+    )
+    contact = workspace.add_task(
+        conn, "Ask which vehicle the follow-on uses", subject_type="person", subject_id=person_id
+    )
+    alone = workspace.add_task(conn, "Renew the SAM registration", due="2026-10-01")
+
+    assert (office.subject_type, office.subject_id, office.pursuit_id, office.stage) == (
+        "entity",
+        str(entity_id),
+        None,
+        None,
+    )
+    assert (contact.subject_type, contact.subject_id) == ("person", str(person_id))
+    assert (alone.subject_type, alone.subject_id, alone.origin) == (None, None, "user")
+    assert [t.task_id for t in workspace.tasks(conn)] == [alone.task_id, office.task_id,
+                                                          contact.task_id]  # fmt: skip
+    assert [t.task_id for t in workspace.tasks(conn, subject_type="entity")] == [office.task_id]
+    done = workspace.complete_task(conn, office.task_id)
+    assert done.done_at is not None
+    assert [t.task_id for t in workspace.tasks(conn)] == [alone.task_id, contact.task_id]
+
+
+def test_a_task_off_a_pursuit_records_no_pursuit_history(conn: sqlite3.Connection) -> None:
+    """pursuit_events is pursuit-scoped and append-only, so a task about an office writes
+    nothing to it and does not touch any pursuit's updated_at."""
+    p = workspace.new_pursuit(conn, "Help desk recompete")
+    before = workspace.pursuit(conn, p.pursuit_id).pursuit.updated_at
+    events_before = pursuit_events(conn, p.pursuit_id)
+
+    task = workspace.add_task(conn, "Check the registration", subject_type="entity",
+                              subject_id=an_entity(conn))  # fmt: skip
+    workspace.complete_task(conn, task.task_id)
+
+    after = workspace.pursuit(conn, p.pursuit_id)
+    assert after.pursuit.updated_at == before
+    assert pursuit_events(conn, p.pursuit_id) == events_before
+    assert [t.task_id for t in after.tasks] != [task.task_id]
+
+
+def test_a_subject_is_checked_before_a_task_is_written(conn: sqlite3.Connection) -> None:
+    with pytest.raises(workspace.NotFound, match="no entity 404"):
+        workspace.add_task(conn, "x", subject_type="entity", subject_id=404)
+    with pytest.raises(workspace.NotFound, match="no person 404"):
+        workspace.add_task(conn, "x", subject_type="person", subject_id=404)
+    with pytest.raises(workspace.NotFound, match="no pursuit 404"):
+        workspace.add_task(conn, "x", subject_type="pursuit", subject_id=404)
+    with pytest.raises(ValueError, match="cannot be about"):
+        workspace.add_task(conn, "x", subject_type="notice", subject_id=1)
+    with pytest.raises(ValueError, match="both a kind and an id"):
+        workspace.add_task(conn, "x", subject_type="entity")
+    with pytest.raises(ValueError, match="both a kind and an id"):
+        workspace.add_task(conn, "x", subject_id=1)
+    with pytest.raises(ValueError, match="workflow stage"):
+        workspace.add_task(conn, "x", subject_type="entity", subject_id=an_entity(conn),
+                           stage="identify")  # fmt: skip
+    assert workspace.tasks(conn) == ()
+
+
+def test_another_users_pursuit_is_not_a_subject(conn: sqlite3.Connection) -> None:
+    p = workspace.new_pursuit(conn, "Help desk recompete")
+    with pytest.raises(workspace.NotFound):
+        workspace.add_task(conn, "x", subject_type="pursuit", subject_id=p.pursuit_id, user_id=2)
+
+
+def test_precedence_is_assigned_and_unset_is_not_routine(conn: sqlite3.Connection) -> None:
+    entity_id = an_entity(conn)
+    unset = workspace.add_task(conn, "whenever", subject_type="entity", subject_id=entity_id)
+    flash = workspace.add_task(conn, "today", subject_type="entity", subject_id=entity_id,
+                               precedence="flash")  # fmt: skip
+    routine = workspace.add_task(conn, "sometime", subject_type="entity", subject_id=entity_id,
+                                 precedence="routine")  # fmt: skip
+
+    assert (unset.precedence, flash.precedence, routine.precedence) == (None, "flash", "routine")
+    assert [t.task_id for t in workspace.tasks(conn)] == [
+        flash.task_id, routine.task_id, unset.task_id
+    ]  # fmt: skip
+    assert workspace.precedence_rank(None) > workspace.precedence_rank("routine")
+
+    with pytest.raises(ValueError, match="precedence must be"):
+        workspace.add_task(conn, "x", precedence="urgent")
+    with pytest.raises(ValueError, match="precedence must be"):
+        workspace.set_task_precedence(conn, unset.task_id, "urgent")
+    assert workspace.set_task_precedence(conn, unset.task_id, "priority").precedence == "priority"
+    assert workspace.set_task_precedence(conn, unset.task_id, None).precedence is None
+    with pytest.raises(workspace.NotFound):
+        workspace.set_task_precedence(conn, 999, "flash")

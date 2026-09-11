@@ -41,6 +41,18 @@ SUBJECT_KINDS = ("pursuit", "entity", "person")
 PRECEDENCE = ("flash", "immediate", "priority", "routine")
 """Most urgent first. A task's precedence may also be unset, which is not a fifth level."""
 
+_PRECEDENCE_RANK_SQL = (
+    "CASE precedence "
+    + " ".join(f"WHEN '{p}' THEN {i}" for i, p in enumerate(PRECEDENCE))
+    + f" ELSE {len(PRECEDENCE)} END"  # unset sorts last, not first as a NULL would
+)
+
+
+def precedence_rank(precedence: str | None) -> int:
+    """Sort key: most urgent first, with unset last rather than treated as 'routine'."""
+    return PRECEDENCE.index(precedence) if precedence in PRECEDENCE else len(PRECEDENCE)
+
+
 _TASK_COLUMNS = (
     "task_id, subject_type, subject_id,"
     " CASE WHEN subject_type = 'pursuit' THEN CAST(subject_id AS INTEGER) END,"
@@ -562,14 +574,8 @@ def new_pursuit(
 def pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID) -> PursuitDetail:
     """Everything about one pursuit, for its screen."""
     row = _pursuit_row(conn, pursuit_id, user_id)
-    tasks = tuple(
-        Task(*item)
-        for item in conn.execute(
-            f"SELECT {_TASK_COLUMNS} FROM tasks"
-            " WHERE subject_type = 'pursuit' AND subject_id = ?"
-            " ORDER BY done_at IS NOT NULL, due IS NULL, due, task_id",
-            (str(pursuit_id),),
-        ).fetchall()
+    own_tasks = tasks(
+        conn, subject_type="pursuit", subject_id=pursuit_id, open_only=False, user_id=user_id
     )
     notices = tuple(
         LinkedNotice(*item[:6], bool(item[6]))
@@ -602,10 +608,10 @@ def pursuit(conn: sqlite3.Connection, pursuit_id: int, *, user_id: int = USER_ID
         gate_name = workflow_doc.stage(row.stage).gate
     except KeyError:
         gate_name = None
-    open_here = any(t.done_at is None and t.stage == row.stage for t in tasks)
+    open_here = any(t.done_at is None and t.stage == row.stage for t in own_tasks)
     gate_ready = bool(gate_name) and row.open and row.held_until is None and not open_here
     return PursuitDetail(
-        row, tasks, notices, incumbent, related, tuple(_dates(row, notices, incumbent)),
+        row, own_tasks, notices, incumbent, related, tuple(_dates(row, notices, incumbent)),
         events, gate_name, gate_ready, latest_assessment(conn, pursuit_id, user_id=user_id),
     )  # fmt: skip
 
@@ -827,29 +833,128 @@ def reopen(
     return _pursuit_row(conn, pursuit_id, user_id)
 
 
+def _resolve_subject(
+    conn: sqlite3.Connection,
+    subject_type: str | None,
+    subject_id: str | int | None,
+    user_id: int,
+) -> tuple[str | None, str | None, str | None]:
+    """Check that a task's subject exists, and return it with the pursuit's current stage.
+
+    The subject is not a foreign key, so this is the one place that stands in for one: every
+    insert goes through it. The check is asymmetric on purpose. A pursuit is the user's own
+    row and is matched by ``user_id``; an entity or a person is a public row with no owner to
+    match, so only its existence is checked.
+    """
+    if (subject_type is None) != (subject_id is None):
+        raise ValueError("a task's subject needs both a kind and an id, or neither")
+    if subject_type is None:
+        return None, None, None
+    if subject_type not in SUBJECT_KINDS:
+        raise ValueError(f"a task cannot be about a {subject_type!r} ({', '.join(SUBJECT_KINDS)})")
+    try:
+        number = int(subject_id)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError(f"{subject_type} id must be a number, not {subject_id!r}") from None
+    if subject_type == "pursuit":
+        return subject_type, str(number), _pursuit_row(conn, number, user_id).stage
+    table, key = {"entity": ("entities", "entity_id"), "person": ("people", "person_id")}[
+        subject_type
+    ]
+    if conn.execute(f"SELECT 1 FROM {table} WHERE {key} = ?", (number,)).fetchone() is None:
+        raise NotFound(f"no {subject_type} {number}")
+    return subject_type, str(number), None
+
+
 def add_task(
     conn: sqlite3.Connection,
-    pursuit_id: int,
     title: str,
     *,
+    subject_type: str | None = None,
+    subject_id: str | int | None = None,
     due: str | None = None,
     stage: str | None = None,
+    precedence: str | None = None,
     user_id: int = USER_ID,
 ) -> Task:
-    row = _pursuit_row(conn, pursuit_id, user_id)
+    """Add a task. With no subject it is a standalone to-do; with one it is about that
+    pursuit, entity or person."""
+    kind, sid, current_stage = _resolve_subject(conn, subject_type, subject_id, user_id)
     if not title.strip():
         raise ValueError("a task needs a title")
+    if precedence is not None and precedence not in PRECEDENCE:
+        raise ValueError(f"precedence must be one of {', '.join(PRECEDENCE)}")
+    if stage is not None and kind != "pursuit":
+        raise ValueError("only a task about a pursuit belongs to a workflow stage")
     now = db.utcnow()
     with _transaction(conn):
         item = conn.execute(
-            "INSERT INTO tasks (subject_type, subject_id, user_id, stage, title, origin, due,"
-            " created_at) VALUES ('pursuit', ?, ?, ?, ?, 'user', ?, ?)"
+            "INSERT INTO tasks (subject_type, subject_id, user_id, stage, title, origin,"
+            " precedence, due, created_at) VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?)"
             f" RETURNING {_TASK_COLUMNS}",
-            (str(pursuit_id), user_id, stage or row.stage, title.strip(), due, now),
+            (kind, sid, user_id, stage or current_stage, title.strip(), precedence, due, now),
         ).fetchone()
-        _event(conn, pursuit_id, user_id, now, "task", None, title.strip(), "added")
-        conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, pursuit_id))
+        if kind == "pursuit":
+            # pursuit_events is pursuit-scoped and append-only; a task about anything else
+            # records no history beyond its own created_at and done_at.
+            _event(conn, int(sid), user_id, now, "task", None, title.strip(), "added")
+            conn.execute("UPDATE pursuits SET updated_at = ? WHERE pursuit_id = ?", (now, sid))
     return Task(*item)
+
+
+def task(conn: sqlite3.Connection, task_id: int, *, user_id: int = USER_ID) -> Task:
+    item = conn.execute(
+        f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_id = ? AND user_id = ?",
+        (task_id, user_id),
+    ).fetchone()
+    if item is None:
+        raise NotFound(f"no task {task_id}")
+    return Task(*item)
+
+
+def tasks(
+    conn: sqlite3.Connection,
+    *,
+    subject_type: str | None = None,
+    subject_id: str | int | None = None,
+    open_only: bool = True,
+    due_before: str | None = None,
+    user_id: int = USER_ID,
+) -> tuple[Task, ...]:
+    """Tasks, most pressing first. Without a subject this is every task the user has."""
+    where = ["user_id = ?"]
+    params: list[object] = [user_id]
+    if subject_type is not None:
+        where.append("subject_type = ?")
+        params.append(subject_type)
+        if subject_id is not None:
+            where.append("subject_id = ?")
+            params.append(str(subject_id))
+    if open_only:
+        where.append("done_at IS NULL")
+    if due_before is not None:
+        where.append("due IS NOT NULL AND due <= ?")
+        params.append(due_before)
+    rows = conn.execute(
+        f"SELECT {_TASK_COLUMNS} FROM tasks WHERE {' AND '.join(where)}"
+        " ORDER BY done_at IS NOT NULL, due IS NULL, due,"
+        f" {_PRECEDENCE_RANK_SQL}, task_id",
+        params,
+    ).fetchall()
+    return tuple(Task(*row) for row in rows)
+
+
+def set_task_precedence(
+    conn: sqlite3.Connection, task_id: int, precedence: str | None, *, user_id: int = USER_ID
+) -> Task:
+    if precedence is not None and precedence not in PRECEDENCE:
+        raise ValueError(f"precedence must be one of {', '.join(PRECEDENCE)}")
+    task(conn, task_id, user_id=user_id)
+    conn.execute(
+        "UPDATE tasks SET precedence = ? WHERE task_id = ? AND user_id = ?",
+        (precedence, task_id, user_id),
+    )
+    return task(conn, task_id, user_id=user_id)
 
 
 def complete_task(conn: sqlite3.Connection, task_id: int, *, user_id: int = USER_ID) -> Task:

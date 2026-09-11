@@ -40,8 +40,20 @@ def app(
     workspace.track(conn, HRSA, stage="pursuing", pwin=40)
     pursued = workspace.pursuit_for_notice(conn, HRSA)
     assert pursued is not None
-    workspace.add_task(conn, pursued.pursuit_id, "Call the COR", due="2026-09-07")
-    workspace.add_task(conn, pursued.pursuit_id, "Draft the capture plan", due="2026-09-08")
+    workspace.add_task(
+        conn,
+        "Call the COR",
+        subject_type="pursuit",
+        subject_id=pursued.pursuit_id,
+        due="2026-09-07",
+    )
+    workspace.add_task(
+        conn,
+        "Draft the capture plan",
+        subject_type="pursuit",
+        subject_id=pursued.pursuit_id,
+        due="2026-09-08",
+    )
     workspace.save_assessment(
         conn, pursued.pursuit_id, slot="deep", provider="openai", model="qwen3:14b",
         prompt_version=1, profile_version=None, inputs_hash="h", input_tokens=900,

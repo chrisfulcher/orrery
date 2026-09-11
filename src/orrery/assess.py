@@ -365,7 +365,16 @@ def accept_tasks(
         stage = (
             task.stage if task.stage in workspace.workflow(conn, user_id=user_id).keys() else None
         )
-        added.append(workspace.add_task(conn, pursuit_id, task.title, stage=stage, user_id=user_id))
+        added.append(
+            workspace.add_task(
+                conn,
+                task.title,
+                subject_type="pursuit",
+                subject_id=pursuit_id,
+                stage=stage,
+                user_id=user_id,
+            )
+        )
         existing.add(task.title.strip().lower())
     return added
 

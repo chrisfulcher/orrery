@@ -763,7 +763,9 @@ def pursuit_task(
 ) -> None:
     """Add a task to a pursuit."""
     _run_pursuit(
-        lambda conn: workspace.add_task(conn, pursuit_id, title, due=due, stage=stage),
+        lambda conn: workspace.add_task(
+            conn, title, subject_type="pursuit", subject_id=pursuit_id, due=due, stage=stage
+        ),
         json_output,
         f"added task to #{pursuit_id}",
     )

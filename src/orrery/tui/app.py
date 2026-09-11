@@ -891,7 +891,11 @@ class PursuitScreen(Screen):
         if result:
             self._apply(
                 lambda: workspace.add_task(
-                    self.app.conn, self.pursuit_id, result["title"], due=result["due"]
+                    self.app.conn,
+                    result["title"],
+                    subject_type="pursuit",
+                    subject_id=self.pursuit_id,
+                    due=result["due"],
                 )
             )
 
