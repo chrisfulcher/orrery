@@ -21,7 +21,8 @@ import json
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 
@@ -145,6 +146,9 @@ class FetchResult:
     attachments_skipped: int
     requests_spent: int
     budget_exhausted: bool
+    failures: dict[str, int] = field(default_factory=dict)
+    """How many failures of each kind this run recorded, across all three stages. A count
+    alone says how much went wrong; the kinds say whether any of it is worth trying again."""
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,7 @@ def fetch_pending(
     d_fetched = d_failed = m_checked = m_failed = found = 0
     a_fetched = a_failed = a_skipped = 0
     exhausted = False
+    failures: Counter = Counter()
     shape_error: ManifestShapeError | None = None
     try:
         with SamClient(settings, conn, run_id) as client:
@@ -211,15 +216,15 @@ def fetch_pending(
                 report("descriptions: skipped, ORRERY_SAM_API_KEY is not set")
             else:
                 d_fetched, d_failed, exhausted = _fetch_descriptions(
-                    conn, client, -1 if budget is None else budget, report, cancelled
+                    conn, client, -1 if budget is None else budget, failures, report, cancelled
                 )
             m_checked, m_failed, found, shape_error = _fetch_manifests(
                 conn, client, settings, -1 if max_manifests is None else max_manifests,
-                report, cancelled,
+                failures, report, cancelled,
             )  # fmt: skip
             a_fetched, a_failed, a_skipped = _fetch_attachments(
                 conn, client, settings, run_id, -1 if max_attachments is None else max_attachments,
-                report, cancelled,
+                failures, report, cancelled,
             )  # fmt: skip
     except Exception as exc:
         processed = d_fetched + d_failed + m_checked + a_fetched + a_failed + a_skipped
@@ -240,7 +245,7 @@ def fetch_pending(
     ).fetchone()
     return FetchResult(
         run_id, d_fetched, d_failed, m_checked, m_failed, found,
-        a_fetched, a_failed, a_skipped, spent, exhausted,
+        a_fetched, a_failed, a_skipped, spent, exhausted, dict(sorted(failures.items())),
     )  # fmt: skip
 
 
@@ -248,10 +253,11 @@ def _fetch_descriptions(
     conn: sqlite3.Connection,
     client: SamClient,
     limit: int,
+    failures: Counter,
     report: Report = quiet,
     cancelled: Cancelled = never,
 ) -> tuple[int, int, bool]:
-    """Returns (fetched, failed, budget_exhausted)."""
+    """Returns (fetched, failed, budget_exhausted); ``failures`` tallies the kinds."""
     fetched = failed = 0
     rows = _pending(conn, PENDING_DESCRIPTIONS, limit)
     for notice_id, url, _deadline, title in rows:
@@ -260,21 +266,47 @@ def _fetch_descriptions(
             text = _html_to_text(client.get_description(url, notice_id=notice_id) or "")
         except BudgetExceeded:
             return fetched, failed, True
-        except SamError:
-            conn.execute(
-                "UPDATE notices SET description_status = 'failed' WHERE notice_id = ?",
-                (notice_id,),
-            )
+        except SamError as exc:
+            _record_failure(
+                conn, "UPDATE notices SET description_status = 'failed',"
+                " description_failure_kind = ?, description_failure_detail = ?"
+                " WHERE notice_id = ?",
+                notice_id, exc, failures,
+            )  # fmt: skip
             failed += 1
             continue
         conn.execute(
-            "UPDATE notices SET description = ?, description_status = 'fetched'"
+            "UPDATE notices SET description = ?, description_status = 'fetched',"
+            " description_failure_kind = NULL, description_failure_detail = NULL"
             " WHERE notice_id = ?",
             (text, notice_id),
         )
         fetched += 1
         report(f"description: {title}")
     return fetched, failed, False
+
+
+def _fail_manifest(
+    conn: sqlite3.Connection, notice_id: str, status: str, exc: SamError, failures: Counter
+) -> None:
+    """Record a manifest read that did not produce a manifest. ``status`` stays the existing
+    vocabulary -- ``unknown`` is terminal, ``failed`` comes round again -- and the kind says
+    which of the several ways it failed this was."""
+    conn.execute(
+        "UPDATE notices SET manifest_status = ?, manifest_checked_at = ?,"
+        " manifest_failure_kind = ?, manifest_failure_detail = ? WHERE notice_id = ?",
+        (status, db.utcnow(), exc.kind, str(exc), notice_id),
+    )
+    failures[exc.kind] += 1
+
+
+def _record_failure(
+    conn: sqlite3.Connection, sql: str, row_id: object, exc: SamError, failures: Counter
+) -> None:
+    """Write one stage's failure with its reason and tally the kind. The detail is the
+    exception's own message, which the client has already stripped of the API key."""
+    conn.execute(sql, (exc.kind, str(exc), row_id))
+    failures[exc.kind] += 1
 
 
 def _human_bytes(count: int) -> str:
@@ -290,6 +322,7 @@ def _fetch_manifests(
     client: SamClient,
     settings: Settings,
     limit: int,
+    failures: Counter,
     report: Report = quiet,
     cancelled: Cancelled = never,
 ) -> tuple[int, int, int, ManifestShapeError | None]:
@@ -310,33 +343,21 @@ def _fetch_manifests(
             time.sleep(settings.fetch_delay)
         try:
             items = client.get_attachment_manifest(notice_id)
-        except NoticeUnknown:
-            conn.execute(
-                "UPDATE notices SET manifest_status = 'unknown', manifest_checked_at = ?"
-                " WHERE notice_id = ?",
-                (db.utcnow(), notice_id),
-            )
+        except NoticeUnknown as exc:
+            _fail_manifest(conn, notice_id, "unknown", exc, failures)
             failed += 1
             continue
         except ManifestShapeError as exc:
             return checked, failed, found, exc
         except ManifestUnavailable as exc:
-            conn.execute(
-                "UPDATE notices SET manifest_status = 'failed', manifest_checked_at = ?"
-                " WHERE notice_id = ?",
-                (db.utcnow(), notice_id),
-            )
+            _fail_manifest(conn, notice_id, "failed", exc, failures)
             failed += 1
             if exc.status_code == 429 or exc.status_code >= 500:
                 report(f"manifests: stopping, SAM.gov answered HTTP {exc.status_code}")
                 break
             continue
-        except SamError:
-            conn.execute(
-                "UPDATE notices SET manifest_status = 'failed', manifest_checked_at = ?"
-                " WHERE notice_id = ?",
-                (db.utcnow(), notice_id),
-            )
+        except SamError as exc:
+            _fail_manifest(conn, notice_id, "failed", exc, failures)
             failed += 1
             continue
         now = db.utcnow()
@@ -370,7 +391,8 @@ def _fetch_manifests(
         ).fetchone()
         found += after - before
         conn.execute(
-            "UPDATE notices SET manifest_status = 'checked', manifest_checked_at = ?"
+            "UPDATE notices SET manifest_status = 'checked', manifest_checked_at = ?,"
+            " manifest_failure_kind = NULL, manifest_failure_detail = NULL"
             " WHERE notice_id = ?",
             (now, notice_id),
         )
@@ -394,6 +416,7 @@ def _fetch_attachments(
     settings: Settings,
     run_id: int,
     limit: int,
+    failures: Counter,
     report: Report = quiet,
     cancelled: Cancelled = never,
 ) -> tuple[int, int, int]:
@@ -409,10 +432,11 @@ def _fetch_attachments(
         except SamError as exc:
             status = "skipped" if isinstance(exc, AttachmentTooLarge) else "failed"
             conn.execute(
-                "UPDATE attachments SET fetch_status = ?, fetched_at = ?, ingestion_run_id = ?"
-                " WHERE attachment_id = ?",
-                (status, db.utcnow(), run_id, attachment_id),
+                "UPDATE attachments SET fetch_status = ?, fetched_at = ?, ingestion_run_id = ?,"
+                " failure_kind = ?, failure_detail = ? WHERE attachment_id = ?",
+                (status, db.utcnow(), run_id, exc.kind, str(exc), attachment_id),
             )
+            failures[exc.kind] += 1
             if status == "skipped":
                 skipped += 1
             else:
@@ -420,7 +444,8 @@ def _fetch_attachments(
             continue
         conn.execute(
             "UPDATE attachments SET filename = ?, path = ?, content_hash = ?, fetched_at = ?,"
-            " ingestion_run_id = ?, fetch_status = 'fetched' WHERE attachment_id = ?",
+            " ingestion_run_id = ?, fetch_status = 'fetched', failure_kind = NULL,"
+            " failure_detail = NULL WHERE attachment_id = ?",
             (
                 result.filename,
                 result.path.relative_to(settings.data_dir).as_posix(),

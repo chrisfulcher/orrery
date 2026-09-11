@@ -51,6 +51,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0014_run_filter.sql",
         "applied 0015_attachment_manifest.sql",
         "applied 0016_extract_provenance.sql",
+        "applied 0017_failure_reasons.sql",
     ]
     assert (tmp_path / "orrery.sqlite").exists()
 
@@ -78,6 +79,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0014_run_filter.sql",
         "applied  0015_attachment_manifest.sql",
         "applied  0016_extract_provenance.sql",
+        "applied  0017_failure_reasons.sql",
     ]
 
 
@@ -241,7 +243,9 @@ def test_fetch_json_and_the_keyless_path(
         "attachments_skipped",
         "requests_spent",
         "budget_exhausted",
+        "failures",
     }
+    assert payload["failures"] == {}
     assert payload["descriptions_fetched"] == 5 and payload["attachments_fetched"] == 1
 
     # Without a key the run still goes ahead: only the description stage stands aside, and it

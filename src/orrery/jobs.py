@@ -591,6 +591,10 @@ def summarize(job: Job, result: object) -> str:
             note = (
                 " (daily budget exhausted; attachments still fetched)" if r.budget_exhausted else ""
             )
+            if r.failures:
+                # Which kinds, not just how many: 404 is permanent, a 429 or a 5xx is worth
+                # another run, and the counts alone cannot tell them apart.
+                note += " [" + ", ".join(f"{k} {n}" for k, n in r.failures.items()) + "]"
             return (
                 f"run {r.run_id}: {r.descriptions_fetched} descriptions fetched,"
                 f" {r.descriptions_failed} failed; {r.manifests_checked} manifests read,"

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -95,9 +96,14 @@ def test_description_failure_marks_failed_and_continues(
 
     assert (result.descriptions_fetched, result.descriptions_failed) == (4, 1)
     failed = conn.execute(
-        "SELECT description FROM notices WHERE description_status = 'failed'"
+        "SELECT description, description_failure_kind, description_failure_detail FROM notices"
+        " WHERE description_status = 'failed'"
     ).fetchall()
-    assert failed == [(None,)]
+    assert len(failed) == 1
+    description, kind, detail = failed[0]
+    # A 500 is worth another run; the row says so rather than only that it failed.
+    assert description is None and kind == "server_error" and "HTTP 500" in detail
+    assert result.failures == {"server_error": 1}
 
 
 def test_quota_exhaustion_stops_descriptions_not_attachments(
@@ -170,9 +176,103 @@ def test_attachment_failure_marks_failed_and_continues(
 
     assert (result.attachments_fetched, result.attachments_failed) == (1, 1)
     row = conn.execute(
-        "SELECT path, fetched_at, ingestion_run_id FROM attachments WHERE fetch_status = 'failed'"
+        "SELECT path, fetched_at, ingestion_run_id, failure_kind, failure_detail"
+        " FROM attachments WHERE fetch_status = 'failed'"
     ).fetchone()
     assert row[0] is None and row[1] is not None and row[2] == result.run_id
+    # 404: the file is gone for good, which is not the same as a run that failed.
+    assert row[3] == "gone" and "HTTP 404" in row[4]
+    assert result.failures == {"gone": 1}
+
+
+def test_a_row_queued_with_no_description_url_is_recorded_not_fatal(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """The schema permits a pending row with no URL even though no adapter writes one. The
+    queue records it like any other failure rather than taking the run down with it."""
+    seed()
+    httpx_mock.add_response(url=NOTICEDESC, json=DESC_BODY, is_reusable=True)
+    stranded = conn.execute("SELECT notice_id FROM notices LIMIT 1").fetchone()[0]
+    conn.execute("UPDATE notices SET description_url = NULL WHERE notice_id = ?", (stranded,))
+
+    result = fetch_pending(conn, settings, max_attachments=0, max_manifests=0)
+
+    assert (result.descriptions_fetched, result.descriptions_failed) == (4, 1)
+    assert result.failures == {"no_url": 1}
+    row = conn.execute(
+        "SELECT description_failure_kind FROM notices WHERE notice_id = ?", (stranded,)
+    ).fetchone()
+    assert row == ("no_url",)
+
+
+def test_a_download_that_never_reached_the_server_says_so(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """No response at all is not the same as a response we did not like: nothing is known
+    about the file, so the kind says the request never landed rather than naming a status."""
+    seed()
+    httpx_mock.add_exception(httpx.ConnectError("refused"), url=FILES)
+    httpx_mock.add_response(url=FILES, content=PDF, headers=PDF_HEADERS, is_reusable=True)
+
+    result = fetch_pending(conn, settings, budget=0, max_attachments=2, max_manifests=0)
+
+    assert result.failures == {"transport": 1}
+    row = conn.execute(
+        "SELECT failure_kind, failure_detail FROM attachments WHERE fetch_status = 'failed'"
+    ).fetchone()
+    assert row[0] == "transport" and "ConnectError" in row[1]
+
+
+def test_a_file_over_the_cap_is_skipped_with_its_reason(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """Skipped is not failed, but it still has a reason, and it is one no retry will change."""
+    seed()
+    httpx_mock.add_response(
+        url=FILES,
+        content=PDF,
+        headers={**PDF_HEADERS, "Content-Length": "10000000"},
+        is_reusable=True,
+    )
+    small = settings.model_copy(update={"max_attachment_bytes": 1000})
+
+    result = fetch_pending(conn, small, budget=0, max_attachments=1, max_manifests=0)
+
+    assert result.attachments_skipped == 1 and result.failures == {"too_large": 1}
+    row = conn.execute(
+        "SELECT failure_kind, failure_detail FROM attachments WHERE fetch_status = 'skipped'"
+    ).fetchone()
+    assert row[0] == "too_large" and "exceeds" in row[1]
+
+
+def test_a_successful_retry_clears_the_last_reason(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings, seed: Seed
+) -> None:
+    """A reason describes the row's current state, so it must not outlive the failure. The
+    manifest stage is the one that comes round again, so it is the one that can prove it."""
+    seed()
+    httpx_mock.add_response(url=MANIFEST, status_code=503)
+    httpx_mock.add_response(url=MANIFEST, json={"_links": {}}, is_reusable=True)
+
+    first = fetch_pending(conn, settings, budget=0, max_attachments=0, max_manifests=1)
+    assert first.failures == {"server_error": 1}
+    failed_id = conn.execute(
+        "SELECT notice_id FROM notices WHERE manifest_failure_kind IS NOT NULL"
+    ).fetchone()[0]
+    # A failed manifest waits out the re-check interval; age it so this run reaches it.
+    conn.execute(
+        "UPDATE notices SET manifest_checked_at = '2026-01-01T00:00:00Z' WHERE notice_id = ?",
+        (failed_id,),
+    )
+
+    fetch_pending(conn, settings, budget=0, max_attachments=0)
+
+    row = conn.execute(
+        "SELECT manifest_status, manifest_failure_kind, manifest_failure_detail FROM notices"
+        " WHERE notice_id = ?",
+        (failed_id,),
+    ).fetchone()
+    assert row == ("checked", None, None)
 
 
 def test_fetch_delay_between_downloads_only(
@@ -384,6 +484,8 @@ def test_an_unknown_notice_is_terminal_and_a_failure_comes_round_again(
     ).fetchone() == (5,)
     # 'unknown' is never asked about again; a 'failed' row would be, under the interval rule.
     assert fetch_pending(conn, settings, budget=0, max_attachments=0).manifests_checked == 0
+    kinds = conn.execute("SELECT DISTINCT manifest_failure_kind FROM notices").fetchall()
+    assert kinds == [("unknown_notice",)]
 
 
 def test_a_manifest_the_release_cannot_parse_fails_the_run_after_downloads(
@@ -417,6 +519,10 @@ def test_a_429_stops_the_stage(
 
     assert result.manifests_failed == 1  # stopped after the first, not all five
     assert len(httpx_mock.get_requests(url=MANIFEST)) == 1
+    assert result.failures == {"rate_limited": 1}
+    assert conn.execute(
+        "SELECT manifest_failure_kind FROM notices WHERE manifest_status = 'failed'"
+    ).fetchall() == [("rate_limited",)]
 
 
 def test_files_the_manifest_says_are_unfetchable_are_skipped_without_a_request(

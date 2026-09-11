@@ -41,16 +41,54 @@ MAX_WINDOW = timedelta(days=365)
 DATE_FORMAT = "%m/%d/%Y"
 
 
+def kind_for_status(status_code: int) -> str:
+    """Name a failure from the status the server gave. 404 is permanent and 429 or a 5xx is
+    worth another try tomorrow, which is the distinction a retry policy needs and the one a
+    bare 'failed' throws away."""
+    if status_code == 404:
+        return "gone"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "server_error"
+    if status_code >= 400:
+        return "client_error"
+    return "failed"
+
+
 class SamError(Exception):
-    """A SAM.gov request failed. The message never contains the API key."""
+    """A SAM.gov request failed. The message never contains the API key.
+
+    ``kind`` says what sort of failure it was, decided where the error is raised rather than
+    by matching the message afterwards, so the queue can record why a fetch failed and a
+    later retry policy can act on failures already collected instead of needing a backfill of
+    rows that never recorded a reason. ``status_code`` is the HTTP status when there was a
+    response, and None when the request never got one.
+    """
+
+    kind = "failed"
+
+    def __init__(
+        self, message: str, *, status_code: int | None = None, kind: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        if kind is not None:
+            self.kind = kind
+        elif status_code is not None:
+            self.kind = kind_for_status(status_code)
 
 
 class AttachmentTooLarge(SamError):
     """The file exceeds ORRERY_MAX_ATTACHMENT_BYTES; the queue records it as skipped."""
 
+    kind = "too_large"
+
 
 class NoticeUnknown(SamError):
     """SAM.gov has no notice with this id. Terminal for that notice, never retried."""
+
+    kind = "unknown_notice"
 
 
 class ManifestUnavailable(SamError):
@@ -58,14 +96,15 @@ class ManifestUnavailable(SamError):
     queue tell a per-notice problem from one that should stop the whole stage."""
 
     def __init__(self, message: str, status_code: int) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+        super().__init__(message, status_code=status_code)
 
 
 class ManifestShapeError(SamError):
     """The manifest response was not the shape this release pins to. The endpoint has no
     published contract, so this is the expected way it breaks; the queue stops the manifest
     stage on the first one rather than writing rows it does not understand."""
+
+    kind = "shape"
 
 
 @dataclass(frozen=True)
@@ -172,8 +211,15 @@ class SamClient:
             if not page.opportunities_data or offset >= page.total_records:
                 return
 
-    def get_description(self, url: str, *, notice_id: str | None = None) -> str:
-        """Fetch a notice description (the v2 search response carries only its URL)."""
+    def get_description(self, url: str | None, *, notice_id: str | None = None) -> str:
+        """Fetch a notice description (the v2 search response carries only its URL).
+
+        No adapter queues a row without a URL -- the search writes status ``none`` when it
+        carries no link -- but the schema permits one, and a queue whose job is to record
+        every outcome should not be the thing that dies on it.
+        """
+        if not url:
+            raise SamError(f"{notice_id}: queued for a description with no URL", kind="no_url")
         return self._keyed_request(url, notice_id=notice_id).json()["description"]
 
     def get_entities(self, ueis: list[str]) -> dict:
@@ -215,13 +261,18 @@ class SamClient:
                 self._http.stream("GET", location, follow_redirects=False) as stream,
             ):
                 if not stream.is_success:
-                    raise SamError(f"{location.host}: HTTP {stream.status_code}")
+                    raise SamError(
+                        f"{location.host}: HTTP {stream.status_code}",
+                        status_code=stream.status_code,
+                    )
                 for chunk in stream.iter_bytes():
                     out.write(chunk)
         except BaseException as exc:
             tmp.unlink(missing_ok=True)
             if isinstance(exc, httpx.HTTPError):
-                raise SamError(f"{location.host}: {type(exc).__name__}: {exc}") from exc
+                raise SamError(
+                    f"{location.host}: {type(exc).__name__}: {exc}", kind="transport"
+                ) from exc
             raise
         os.replace(tmp, path)
         return path
@@ -244,7 +295,10 @@ class SamClient:
                 self._http.stream("GET", url, follow_redirects=True) as response,
             ):
                 if not response.is_success:
-                    raise SamError(f"{url}: HTTP {response.status_code}")
+                    raise SamError(
+                        f"{url}: HTTP {response.status_code}",
+                        status_code=response.status_code,
+                    )
                 declared = response.headers.get("content-length")
                 if declared and int(declared) > limit:
                     raise AttachmentTooLarge(f"{url}: {declared} bytes exceeds {limit}")
@@ -258,7 +312,7 @@ class SamClient:
         except BaseException as exc:
             Path(tmp).unlink(missing_ok=True)
             if isinstance(exc, httpx.HTTPError):
-                raise SamError(f"{url}: {type(exc).__name__}: {exc}") from exc
+                raise SamError(f"{url}: {type(exc).__name__}: {exc}", kind="transport") from exc
             raise
         sha256 = digest.hexdigest()
         path = dest_dir / f"{sha256[:16]}-{filename}"
@@ -283,7 +337,7 @@ class SamClient:
         try:
             response = self._http.get(url, headers={"Accept": MANIFEST_ACCEPT})
         except httpx.HTTPError as exc:
-            raise SamError(f"{url}: {type(exc).__name__}: {exc}") from exc
+            raise SamError(f"{url}: {type(exc).__name__}: {exc}", kind="transport") from exc
         if response.status_code == 400:
             raise NoticeUnknown(f"{url}: SAM.gov has no notice {notice_id}")
         if not response.is_success:
@@ -331,13 +385,15 @@ class SamClient:
             self._conn.execute(
                 "UPDATE api_requests SET error = ? WHERE request_id = ?", (message, request_id)
             )
-            raise SamError(f"{endpoint}: {message}") from exc
+            raise SamError(f"{endpoint}: {message}", kind="transport") from exc
         self._conn.execute(
             "UPDATE api_requests SET status_code = ?, response_bytes = ? WHERE request_id = ?",
             (response.status_code, len(response.content), request_id),
         )
         if not response.is_success and not (redirect_ok and response.is_redirect):
-            raise SamError(f"{endpoint}: HTTP {response.status_code}")
+            raise SamError(
+                f"{endpoint}: HTTP {response.status_code}", status_code=response.status_code
+            )
         return response
 
     def _redact(self, text: str) -> str:

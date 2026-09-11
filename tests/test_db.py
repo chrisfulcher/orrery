@@ -56,6 +56,7 @@ MIGRATIONS = [
     "0014_run_filter.sql",
     "0015_attachment_manifest.sql",
     "0016_extract_provenance.sql",
+    "0017_failure_reasons.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
