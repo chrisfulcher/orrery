@@ -15,7 +15,7 @@ HRSA = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
 EXPECTED_TOOLS = {
     "search", "notice", "entity", "upcoming", "pipeline", "track", "history", "saved_searches",
     "run_saved_search", "save_search", "queue_status", "quota_today", "profile", "awards",
-    "contractor", "pursuits", "pursuit", "new_pursuit", "link_notice", "gate", "task_done",
+    "contractor", "pursuits", "pursuit", "new_pursuit", "link_notice", "gate", "tasks", "task_done",
     "update_pursuit", "recompetes", "assessments",
 }  # fmt: skip
 
@@ -114,7 +114,12 @@ async def test_pursuit_tools(
     linked = mcp_server.link_notice(opened.pursuit_id, HRSA)
     assert linked.notice_id == HRSA
     detail = mcp_server.pursuit(opened.pursuit_id)
+    assert [t.task_id for t in mcp_server.tasks()] == [t.task_id for t in detail.tasks]
+    assert mcp_server.tasks(subject_type="entity") == []
     mcp_server.task_done(detail.tasks[0].task_id)
+    assert len(mcp_server.tasks()) == 2
+    assert len(mcp_server.tasks(open_only=False)) == 3
+    assert [t.subject_type for t in mcp_server.tasks(open_only=False)] == ["pursuit"] * 3
     assert mcp_server.update_pursuit(opened.pursuit_id, pwin=35).pwin == 35
     assert mcp_server.gate(opened.pursuit_id, "go", "fits").stage == "qualify"
     assert [p.pursuit_id for p in mcp_server.pursuits(stage="qualify")] == [opened.pursuit_id]

@@ -230,8 +230,23 @@ def gate(pursuit_id: int, decision: str, why: str, until: str | None = None) -> 
 
 
 @server.tool()
+def tasks(
+    subject_type: str | None = None, subject_id: str | None = None, open_only: bool = True
+) -> list[workspace.Task]:
+    """The user's tasks, most pressing first. A task is about a pursuit, an entity or a person,
+    or about nothing at all; narrow with subject_type ('pursuit', 'entity', 'person') and
+    subject_id, or pass neither for all of them."""
+    with _conn() as conn:
+        return list(
+            workspace.tasks(
+                conn, subject_type=subject_type, subject_id=subject_id, open_only=open_only
+            )
+        )
+
+
+@server.tool()
 def task_done(task_id: int) -> workspace.Task:
-    """Mark a pursuit task done."""
+    """Mark a task done."""
     with _conn() as conn:
         return workspace.complete_task(conn, task_id)
 
