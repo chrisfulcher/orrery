@@ -1,6 +1,8 @@
 # orrery
 
-*Working title.* Free, open source, self-hosted business development intelligence for U.S. federal government contracting.
+Free, open source, self-hosted business development intelligence for U.S. federal government contracting.
+
+An orrery is a clockwork model of a system too large to see at once, built so the parts can be watched moving in relation to each other. That is the ambition: agencies, offices, contractors, contracts and the opportunities between them, in one model you run yourself.
 
 ![The dashboard: quota, queues, store activity, this week's work, and what needs attention](docs/images/dashboard.png)
 
