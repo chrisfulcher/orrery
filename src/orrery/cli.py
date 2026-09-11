@@ -36,6 +36,8 @@ workflow_app = typer.Typer(no_args_is_help=True, help="Your stages, gates, and t
 app.add_typer(workflow_app, name="workflow")
 pursuit_app = typer.Typer(no_args_is_help=True, help="One pursuit: create, link, decide, work.")
 app.add_typer(pursuit_app, name="pursuit")
+task_app = typer.Typer(no_args_is_help=True, help="Your work, about a pursuit or anything else.")
+app.add_typer(task_app, name="task")
 
 JsonFlag = Annotated[bool, typer.Option("--json", help="Print as JSON.")]
 DateOption = Annotated[datetime | None, typer.Option(formats=["%Y-%m-%d"], metavar="YYYY-MM-DD")]
@@ -1202,3 +1204,114 @@ def status() -> None:
         typer.echo(f"applied  {name}")
     for name in current.pending:
         typer.echo(f"pending  {name}")
+
+
+Subject = Annotated[
+    str | None,
+    typer.Option("--subject", metavar="KIND:ID", help="pursuit:12, entity:340 or person:7."),
+]
+Precedence = Annotated[
+    str | None, typer.Option("--precedence", help="flash, immediate, priority or routine.")
+]
+
+
+def _subject(subject: str | None) -> tuple[str | None, str | None]:
+    """Split ``kind:id`` into a subject, or (None, None) for a standalone to-do."""
+    if subject is None:
+        return None, None
+    kind, _, ident = subject.partition(":")
+    if not ident:
+        raise typer.BadParameter(f"--subject is KIND:ID, not {subject!r}")
+    return kind, ident
+
+
+def _task_line(task: workspace.Task) -> str:
+    mark = "x" if task.done_at else " "
+    subject = f"{task.subject_type}:{task.subject_id}" if task.subject_type else "-"
+    return (
+        f"  [{mark}] {task.task_id:>4}  {task.due or '-':<10}  {(task.precedence or '-'):<9}"
+        f"  {subject:<12}  {task.title}"
+    )
+
+
+@task_app.command("add")
+def task_add(
+    title: Annotated[str, typer.Argument()],
+    subject: Subject = None,
+    due: Annotated[str | None, typer.Option("--due", help="YYYY-MM-DD, your date.")] = None,
+    stage: Annotated[
+        str | None, typer.Option("--stage", help="A pursuit's workflow stage.")
+    ] = None,
+    precedence: Precedence = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Add a task. With no --subject it is a standalone to-do."""
+    kind, ident = _subject(subject)
+    _run_pursuit(
+        lambda conn: workspace.add_task(
+            conn,
+            title,
+            subject_type=kind,
+            subject_id=ident,
+            due=due,
+            stage=stage,
+            precedence=precedence,
+        ),
+        json_output,
+        "added task",
+    )
+
+
+@task_app.command("list")
+def task_list(
+    subject: Subject = None,
+    all_tasks: Annotated[bool, typer.Option("--all", help="Include tasks already done.")] = False,
+    due_before: Annotated[str | None, typer.Option("--due-before", metavar="YYYY-MM-DD")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """List your tasks, most pressing first."""
+    kind, ident = _subject(subject)
+    settings = Settings()
+    with closing(db.connect(settings.db_path)) as conn:
+        found = workspace.tasks(
+            conn,
+            subject_type=kind,
+            subject_id=ident,
+            open_only=not all_tasks,
+            due_before=due_before,
+        )
+    if json_output:
+        print_json([dataclasses.asdict(t) for t in found])
+        return
+    if not found:
+        typer.echo("no tasks")
+        return
+    for task in found:
+        typer.echo(_task_line(task))
+
+
+@task_app.command("done")
+def task_done(
+    task_id: Annotated[int, typer.Argument(metavar="TASK_ID")], json_output: JsonFlag = False
+) -> None:
+    """Mark a task done."""
+    _run_pursuit(
+        lambda conn: workspace.complete_task(conn, task_id), json_output, f"done {task_id}"
+    )
+
+
+@task_app.command("set")
+def task_set(
+    task_id: Annotated[int, typer.Argument(metavar="TASK_ID")],
+    precedence: Annotated[
+        str, typer.Option("--precedence", help="flash, immediate, priority, routine or none.")
+    ],
+    json_output: JsonFlag = False,
+) -> None:
+    """Set a task's precedence, or 'none' to unset it."""
+    wanted = None if precedence == "none" else precedence
+    _run_pursuit(
+        lambda conn: workspace.set_task_precedence(conn, task_id, wanted),
+        json_output,
+        f"set {task_id}",
+    )

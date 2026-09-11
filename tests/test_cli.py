@@ -834,3 +834,51 @@ def test_pursuit_assess_and_accept_commands(
     assert runner.invoke(app, ["pursuit", "accept", "1"], env=env).output.strip() == "added: 0"
     assert runner.invoke(app, ["pursuit", "accept", "1", "7"], env=env).exit_code == 1
     assert runner.invoke(app, ["pursuit", "assess", "99"], env=env).exit_code == 1
+
+
+def test_task_commands_reach_every_subject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = seed_via_cli(tmp_path, httpx_mock)
+
+    def run(*args: str) -> object:
+        return runner.invoke(app, list(args), env=env)
+
+    assert run("task", "list").output.strip() == "no tasks"
+    assert run("pursuit", "new", "Help desk recompete").exit_code == 0
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
+        (entity_id,) = conn.execute("SELECT entity_id FROM entities LIMIT 1").fetchone()
+
+    assert run("task", "add", "Call the CO", "--subject", f"entity:{entity_id}").exit_code == 0
+    added = run("task", "add", "Renew the registration", "--due", "2026-10-01",
+                "--precedence", "flash", "--json")  # fmt: skip
+    assert added.exit_code == 0, added.output
+    standalone = json.loads(added.output)
+    assert (standalone["subject_type"], standalone["precedence"]) == (None, "flash")
+
+    listed = json.loads(run("task", "list", "--json").output)
+    assert [t["title"] for t in listed] == [
+        "Renew the registration",
+        "Confirm the requirement: office, need, NAICS, vehicle",
+        "Find the incumbent and the last award",
+        "Check fit against the profile",
+        "Call the CO",
+    ]
+    assert [t["title"] for t in json.loads(
+        run("task", "list", "--subject", f"entity:{entity_id}", "--json").output
+    )] == ["Call the CO"]  # fmt: skip
+    assert "flash" in run("task", "list").output
+
+    unset = json.loads(
+        run("task", "set", str(standalone["task_id"]), "--precedence", "none", "--json").output
+    )
+    assert unset["precedence"] is None  # a dated task still leads: precedence never beats a date
+    assert json.loads(run("task", "list", "--json").output)[0]["title"] == "Renew the registration"
+    assert run("task", "done", str(standalone["task_id"])).output.strip().startswith("done")
+    assert "Renew the registration" not in run("task", "list").output
+    assert "Renew the registration" in run("task", "list", "--all").output
+
+    assert run("task", "add", "x", "--subject", "entity:404").exit_code == 1
+    assert run("task", "add", "x", "--subject", "nonsense").exit_code == 2
+    assert run("task", "add", "x", "--precedence", "urgent").exit_code == 1
