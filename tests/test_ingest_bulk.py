@@ -12,6 +12,8 @@ from orrery.ingest import bulk
 from orrery.ingest.bulk import ACTIVE_NAME, EXTRACT_URL, BulkError, fetch_extract, ingest_bulk
 
 Seed = Callable[[dict | None], None]
+# When the extract was cut: before the frozen clock, so a row this run re-sees is newer.
+CUT = "2026-09-08T09:14:00Z"
 HRSA = SEARCH_FIXTURE["opportunitiesData"][0]
 ARMY_DEEP = SEARCH_FIXTURE["opportunitiesData"][1]
 
@@ -265,11 +267,70 @@ def test_active_pass_clears_unseen_slice_notices(
         == 0
     )
     assert ingest_bulk(conn, settings, write(tmp_path, seen, "b.csv")).notices_deactivated == 0
-    result = ingest_bulk(conn, settings, write(tmp_path, seen, "c.csv"), mark_inactive=True)
+    result = ingest_bulk(
+        conn, settings, write(tmp_path, seen, "c.csv"), mark_inactive=True, generated_at=CUT
+    )
 
     assert result.notices_deactivated == 3
     assert count(conn, "SELECT count(*) FROM notices WHERE active = 1") == 3  # 2 seen + other
     assert conn.execute("SELECT active FROM notices WHERE notice_id = 'other'").fetchone() == (1,)
+
+
+def test_a_notice_ingested_after_the_cut_survives_the_active_pass(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """The extract is a snapshot cut before the run that reads it. A notice the keyed API
+    confirmed live after the cut is absent from the file for that reason alone, and the pass
+    must not read that absence as evidence the notice is gone."""
+    seed()
+    conn.execute("UPDATE notices SET last_seen_at = '2026-01-01T00:00:00Z'")
+    late = HRSA["noticeId"]
+    # Ingested from the API after the file was cut, and so not in it.
+    conn.execute(
+        "UPDATE notices SET last_seen_at = ? WHERE notice_id = ?", ("2026-09-08T10:30:00Z", late)
+    )
+    absent = [{"NoticeId": "b" * 32}]
+
+    result = ingest_bulk(
+        conn, settings, write(tmp_path, absent), mark_inactive=True, generated_at=CUT
+    )
+
+    assert result.active_pass == bulk.ACTIVE_PASS_DONE
+    still_live = conn.execute("SELECT active FROM notices WHERE notice_id = ?", (late,)).fetchone()
+    assert still_live == (1,)
+    cleared = count(conn, "SELECT count(*) FROM notices WHERE active = 0")
+    assert cleared == result.notices_deactivated
+
+
+def test_an_undated_extract_clears_nothing(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """With no cut there is nothing true to compare against, so the pass does not run at all
+    rather than falling back to a time that would deactivate the wrong rows."""
+    seed()
+    conn.execute("UPDATE notices SET last_seen_at = '2026-01-01T00:00:00Z'")
+    lines: list[str] = []
+
+    result = ingest_bulk(
+        conn, settings, write(tmp_path, [{"NoticeId": "b" * 32}]), mark_inactive=True,
+        report=lines.append,
+    )  # fmt: skip
+
+    assert result.active_pass == bulk.ACTIVE_PASS_NO_CUT and result.notices_deactivated == 0
+    assert count(conn, "SELECT count(*) FROM notices WHERE active = 0") == 0
+    assert f"active pass {bulk.ACTIVE_PASS_NO_CUT}" in lines
+
+
+def test_a_limited_pass_never_deactivates(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """A run that stopped at --limit has not seen the whole file and says so."""
+    seed()
+    result = ingest_bulk(
+        conn, settings, write(tmp_path, [{}, {}]), mark_inactive=True, limit=1, generated_at=CUT
+    )
+
+    assert result.active_pass == bulk.ACTIVE_PASS_PARTIAL and result.notices_deactivated == 0
 
 
 def test_missing_column_fails_the_run(
@@ -284,16 +345,60 @@ def test_missing_column_fails_the_run(
 
 def test_fetch_extract_downloads_once_per_day(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
     url = EXTRACT_URL.format(name=ACTIVE_NAME)
-    httpx_mock.add_response(url=url, content=make_extract([{}]))
+    httpx_mock.add_response(
+        url=url,
+        content=make_extract([{}]),
+        headers={"Last-Modified": "Tue, 08 Sep 2026 09:14:00 GMT", "ETag": '"abc123"'},
+    )
 
-    path = fetch_extract(tmp_path / "extracts")
+    extract = fetch_extract(tmp_path / "extracts")
+    path = extract.path
 
     assert path.name == "ContractOpportunitiesFullCSV.csv" and path.read_bytes().startswith(
         b"NoticeId"
     )
     assert not list(path.parent.glob("*.part"))
-    assert fetch_extract(tmp_path / "extracts") == path
+    assert extract.generated_at == "2026-09-08T09:14:00Z" and extract.etag == '"abc123"'
+    # The cached copy answers from its sidecar, so the cut survives a second process.
+    assert fetch_extract(tmp_path / "extracts") == extract
     assert len(httpx_mock.get_requests()) == 1
+
+
+def test_an_extract_the_server_did_not_date_has_no_cut(
+    httpx_mock: HTTPXMock, tmp_path: Path
+) -> None:
+    httpx_mock.add_response(url=EXTRACT_URL.format(name=ACTIVE_NAME), content=make_extract([{}]))
+
+    extract = fetch_extract(tmp_path / "extracts")
+
+    assert extract.generated_at is None
+    assert fetch_extract(tmp_path / "extracts").generated_at is None
+
+
+def test_an_extract_with_no_sidecar_has_no_cut(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
+    """A file downloaded before the sidecar existed, or hand-placed, is still usable."""
+    httpx_mock.add_response(
+        url=EXTRACT_URL.format(name=ACTIVE_NAME),
+        content=make_extract([{}]),
+        headers={"Last-Modified": "Tue, 08 Sep 2026 09:14:00 GMT"},
+    )
+    extract = fetch_extract(tmp_path / "extracts")
+    bulk._meta_path(extract.path).unlink()
+
+    assert fetch_extract(tmp_path / "extracts") == bulk.Extract(extract.path)
+
+
+def test_run_records_the_extracts_cut(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> None:
+    path = write(tmp_path, [{"NaicsCode": "541512"}])
+
+    result = ingest_bulk(conn, settings, path, generated_at="2026-09-08T09:14:00Z")
+
+    recorded = conn.execute(
+        "SELECT source_generated_at FROM ingestion_runs WHERE run_id = ?", (result.run_id,)
+    ).fetchone()[0]
+    assert recorded == "2026-09-08T09:14:00Z"
 
 
 def test_fetch_extract_failure_leaves_nothing(httpx_mock: HTTPXMock, tmp_path: Path) -> None:
@@ -345,7 +450,9 @@ def test_the_active_pass_clears_notices_under_a_prefix_slice(
     seen = [{"NoticeId": r["noticeId"]} for r in SEARCH_FIXTURE["opportunitiesData"][:2]]
 
     assert ingest_bulk(conn, wide, write(tmp_path, seen, "a.csv")).notices_deactivated == 0
-    result = ingest_bulk(conn, wide, write(tmp_path, seen, "b.csv"), mark_inactive=True)
+    result = ingest_bulk(
+        conn, wide, write(tmp_path, seen, "b.csv"), mark_inactive=True, generated_at=CUT
+    )
     assert result.notices_deactivated > 0
     assert (
         count(conn, "SELECT count(*) FROM notices WHERE active = 0") == result.notices_deactivated

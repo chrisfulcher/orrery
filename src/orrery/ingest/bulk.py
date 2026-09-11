@@ -15,6 +15,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -27,6 +28,13 @@ from orrery.progress import Cancelled, Report, check, never, quiet
 
 SOURCE_ID = "sam_bulk_csv"
 BATCH = 1000  # matched rows per transaction
+
+# What the deactivation pass did, so that a pass which cleared nothing is never confused with
+# one that never ran. Only ``ACTIVE_PASS_DONE`` makes ``notices_deactivated`` mean anything.
+ACTIVE_PASS_DONE = "done"
+ACTIVE_PASS_NOT_ASKED = "not requested"
+ACTIVE_PASS_PARTIAL = "skipped: the pass did not reach the end of the file"
+ACTIVE_PASS_NO_CUT = "skipped: the source did not say when this extract was cut"
 
 EXTRACT_URL = (
     "https://sam.gov/api/prod/fileextractservices/v1/api/download/"
@@ -83,10 +91,13 @@ ON CONFLICT(notice_id) DO UPDATE SET
     raw_json = excluded.raw_json
 """
 
+# The comparison is against the extract's own cut, never the run's start: the file is a
+# snapshot taken earlier, so a notice the keyed API ingested after it was cut is legitimately
+# absent from the file and is not evidence of anything.
 DEACTIVATE = f"""
 UPDATE notices SET active = 0
 WHERE active = 1 AND {naics.match_sql("naics_code", "?")}
-  AND last_seen_at < (SELECT min(started_at) FROM ingestion_runs WHERE cursor LIKE ? || ':%')
+  AND last_seen_at < ?
 """
 
 
@@ -105,10 +116,65 @@ class BulkResult:
     versions_added: int
     notices_deactivated: int
     resumed_from: int
+    active_pass: str = ACTIVE_PASS_NOT_ASKED
+
+
+@dataclass(frozen=True)
+class Extract:
+    """One extract file on disk and what the server said about it.
+
+    ``generated_at`` is the file's own cut, parsed from ``Last-Modified`` into the store's
+    timestamp format, and is None whenever the server did not say: a file the user supplied,
+    one downloaded before this metadata was kept, or a response with no such header.
+    """
+
+    path: Path
+    generated_at: str | None = None
+    etag: str | None = None
 
 
 def archive_name(fiscal_year: int) -> str:
     return f"Archived%20Data/FY{fiscal_year}_archived_opportunities.csv"
+
+
+def _meta_path(dest: Path) -> Path:
+    return dest.with_name(dest.name + ".meta.json")
+
+
+def _write_meta(dest: Path, url: str, headers: httpx.Headers) -> None:
+    """Record what the server said, verbatim, beside the file it said it about."""
+    meta = {
+        "url": url,
+        "last_modified": headers.get("last-modified"),
+        "etag": headers.get("etag"),
+        "downloaded_at": db.utcnow(),
+    }
+    _meta_path(dest).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _read_meta(dest: Path) -> Extract:
+    """Read the sidecar beside ``dest``. A missing or unreadable one is not an error: the
+    extract is still usable, the caller simply learns nothing about when it was cut."""
+    try:
+        meta = json.loads(_meta_path(dest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return Extract(dest)
+    if not isinstance(meta, dict):
+        return Extract(dest)
+    return Extract(dest, _http_date(meta.get("last_modified")), meta.get("etag"))
+
+
+def _http_date(value: object) -> str | None:
+    """An RFC 7231 date as the store writes timestamps, or None if it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def fetch_extract(
@@ -117,16 +183,17 @@ def fetch_extract(
     fiscal_year: int | None = None,
     http: httpx.Client | None = None,
     report: Report = quiet,
-) -> Path:
+) -> Extract:
     """Download the active extract (or one fiscal year's archive) into ``dest_dir`` unless a
-    copy downloaded today (UTC) is already there. Streams to a .part file, then renames.
-    Delete the file to force a fresh download."""
+    copy downloaded today (UTC) is already there. Streams to a .part file, then renames, and
+    writes a ``.meta.json`` sidecar holding what the server said about the file, so a cached
+    copy still knows when it was cut. Delete the file to force a fresh download."""
     name = ACTIVE_NAME if fiscal_year is None else archive_name(fiscal_year)
     dest = dest_dir / unquote(name).rsplit("/", 1)[-1]
     if dest.exists():
         modified = datetime.fromtimestamp(dest.stat().st_mtime, UTC).date()
         if modified == datetime.now(UTC).date():
-            return dest
+            return _read_meta(dest)
     dest_dir.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     client = http or httpx.Client(
@@ -140,6 +207,7 @@ def fetch_extract(
         ):
             if not response.is_success:
                 raise BulkError(f"{url}: HTTP {response.status_code}")
+            headers = response.headers
             report(f"downloading {dest.name}")
             received = 0
             for chunk in response.iter_bytes():
@@ -156,7 +224,8 @@ def fetch_extract(
         if http is None:
             client.close()
     os.replace(tmp, dest)
-    return dest
+    _write_meta(dest, url, headers)
+    return _read_meta(dest)
 
 
 def ingest_bulk(
@@ -166,14 +235,19 @@ def ingest_bulk(
     *,
     mark_inactive: bool = False,
     limit: int | None = None,
+    generated_at: str | None = None,
     report: Report = quiet,
     cancelled: Cancelled = never,
 ) -> BulkResult:
     """Stream one extract, writing rows in the NAICS slice in batches of ``BATCH``.
 
     ``limit`` caps matched rows this run. ``mark_inactive`` runs the deactivation pass after a
-    complete pass; the CLI sets it only for the active extract. The run is closed as failed
-    with the error on any exception; committed batches and their cursor stand.
+    complete pass; the CLI sets it only for the active extract. ``generated_at`` is when the
+    file was cut (``Extract.generated_at``), recorded on the run and the only thing the
+    deactivation pass will compare against: without it the pass cannot tell a notice that is
+    gone from one ingested after the cut, so it does not run and says so in ``active_pass``.
+    The run is closed as failed with the error on any exception; committed batches and their
+    cursor stand.
     """
     if not settings.naics:
         raise ValueError("no NAICS codes configured (ORRERY_NAICS)")
@@ -181,8 +255,13 @@ def ingest_bulk(
     key = _file_key(path, settings.naics)
     resumed_from = _resume_offset(conn, key)
     run_id = runs.start(conn, SOURCE_ID)
+    conn.execute(
+        "UPDATE ingestion_runs SET source_generated_at = ? WHERE run_id = ?",
+        (generated_at, run_id),
+    )
     now = db.utcnow()
     read = matched = new = updated = filled = versions = deactivated = 0
+    active_pass = ACTIVE_PASS_NOT_ASKED
     in_batch = 0
     position = resumed_from
     complete = True
@@ -225,9 +304,19 @@ def ingest_bulk(
                     complete = False
                     break
         commit_batch()
-        if complete and mark_inactive:
+        if not mark_inactive:
+            active_pass = ACTIVE_PASS_NOT_ASKED
+        elif not complete:
+            active_pass = ACTIVE_PASS_PARTIAL
+        elif generated_at is None:
+            active_pass = ACTIVE_PASS_NO_CUT
+            report(f"active pass {ACTIVE_PASS_NO_CUT}")
+        else:
+            active_pass = ACTIVE_PASS_DONE
             conn.execute("BEGIN")
-            deactivated = conn.execute(DEACTIVATE, (json.dumps(list(settings.naics)), key)).rowcount
+            deactivated = conn.execute(
+                DEACTIVATE, (json.dumps(list(settings.naics)), generated_at)
+            ).rowcount
             conn.execute("COMMIT")
     except Exception as exc:
         if conn.in_transaction:
@@ -242,8 +331,9 @@ def ingest_bulk(
         conn, run_id, status="succeeded", records_returned=matched, filter_json=tally.as_json()
     )
     return BulkResult(
-        run_id, read, matched, new, updated, filled, versions, deactivated, resumed_from
-    )
+        run_id, read, matched, new, updated, filled, versions, deactivated, resumed_from,
+        active_pass,
+    )  # fmt: skip
 
 
 def _ingest_row(conn: sqlite3.Connection, row: dict, now: str) -> tuple[bool, bool, bool]:

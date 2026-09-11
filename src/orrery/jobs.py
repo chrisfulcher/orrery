@@ -210,15 +210,16 @@ def _run_bulk(conn, settings, values, report, cancelled) -> object:
     archived, file = values.get("archived"), values.get("file")
     if archived is not None and file is not None:
         raise JobFailed("--archived and --file are mutually exclusive", exit_code=2)
-    path = (
-        Path(file)
+    extract = (
+        bulk.Extract(Path(file))
         if file
         else bulk.fetch_extract(settings.data_dir / "extracts", fiscal_year=archived, report=report)
     )
-    report(f"extract: {path}")
+    report(f"extract: {extract.path}")
     return bulk.ingest_bulk(
-        conn, settings, path, mark_inactive=(file is None and archived is None),
-        limit=values.get("limit"), report=report, cancelled=cancelled,
+        conn, settings, extract.path, mark_inactive=(file is None and archived is None),
+        limit=values.get("limit"), generated_at=extract.generated_at,
+        report=report, cancelled=cancelled,
     )  # fmt: skip
 
 
@@ -476,11 +477,16 @@ def summarize(job: Job, result: object) -> str:
             )
         case "ingest-bulk":
             resumed = f" (resumed at row {r.resumed_from})" if r.resumed_from else ""
+            inactive = (
+                f"{r.notices_deactivated} marked inactive"
+                if r.active_pass == bulk.ACTIVE_PASS_DONE
+                else f"active pass {r.active_pass}"
+            )
             return (
                 f"run {r.run_id}: {r.rows_read} rows read, {r.rows_matched} in slice,"
                 f" {r.notices_new} new, {r.notices_updated} updated,"
                 f" {r.descriptions_filled} descriptions filled, {r.versions_added} versions,"
-                f" {r.notices_deactivated} marked inactive{resumed}"
+                f" {inactive}{resumed}"
             )
         case "ingest-awards":
             resumed = f" (resumed at row {r.resumed_from})" if r.resumed_from else ""

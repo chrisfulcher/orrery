@@ -207,9 +207,16 @@ def test_summaries_match_the_cli() -> None:
     assert summarize(JOBS["ingest-notices"], IngestResult(3, 5, 2, 1, 20, 1)) == (
         "run 3: 5 notices seen, 2 new, 1 versions, 20 attachments, 1 requests"
     )
-    assert summarize(JOBS["ingest-bulk"], BulkResult(4, 100, 9, 9, 0, 3, 9, 2, 50)) == (
+    done = BulkResult(4, 100, 9, 9, 0, 3, 9, 2, 50, bulk.ACTIVE_PASS_DONE)
+    assert summarize(JOBS["ingest-bulk"], done) == (
         "run 4: 100 rows read, 9 in slice, 9 new, 0 updated, 3 descriptions filled, 9 versions,"
         " 2 marked inactive (resumed at row 50)"
+    )
+    # A pass that did not run never reports a count: 0 deactivated would read as "nothing to
+    # deactivate", which is the claim the pass is not entitled to make.
+    skipped = BulkResult(4, 100, 9, 9, 0, 3, 9, 0, 0, bulk.ACTIVE_PASS_NO_CUT)
+    assert summarize(JOBS["ingest-bulk"], skipped).endswith(
+        f"9 versions, active pass {bulk.ACTIVE_PASS_NO_CUT}"
     )
     assert summarize(JOBS["ingest-awards"], AwardsResult(5, 10, 10, 10, 0, 4, 9, 0, 0)) == (
         "run 5: 10 rows read, 10 in slice, 10 new, 0 updated, 4 contractors new, 9 offices and"
