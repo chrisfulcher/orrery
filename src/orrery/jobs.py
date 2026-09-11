@@ -120,6 +120,7 @@ PREFIXES = {
     "ingest-entities": "entities ingest stopped: ",
     "embed": "embedding stopped: ",
     "summarize": "summarize stopped: ",
+    "sync": "sync stopped: ",
 }
 
 
@@ -221,6 +222,82 @@ def _run_bulk(conn, settings, values, report, cancelled) -> object:
         limit=values.get("limit"), generated_at=extract.generated_at,
         report=report, cancelled=cancelled,
     )  # fmt: skip
+
+
+SYNC_AI_STAGES = ("summarize", "embed")
+"""The stages that reach a model. ``--no-ai`` drops exactly these, so an install with none
+configured still runs the loop that needs no model."""
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """What each stage of the standard loop did, in the order they ran.
+
+    A stage is None when it did not run, and ``skipped`` says which were dropped on purpose,
+    so a loop that did less than the whole is never read as a loop that found nothing to do.
+    The daily budget is not a failure: ``fetch.budget_exhausted`` reports it and the stages
+    after it, which spend no quota, run anyway.
+    """
+
+    ingest_bulk: object | None = None
+    fetch: object | None = None
+    extract: object | None = None
+    summarize: object | None = None
+    embed: object | None = None
+    skipped: tuple[str, ...] = ()
+
+
+def _run_sync(conn, settings, values, report, cancelled) -> object:
+    """Run the standard loop in order, one stage at a time on this connection.
+
+    Every stage is individually resumable and idempotent, so a sync that stops part way is
+    continued by the next one. A stage that fails stops the loop there: the stages before it
+    have committed their work, and the failure is the CLI's exit code rather than a line
+    buried in a summary.
+    """
+    limit = values.get("limit")
+    skipped = SYNC_AI_STAGES if values.get("no_ai") else ()
+    done: dict[str, object] = {}
+
+    report("sync: ingest bulk")
+    extract = bulk.fetch_extract(settings.data_dir / "extracts", report=report)
+    report(f"extract: {extract.path}")
+    done["ingest_bulk"] = bulk.ingest_bulk(
+        conn, settings, extract.path, mark_inactive=True, limit=limit,
+        generated_at=extract.generated_at, report=report, cancelled=cancelled,
+    )  # fmt: skip
+    check(cancelled)
+
+    report("sync: fetch")
+    fetched = queue.fetch_pending(
+        conn, settings, budget=limit, max_attachments=limit,
+        max_manifests=limit if limit is not None else MANIFESTS_PER_RUN,
+        report=report, cancelled=cancelled,
+    )  # fmt: skip
+    done["fetch"] = fetched
+    if fetched.budget_exhausted:
+        report("sync: today's SAM.gov budget is spent; descriptions resume tomorrow")
+    check(cancelled)
+
+    report("sync: extract")
+    done["extract"] = extract_pending(
+        conn, settings, limit=limit, report=report, cancelled=cancelled
+    )
+    check(cancelled)
+
+    if "summarize" not in skipped:
+        report("sync: summarize")
+        done["summarize"] = summaries.summarize_pending(
+            conn, settings, slot="fast", limit=limit, report=report, cancelled=cancelled
+        )
+        check(cancelled)
+    if "embed" not in skipped:
+        report("sync: embed")
+        done["embed"] = embed_pending(
+            conn, settings, limit=limit, report=report, cancelled=cancelled
+        )
+
+    return SyncResult(**done, skipped=skipped)
 
 
 def _run_awards(conn, settings, values, report, cancelled) -> object:
@@ -446,6 +523,12 @@ JOBS: dict[str, Job] = {
             True, _run_summarize,
         ),
         Job(
+            "sync", "Run the standard loop", frozenset({"naics"}),
+            (Param("no_ai", "Skip the model stages", "bool", default=False),
+             Param("limit", "Per-stage limit", "int")),
+            True, _run_sync,
+        ),
+        Job(
             "assess", "Assess a pursuit", frozenset(),
             (Param("pursuit_id", "Pursuit id", "int", required=True),
              Param("slot", "Model slot", "choice", default="deep", choices=("deep", "fast"))),
@@ -525,6 +608,20 @@ def summarize(job: Job, result: object) -> str:
             )
         case "summarize":
             return f"{r.summarized} notices summarized, {r.failed} invalid, with {r.model}"
+        case "sync":
+            # Each stage says what it did in its own words, so the loop has no second
+            # vocabulary to keep in step with the commands it runs.
+            lines = [
+                f"{stage}: {summarize(JOBS[stage], result)}"
+                for stage, result in (
+                    ("ingest-bulk", r.ingest_bulk), ("fetch", r.fetch), ("extract", r.extract),
+                    ("summarize", r.summarize), ("embed", r.embed),
+                )
+                if result is not None
+            ]  # fmt: skip
+            if r.skipped:
+                lines.append(f"skipped: {', '.join(r.skipped)}")
+            return "\n".join(lines)
         case "assess":
             return "\n".join(assess.describe(r))
         case "db-migrate":

@@ -52,6 +52,7 @@ MILESTONES = {
     "ingest-awards": ("awards: ", "NAICS "),
     "ingest-entities": ("extract: ", "NAICS "),
     "assess": ("",),
+    "sync": ("sync: ", "extract: ", "NAICS "),
 }
 """The report lines each command has always printed to stderr; the rest is progress the
 app's log shows. ``NAICS `` carries what the slice did and did not take, which is the
@@ -189,6 +190,22 @@ def summarize(
     """Summarize and tag fetched notice descriptions with the configured model; stored with
     provenance. Spends no quota."""
     _run_job("summarize", {"limit": limit, "slot": slot}, json_output)
+
+
+@app.command()
+def sync(
+    no_ai: Annotated[
+        bool,
+        typer.Option("--no-ai", help="Skip summarize and embed, the stages that reach a model."),
+    ] = False,
+    limit: Annotated[
+        int | None, typer.Option(help="Cap each stage's unit of work; blank runs each to the end.")
+    ] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Bring the store up to date: ingest bulk, fetch, extract, summarize, embed, in that
+    order. Every stage is resumable, so a run that stops part way is continued by the next."""
+    _run_job("sync", {"no_ai": no_ai, "limit": limit}, json_output)
 
 
 NaicsOption = Annotated[str | None, typer.Option("--naics", help="NAICS codes, comma-separated.")]

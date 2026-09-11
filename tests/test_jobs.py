@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from orrery import jobs
+from orrery import jobs, summaries
 from orrery.config import Settings
 from orrery.embed.pipeline import EmbedResult
 from orrery.extract.text import ExtractResult
+from orrery.fetch import queue
 from orrery.fetch.queue import FetchResult
 from orrery.ingest import awards, bulk, entities, notices
 from orrery.ingest.awards import AwardsResult
@@ -24,12 +25,13 @@ from orrery.jobs import (
 )
 from orrery.progress import JobCancelled
 from orrery.sam.client import SamError
+from orrery.summaries import SummarizeResult
 
 
 def test_registry_lists_the_operations_with_their_needs() -> None:
     assert list(OPERATIONS) == [
         "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities", "fetch",
-        "extract", "embed", "summarize", "assess", "db-migrate", "db-reindex",
+        "extract", "embed", "summarize", "sync", "assess", "db-migrate", "db-reindex",
     ]  # fmt: skip
     assert [n for n in JOBS if n not in OPERATIONS] == [
         "probe-sam", "probe-embed", "probe-fast", "probe-deep"
@@ -133,6 +135,95 @@ def test_run_plumbs_parameters_and_callbacks(
     assert lines == [f"extract: {tmp_path / 'x.csv'}"]
     with pytest.raises(JobFailed, match="mutually exclusive"):
         jobs.run(JOBS["ingest-bulk"], conn, settings, {"file": "x", "archived": "2025"})
+
+
+def _stub_sync_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **overrides) -> list[str]:
+    """Stand in for all five stages, recording the order they ran in."""
+    order: list[str] = []
+    results = {
+        "ingest_bulk": BulkResult(1, 10, 3, 3, 0, 0, 3, 0, 0, bulk.ACTIVE_PASS_DONE),
+        "fetch": FetchResult(2, 4, 0, 4, 0, 9, 9, 0, 0, 4, False),
+        "extract": ExtractResult(9, 0, 0),
+        "summarize": SummarizeResult(3, 0, "qwen3:14b"),
+        "embed": EmbedResult(3, 9, 40, "nomic-embed-text"),
+    } | overrides
+
+    def stage(name):
+        def run(*args, **kwargs):
+            order.append(name)
+            return results[name]
+
+        return run
+
+    monkeypatch.setattr(
+        bulk,
+        "fetch_extract",
+        lambda *a, **k: bulk.Extract(tmp_path / "x.csv", "2026-09-08T00:00:00Z"),
+    )
+    monkeypatch.setattr(bulk, "ingest_bulk", stage("ingest_bulk"))
+    monkeypatch.setattr(queue, "fetch_pending", stage("fetch"))
+    monkeypatch.setattr(jobs, "extract_pending", stage("extract"))
+    monkeypatch.setattr(summaries, "summarize_pending", stage("summarize"))
+    monkeypatch.setattr(jobs, "embed_pending", stage("embed"))
+    return order
+
+
+def test_sync_runs_every_stage_in_order(
+    conn, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    order = _stub_sync_stages(monkeypatch, tmp_path)
+    lines: list[str] = []
+
+    result = jobs.run(JOBS["sync"], conn, settings, {}, report=lines.append)
+
+    assert order == ["ingest_bulk", "fetch", "extract", "summarize", "embed"]
+    assert result.skipped == ()
+    assert result.extract.done == 9 and result.embed.chunks == 40
+    # Each stage announces itself, so a long run says where it is.
+    assert [line for line in lines if line.startswith("sync: ")] == [
+        "sync: ingest bulk", "sync: fetch", "sync: extract", "sync: summarize", "sync: embed",
+    ]  # fmt: skip
+
+
+def test_sync_without_ai_skips_exactly_the_model_stages(
+    conn, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    order = _stub_sync_stages(monkeypatch, tmp_path)
+
+    result = jobs.run(JOBS["sync"], conn, settings, {"no_ai": "yes"}, report=lambda _: None)
+
+    assert order == ["ingest_bulk", "fetch", "extract"]
+    assert result.skipped == ("summarize", "embed")
+    assert result.summarize is None and result.embed is None
+
+
+def test_sync_reports_a_spent_budget_and_keeps_going(
+    conn, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The budget is not a failure: the stages after fetch spend no quota and still run."""
+    spent = FetchResult(2, 0, 0, 0, 0, 0, 0, 0, 0, 10, True)
+    order = _stub_sync_stages(monkeypatch, tmp_path, fetch=spent)
+    lines: list[str] = []
+
+    result = jobs.run(JOBS["sync"], conn, settings, {}, report=lines.append)
+
+    assert order == ["ingest_bulk", "fetch", "extract", "summarize", "embed"]
+    assert result.fetch.budget_exhausted is True
+    assert "sync: today's SAM.gov budget is spent; descriptions resume tomorrow" in lines
+
+
+def test_sync_stops_at_the_first_failing_stage(
+    conn, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    order = _stub_sync_stages(monkeypatch, tmp_path)
+
+    def boom(*args, **kwargs):
+        raise SamError("HTTP 500")
+
+    monkeypatch.setattr(queue, "fetch_pending", boom)
+    with pytest.raises(JobFailed, match="sync stopped: HTTP 500"):
+        jobs.run(JOBS["sync"], conn, settings, {})
+    assert order == ["ingest_bulk"]
 
 
 def test_run_maps_adapter_errors_to_job_failed(

@@ -456,6 +456,41 @@ def test_ingest_bulk_command(
     assert result.exit_code == 1 and "bulk ingest stopped" in result.output
 
 
+def test_sync_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env = {**FETCH_ENV, "ORRERY_DATA_DIR": str(tmp_path)}
+    assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
+    httpx_mock.add_response(
+        url=EXTRACT_URL.format(name=ACTIVE_NAME),
+        content=make_extract([{}]),
+        headers={"Last-Modified": "Tue, 08 Sep 2026 09:14:00 GMT"},
+    )
+    # A bulk row carries its description already, so the keyed stage has nothing to ask for;
+    # the manifest probe that follows is unkeyed. --no-ai then leaves a loop that needs
+    # neither a model nor a request against the budget.
+    httpx_mock.add_response(
+        url=re.compile(r".*/opportunities/[0-9a-f]+/resources"),
+        json={"_links": {}},
+        is_reusable=True,
+    )
+    result = runner.invoke(app, ["sync", "--no-ai"], env=env)
+
+    assert result.exit_code == 0, result.output
+    assert "ingest-bulk: run 1:" in result.output and "1 marked inactive" not in result.output
+    assert "extract: 0 extracted" in result.output
+    assert "skipped: summarize, embed" in result.output
+
+    result = runner.invoke(app, ["sync", "--no-ai", "--json"], env=env)
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert set(payload) == {"ingest_bulk", "fetch", "extract", "summarize", "embed", "skipped"}
+    assert payload["summarize"] is None and payload["skipped"] == ["summarize", "embed"]
+    assert payload["ingest_bulk"]["active_pass"] == "done"
+
+    assert runner.invoke(app, ["sync"], env={**env, "ORRERY_NAICS": ""}).exit_code == 2
+
+
 def test_workspace_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
 ) -> None:

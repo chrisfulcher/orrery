@@ -152,6 +152,14 @@ docker compose run --rm orrery quota
 
 The container runs as uid 1000. If your user has a different uid, run `sudo chown 1000 data .env` once, or add `--user "$(id -u):$(id -g)"` to each `run`. The `data` directory is the whole store (`orrery.sqlite` plus `attachments/`), and the same directory works from source and from the container. `.env` is bind-mounted rather than injected as environment variables so the app can write it; `ORRERY_DATA_DIR` is the one real environment variable in the container, and the app shows it locked. An Ollama running on the host is reachable from the container as `host.docker.internal`; set `ORRERY_EMBED_BASE_URL=http://host.docker.internal:11434/v1` in `.env`.
 
+`orrery sync` runs the whole loop in order — `ingest bulk`, `fetch`, `extract`,
+`summarize`, `embed` — and is the one command to put in a cron entry or press
+in the Jobs tab. Every stage is resumable and idempotent, so a run interrupted
+part way is continued by the next one, and a stage with nothing to do costs
+nothing. It stops nothing when today's SAM.gov budget is spent: the stages that
+follow the keyed one need no key, so they run, and descriptions resume tomorrow.
+`--no-ai` drops `summarize` and `embed`, the two stages that reach a model.
+
 The three ingest commands, and what each costs against the SAM.gov quota:
 
 | Command | Source | Quota |

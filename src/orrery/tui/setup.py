@@ -533,6 +533,7 @@ JOB_SOURCES = {
     "ingest-awards": "usaspending_awards",
     "ingest-entities": "sam_entities",
     "fetch": "sam_opportunities_api",
+    "sync": "sam_bulk_csv",
 }
 
 
