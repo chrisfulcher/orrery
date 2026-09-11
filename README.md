@@ -14,7 +14,8 @@ at all (see [Before you start](#before-you-start)).
 
 **Working now**
 
-- **Ingest** — a NAICS slice of SAM.gov notices, from the daily bulk extract or
+- **Ingest** — a NAICS slice of SAM.gov notices (codes you list, matched by
+  prefix, so `5415` takes the whole industry group), from the daily bulk extract or
   the API, with their attachments; three years of USAspending award history;
   and SAM.gov entity registrations.
 - **Search** — full text across notice descriptions and the text extracted from
@@ -72,7 +73,7 @@ The ambition is larger than a better search over solicitations. orrery is built 
 
 ## What v1 will do
 
-SAM.gov already offers keyword search and email alerts over notice metadata. What it cannot do is search inside the attached solicitation documents, where the statements of work, Section L/M instructions, and amendments live. v1 does exactly that for a NAICS and agency slice you choose, within the SAM.gov API quota: ingest notices, fetch and extract their attachments, and offer full-text and semantic search across all of it. On top of that: saved searches, an opportunity pipeline with PWin history, your company profile, a full-screen terminal UI that also runs in a browser tab, and an MCP server so any AI agent can work over the store. The terminal UI is the primary interface, in the idiom of system monitors like btop. Every command also prints JSON, and the database exposes stable read-only views, so your own dashboards are a first-class way to use it; Datasette over the database file gives a point-and-click browser for free.
+SAM.gov already offers keyword search and email alerts over notice metadata. What it cannot do is search inside the attached solicitation documents, where the statements of work, Section L/M instructions, and amendments live. v1 does exactly that for a NAICS slice you choose — the codes you list, matched by prefix against the code the government put on the notice — within the SAM.gov API quota: ingest notices, fetch and extract their attachments, and offer full-text and semantic search across all of it. On top of that: saved searches, an opportunity pipeline with PWin history, your company profile, a full-screen terminal UI that also runs in a browser tab, and an MCP server so any AI agent can work over the store. The terminal UI is the primary interface, in the idiom of system monitors like btop. Every command also prints JSON, and the database exposes stable read-only views, so your own dashboards are a first-class way to use it; Datasette over the database file gives a point-and-click browser for free.
 
 v1 deliberately does not include a hosted service, accounts, telemetry, third-party plugins, a bespoke web UI, a wholesale mirror of SAM.gov, or enrichment sources beyond SAM.gov. The graph tables exist from the first migration; the adapters that fill them from other sources come after.
 
@@ -164,8 +165,8 @@ The three ingest commands, and what each costs against the SAM.gov quota:
 
 | Command | Source | Quota |
 |---|---|---|
-| `orrery ingest bulk` | The daily SAM.gov extract, downloaded once per day into `data/extracts/`, keeping only your NAICS codes and filling in descriptions the API has not fetched. `--archived 2025` ingests a fiscal year's archive for history. | None |
-| `orrery ingest awards` | Every USAspending contract action in your NAICS codes over the last three years (`--since` and `--until` change the window). Waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. | None |
+| `orrery ingest bulk` | The daily SAM.gov extract, downloaded once per day into `data/extracts/`, keeping only notices whose NAICS code begins with one of yours and filling in descriptions the API has not fetched. `--archived 2025` ingests a fiscal year's archive for history. | None |
+| `orrery ingest awards` | Every USAspending contract action under your NAICS codes, matched by prefix there too, over the last three years (`--since` and `--until` change the window). Waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. | None |
 | `orrery ingest entities` | SAM.gov's public monthly entity extract — one keyed request for every registrant in the country, about 150 MB — into `data/extracts/sam/`. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. | Counts against the daily budget |
 
 Vendors become contractor entities keyed by UEI. Awards resolve to offices
