@@ -9,6 +9,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Literal
 
 from orrery import db, naics
 from orrery.config import Settings
@@ -115,16 +116,23 @@ ORDER BY rank, n.posted_at DESC
 LIMIT :limit
 """
 
-LIST_NOTICES = f"""
+_LIST_NOTICES = f"""
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
        'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank,
        n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
 FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
 LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
 WHERE 1 = 1 {FILTERS}
-ORDER BY n.response_deadline IS NULL, n.response_deadline, n.posted_at DESC, n.id
+ORDER BY {{order}}
 LIMIT :limit
 """
+
+# Soonest deadline first is what a deadline window wants; a "recent notices" panel wants the
+# newest, and undated notices -- sources-sought, special notices -- are not last there.
+ORDERINGS = {
+    "deadline": "n.response_deadline IS NULL, n.response_deadline, n.posted_at DESC, n.id",
+    "posted": "n.posted_at DESC, n.id DESC",
+}
 
 
 SEMANTIC_SEARCH = """
@@ -199,9 +207,17 @@ def search(
     return [_hit(row, " ".join(row[6].split())) for row in rows]
 
 
-def list_notices(conn: sqlite3.Connection, filters: Filters, *, limit: int = 50) -> list[SearchHit]:
-    """Notices passing the filters, soonest deadline first; no text ranking (rank is 0)."""
-    rows = conn.execute(LIST_NOTICES, {"limit": limit, **filters.params()}).fetchall()
+def list_notices(
+    conn: sqlite3.Connection,
+    filters: Filters,
+    *,
+    limit: int = 50,
+    order: Literal["deadline", "posted"] = "deadline",
+) -> list[SearchHit]:
+    """Notices passing the filters; no text ranking (rank is 0). ``order`` is soonest
+    deadline first, or newest posted first."""
+    sql = _LIST_NOTICES.format(order=ORDERINGS[order])
+    rows = conn.execute(sql, {"limit": limit, **filters.params()}).fetchall()
     return [_hit(row, _snippet(row[6])) for row in rows]
 
 
@@ -549,7 +565,11 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     )
     chain = _chain(conn, entity_id)
     parent = chain[-2] if len(chain) > 1 else None
-    hits = list_notices(conn, Filters(agency_prefixes=(row[3],)), limit=recent) if row[3] else []
+    hits = (
+        list_notices(conn, Filters(agency_prefixes=(row[3],)), limit=recent, order="posted")
+        if row[3]
+        else []
+    )
     return EntityDetail(
         row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits),
         row[7], row[8], tuple(won_or_made), awards_count, awards_value, facts,

@@ -242,6 +242,37 @@ def test_entity_detail(conn: sqlite3.Connection, seed: Seed) -> None:
     assert query.entity(conn, 999) is None
 
 
+def test_entity_recent_notices_are_the_newest_posted(conn: sqlite3.Connection, seed: Seed) -> None:
+    """The panel says recent. Deadline order -- right for upcoming() -- would lead with the
+    longest-expired notice and hide an undated one (sources-sought, special notices) behind
+    every dated one."""
+    seed()
+    (leaf_id,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075.7526.75R602'"
+    ).fetchone()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
+    conn.execute(
+        "UPDATE notices SET posted_at = '2024-01-02', response_deadline = '2024-02-01'"
+        " WHERE notice_id = ?",
+        (hrsa,),
+    )
+    conn.execute(
+        "INSERT INTO notices (notice_id, title, full_parent_path_code, agency_entity_id,"
+        " posted_at, response_deadline, active, first_seen_at, last_seen_at, source_id,"
+        " description_status, raw_json) VALUES ('NEW-1', 'Sources sought',"
+        " '075.7526.75R602', ?, '2026-09-11', NULL, 1, '2026-09-11T00:00:00Z',"
+        " '2026-09-11T00:00:00Z', (SELECT source_id FROM notices WHERE notice_id = ?),"
+        " 'none', '{}')",
+        (leaf_id, hrsa),
+    )
+
+    leaf = query.entity(conn, leaf_id, recent=2)
+
+    assert leaf is not None
+    assert [hit.notice_id for hit in leaf.recent][0] == "NEW-1"
+    assert hrsa in [hit.notice_id for hit in leaf.recent]
+
+
 def test_activity_and_quota_series(
     conn: sqlite3.Connection, seed: Seed, run_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
