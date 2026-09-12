@@ -13,11 +13,13 @@ from pytest_httpx import HTTPXMock, IteratorStream
 from orrery.config import Settings
 from orrery.quota import BudgetExceeded
 from orrery.sam.client import (
+    NAME_BUDGET,
     AttachmentTooLarge,
     ManifestShapeError,
     NoticeUnknown,
     SamClient,
     SamError,
+    StoreFailed,
     _filename_from,
 )
 
@@ -167,6 +169,55 @@ def test_download_failure_leaves_no_file(
     assert list(dest.iterdir()) == []
 
 
+def test_download_bounds_an_overlong_upstream_filename(
+    httpx_mock: HTTPXMock, client: SamClient, tmp_path: Path
+) -> None:
+    """A name longer than NAME_MAX would make os.replace raise OSError -- outside SamError,
+    so the queue would not record an outcome and the run would die with a stray .part."""
+    content = b"%PDF-1.4 hello"
+    httpx_mock.add_response(
+        url=DOWNLOAD_URL,
+        content=content,
+        headers={"Content-Disposition": f'attachment; filename="{"x" * 400}.pdf"'},
+    )
+    dest = tmp_path / "attachments"
+
+    result = client.download(DOWNLOAD_URL, dest)
+
+    assert len(result.filename.encode()) <= NAME_BUDGET
+    assert result.filename.endswith(".pdf")
+    assert len(result.path.name.encode()) <= 255
+    assert result.path.read_bytes() == content
+    assert list(dest.glob("*.part")) == []
+
+
+def test_download_store_failure_is_a_sam_error_and_leaves_no_part(
+    httpx_mock: HTTPXMock, client: SamClient, tmp_path: Path
+) -> None:
+    """A data directory that cannot be written reaches the queue as a SamError of kind
+    'store', so the row records why instead of the run dying with a bare OSError."""
+    httpx_mock.add_response(
+        url=DOWNLOAD_URL,
+        content=b"data",
+        headers={"Content-Disposition": "attachment; filename=a.pdf"},
+    )
+    dest = tmp_path / "attachments"
+    dest.mkdir()
+    (dest / "sub").mkdir()
+
+    def fail(src: str, dst: str) -> None:
+        raise OSError(36, "File name too long")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("orrery.sam.client.os.replace", fail)
+        with pytest.raises(StoreFailed) as raised:
+            client.download(DOWNLOAD_URL, dest)
+
+    assert raised.value.kind == "store"
+    assert isinstance(raised.value, SamError)
+    assert list(dest.glob("*.part")) == []
+
+
 def test_keyed_calls_are_refused_without_a_key(
     settings: Settings, conn: sqlite3.Connection, run_id: int
 ) -> None:
@@ -206,6 +257,9 @@ def test_attachments_download_without_a_key(
         ("attachment; filename=../../.hidden", "hidden"),
         ("inline", "attachment"),
         (None, "attachment"),
+        # Bounded, extension kept, and never cut through a multi-byte character.
+        (f'attachment; filename="{"x" * 400}.pdf"', "x" * (NAME_BUDGET - 4) + ".pdf"),
+        (f'attachment; filename="{"é" * 200}.pdf"', "é" * ((NAME_BUDGET - 4) // 2) + ".pdf"),
     ],
 )
 def test_filename_from_content_disposition(header: str | None, expected: str) -> None:

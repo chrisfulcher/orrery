@@ -38,6 +38,8 @@ MANIFEST_ACCEPT = "application/hal+json"  # a plain Accept header is answered wi
 FILE_PATH = "/api/prod/opps/v3/opportunities/resources/files/{resource_id}/download"
 ENTITIES_PER_REQUEST = 10  # the v3 page size cap
 MAX_WINDOW = timedelta(days=365)
+NAME_MAX = 255  # bytes, every filesystem orrery supports
+NAME_BUDGET = NAME_MAX - 17  # room for the "<sha256[:16]>-" prefix the store path adds
 DATE_FORMAT = "%m/%d/%Y"
 
 
@@ -105,6 +107,15 @@ class ManifestShapeError(SamError):
     stage on the first one rather than writing rows it does not understand."""
 
     kind = "shape"
+
+
+class StoreFailed(SamError):
+    """The bytes arrived but could not be put at their final path -- a name the filesystem
+    will not take, a full or read-only data directory. A local problem, not SAM.gov's, but
+    it reaches the queue as a SamError so the row records an outcome instead of the run
+    dying with a bare OSError."""
+
+    kind = "store"
 
 
 @dataclass(frozen=True)
@@ -266,7 +277,9 @@ class SamClient:
         location = httpx.URL(response.headers["location"])
         if "api_key" in location.params or self._key.get_secret_value() in str(location):
             raise SamError("refusing to follow a redirect that carries the API key")
-        path = dest_dir / (Path(unquote_plus(location.path)).name or "SAM_PUBLIC_MONTHLY.ZIP")
+        path = dest_dir / _bounded(
+            Path(unquote_plus(location.path)).name or "SAM_PUBLIC_MONTHLY.ZIP", NAME_MAX - 5
+        )  # room for the ".part" the download writes first
         tmp = path.with_name(path.name + ".part")
         try:
             with (
@@ -280,14 +293,16 @@ class SamClient:
                     )
                 for chunk in stream.iter_bytes():
                     out.write(chunk)
+            os.replace(tmp, path)
         except BaseException as exc:
             tmp.unlink(missing_ok=True)
             if isinstance(exc, httpx.HTTPError):
                 raise SamError(
                     f"{location.host}: {type(exc).__name__}: {exc}", kind="transport"
                 ) from exc
+            if isinstance(exc, OSError):
+                raise StoreFailed(f"{location.host}: {type(exc).__name__}: {exc}") from exc
             raise
-        os.replace(tmp, path)
         return path
 
     def download(self, url: str, dest_dir: Path) -> DownloadResult:
@@ -322,14 +337,16 @@ class SamClient:
                     size += len(chunk)
                     if size > limit:
                         raise AttachmentTooLarge(f"{url}: exceeds {limit} bytes")
+            sha256 = digest.hexdigest()
+            path = dest_dir / f"{sha256[:16]}-{filename}"
+            os.replace(tmp, path)
         except BaseException as exc:
             Path(tmp).unlink(missing_ok=True)
             if isinstance(exc, httpx.HTTPError):
                 raise SamError(f"{url}: {type(exc).__name__}: {exc}", kind="transport") from exc
+            if isinstance(exc, OSError):
+                raise StoreFailed(f"{url}: {type(exc).__name__}: {exc}") from exc
             raise
-        sha256 = digest.hexdigest()
-        path = dest_dir / f"{sha256[:16]}-{filename}"
-        os.replace(tmp, path)
         return DownloadResult(path=path, filename=filename, sha256=sha256, size=size)
 
     def attachment_url(self, resource_id: str) -> str:
@@ -445,10 +462,26 @@ def _manifest_item(raw: object, url: str) -> ManifestItem:
     )
 
 
-def _filename_from(content_disposition: str | None) -> str:
-    """Filename from a Content-Disposition header, form-decoded, with no path component."""
+def _filename_from(content_disposition: str | None, *, budget: int = NAME_BUDGET) -> str:
+    """Filename from a Content-Disposition header, form-decoded, with no path component and
+    bounded to ``budget`` bytes so the stored name fits what the filesystem will take."""
     message = Message()
     message["Content-Disposition"] = content_disposition or ""
     raw = message.get_filename()
     name = Path(unquote_plus(raw)).name.lstrip(".") if raw else ""
-    return name or "attachment"
+    return _bounded(name or "attachment", budget)
+
+
+def _bounded(name: str, budget: int) -> str:
+    """``name`` shortened to at most ``budget`` bytes, keeping the extension and never
+    cutting a character in half. Upstream names run to hundreds of bytes and the store path
+    prefixes a hash; NAME_MAX is what os.replace refuses past."""
+    if len(name.encode()) <= budget:
+        return name
+    stem, dot, suffix = name.rpartition(".")
+    if not dot or len(suffix.encode()) > 16:  # not an extension, just a dotted name
+        stem, suffix = name, ""
+    tail = f".{suffix}" if suffix else ""
+    room = budget - len(tail.encode())
+    cut = stem.encode()[:room].decode(errors="ignore")
+    return f"{cut}{tail}" or "attachment"
