@@ -87,6 +87,10 @@ ON CONFLICT(notice_id) DO UPDATE SET
     last_seen_at = excluded.last_seen_at,
     description = excluded.description,
     description_status = excluded.description_status,
+    -- A stage that succeeds clears the reason it recorded (DESIGN.md §8); the fill path
+    -- below does the same, and a reason must not outlive the failure it describes.
+    description_failure_kind = NULL,
+    description_failure_detail = NULL,
     source_id = excluded.source_id,
     raw_json = excluded.raw_json
 """
@@ -350,7 +354,8 @@ def _ingest_row(conn: sqlite3.Connection, row: dict, now: str) -> tuple[bool, bo
         if fill:
             conn.execute(
                 "UPDATE notices SET last_seen_at = ?, active = ?, description = ?,"
-                " description_status = 'fetched' WHERE notice_id = ?",
+                " description_status = 'fetched', description_failure_kind = NULL,"
+                " description_failure_detail = NULL WHERE notice_id = ?",
                 (now, active, description, notice_id),
             )
         else:

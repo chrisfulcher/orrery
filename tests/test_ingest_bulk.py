@@ -83,7 +83,9 @@ def test_api_row_is_confirmed_and_filled_not_overwritten(
     ).fetchone()
     entities = count(conn, "SELECT count(*) FROM entities")
     conn.execute(
-        "UPDATE notices SET description_status = 'failed' WHERE notice_id = ?", (HRSA["noticeId"],)
+        "UPDATE notices SET description_status = 'failed', description_failure_kind ="
+        " 'server_error', description_failure_detail = 'HTTP 503' WHERE notice_id = ?",
+        (HRSA["noticeId"],),
     )
     path = write(tmp_path, [{"NoticeId": HRSA["noticeId"], "Title": "Renamed", "Active": "No"}])
 
@@ -93,11 +95,14 @@ def test_api_row_is_confirmed_and_filled_not_overwritten(
     assert result.versions_added == 0
     after = conn.execute(
         "SELECT title, full_parent_path_code, agency_entity_id, source_id, first_seen_at,"
-        " description, description_status, active FROM notices WHERE notice_id = ?",
+        " description, description_status, active, description_failure_kind,"
+        " description_failure_detail FROM notices WHERE notice_id = ?",
         (HRSA["noticeId"],),
     ).fetchone()
     assert after[:5] == before
-    assert after[5:] == ("Section L – instructions\nline two", "fetched", 0)
+    assert after[5:8] == ("Section L – instructions\nline two", "fetched", 0)
+    # A stage that succeeds clears the reason it recorded; a fill is that stage succeeding.
+    assert after[8:] == (None, None)
     assert count(conn, "SELECT count(*) FROM entities") == entities
     assert (
         count(conn, "SELECT count(*) FROM notice_versions WHERE notice_id = ?", HRSA["noticeId"])
@@ -142,6 +147,26 @@ def test_bulk_rerun_versions_only_on_change(
     assert conn.execute("SELECT response_deadline FROM notices").fetchone() == (
         "2026-09-20T19:00:00Z",
     )
+
+
+def test_a_rewrite_clears_a_recorded_description_failure(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> None:
+    """The upsert path clears the reason too, not just the API-row fill: a row that reads
+    'fetched' must not still carry why an earlier fetch failed (0017, DESIGN.md §8)."""
+    ingest_bulk(conn, settings, write(tmp_path, [{"NoticeId": "c" * 32}], "one.csv"))
+    conn.execute(
+        "UPDATE notices SET description_status = 'failed', description_failure_kind = 'gone',"
+        " description_failure_detail = 'HTTP 404'"
+    )
+    amended = [{"NoticeId": "c" * 32, "ResponseDeadLine": "2026-09-20T15:00:00-04:00"}]
+
+    ingest_bulk(conn, settings, write(tmp_path, amended, "two.csv"))
+
+    assert conn.execute(
+        "SELECT description_status, description_failure_kind, description_failure_detail"
+        " FROM notices"
+    ).fetchone() == ("fetched", None, None)
 
 
 def test_entity_resolution_agrees_with_the_api(
