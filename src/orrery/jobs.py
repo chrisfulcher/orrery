@@ -134,6 +134,8 @@ def coerce(job: Job, params: dict) -> dict:
     values: dict = {}
     for param in job.params:
         raw = params.get(param.name, param.default)
+        if raw in (None, ""):  # a form field cleared to "" still takes the default
+            raw = param.default
         if raw in (None, ""):
             if param.required:
                 raise JobFailed(f"{param.label} is required", exit_code=2)

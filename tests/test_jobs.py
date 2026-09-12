@@ -16,6 +16,7 @@ from orrery.ingest.entities import EntitiesResult
 from orrery.ingest.notices import IngestResult
 from orrery.jobs import (
     JOBS,
+    MANIFESTS_PER_RUN,
     OPERATIONS,
     JobFailed,
     coerce,
@@ -84,6 +85,18 @@ def test_coerce_parses_form_strings_and_reports_usage_errors() -> None:
         coerce(JOBS["assess"], {"pursuit_id": 1, "slot": "medium"})
     with pytest.raises(JobFailed, match="Attachment limit"):
         coerce(JOBS["extract"], {"limit": "many"})
+
+
+def test_a_cleared_field_still_takes_the_declared_default() -> None:
+    """The CLI passes every parameter, so a None or "" would otherwise outrank the default:
+    fetch's manifest cap became LIMIT -1 and swept the whole backlog."""
+    assert coerce(JOBS["fetch"], {"budget": None, "max_attachments": None})["max_manifests"] == (
+        MANIFESTS_PER_RUN
+    )
+    assert coerce(JOBS["fetch"], {"max_manifests": ""})["max_manifests"] == MANIFESTS_PER_RUN
+    assert coerce(JOBS["fetch"], {"max_manifests": 5})["max_manifests"] == 5
+    assert coerce(JOBS["summarize"], {"slot": ""})["slot"] == "fast"
+    assert coerce(JOBS["extract"], {"limit": None})["limit"] is None
 
 
 def test_default_windows() -> None:
