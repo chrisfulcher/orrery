@@ -10,6 +10,7 @@ versioned: every save is a new version and old versions are never touched.
 import json
 import sqlite3
 from dataclasses import dataclass, replace
+from datetime import date
 from enum import StrEnum
 
 from orrery import db, documents, query
@@ -17,6 +18,21 @@ from orrery.documents import ProfileDocument, SearchDocument, WorkflowDocument
 
 USER_ID = 1  # v1 single-user: the seeded 'local' row
 STAGES = ("watching", "pursuing", "bid", "no-bid", "submitted", "won", "lost")
+
+
+def _day(value: str | None, label: str) -> str | None:
+    """A YYYY-MM-DD date column, validated here rather than at each call site. Every date
+    the user gives is compared lexicographically against ISO strings, so anything else --
+    'next month', '10/01/2026' -- would store cleanly and then sort out of every window."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise ValueError(f"{label} must be a date as YYYY-MM-DD, not {text!r}") from None
 
 
 class Stage(StrEnum):
@@ -784,6 +800,7 @@ def gate(
         elif decision == "hold":
             if not until:
                 raise ValueError("a hold needs a revisit date (--until YYYY-MM-DD)")
+            until = _day(until, "a hold date")
             _event(conn, pursuit_id, user_id, now, "gate", spec.gate, "hold", why)
             _event(conn, pursuit_id, user_id, now, "hold", row.held_until, until, why)
             conn.execute(
@@ -890,6 +907,7 @@ def add_task(
         raise ValueError("a task needs a title")
     if precedence is not None and precedence not in PRECEDENCE:
         raise ValueError(f"precedence must be one of {', '.join(PRECEDENCE)}")
+    due = _day(due, "a due date")
     if stage is not None and kind != "pursuit":
         raise ValueError("only a task about a pursuit belongs to a workflow stage")
     now = db.utcnow()
@@ -938,9 +956,10 @@ def tasks(
             params.append(str(subject_id))
     if open_only:
         where.append("done_at IS NULL")
-    if due_before is not None:
+    cutoff = _day(due_before, "a due-before date")
+    if cutoff is not None:
         where.append("due IS NOT NULL AND due <= ?")
-        params.append(due_before)
+        params.append(cutoff)
     rows = conn.execute(
         f"SELECT {_TASK_COLUMNS} FROM tasks WHERE {' AND '.join(where)}"
         " ORDER BY done_at IS NOT NULL, due IS NULL, due,"

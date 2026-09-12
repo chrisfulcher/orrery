@@ -330,6 +330,26 @@ def test_gate_and_outcome_rules(conn: sqlite3.Connection) -> None:
         workspace.save_workflow(conn, '[[stages]]\nkey = "find"\nname = "Find"\n')
 
 
+def test_dates_are_validated_where_the_column_is_written(conn: sqlite3.Connection) -> None:
+    """Every date the user gives is compared lexicographically against ISO strings, so a
+    'next month' hold would never come due and an 'Oct 1' task would fall out of every
+    window. The workspace layer parses, not the four call sites."""
+    p = workspace.new_pursuit(conn, "Dates")
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        workspace.gate(conn, p.pursuit_id, "hold", "waiting", until="next month")
+    held = workspace.gate(conn, p.pursuit_id, "hold", "waiting", until="2026-10-01")
+    assert held.held_until == "2026-10-01"
+
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        workspace.add_task(conn, "Draft outline", due="10/01/2026")
+    task = workspace.add_task(conn, "Draft outline", due="2026-10-01")
+    assert task.due == "2026-10-01"
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        workspace.tasks(conn, due_before="Oct 1")
+    assert [t.task_id for t in workspace.tasks(conn, due_before="2026-10-02")] == [task.task_id]
+    assert workspace.tasks(conn, due_before="2026-09-30") == ()
+
+
 def test_new_pursuit_from_a_notice_and_a_contract(
     conn: sqlite3.Connection, seed_awards: Callable[..., object]
 ) -> None:
