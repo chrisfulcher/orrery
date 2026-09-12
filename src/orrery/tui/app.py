@@ -1076,9 +1076,8 @@ class PursuitScreen(Screen):
         self.load()
 
     def action_assess(self) -> None:
-        self.app.run_job(
-            "assess", {"pursuit_id": self.pursuit_id, "slot": "deep"}, on_done=self.load
-        )
+        # No on_done: refresh_jobs is load, and it only fires while this screen is on top.
+        self.app.run_job("assess", {"pursuit_id": self.pursuit_id, "slot": "deep"})
 
     def action_accept_tasks(self) -> None:
         if not self.detail or not self.detail.assessment:

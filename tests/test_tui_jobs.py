@@ -6,8 +6,9 @@ import threading
 import time
 from pathlib import Path
 
+import httpx
 import pytest
-from conftest import SEARCH_FIXTURE, SEARCH_URL, register_fake_chat
+from conftest import CHAT_URL, SEARCH_FIXTURE, SEARCH_URL, register_fake_chat
 from pytest_httpx import HTTPXMock
 from test_assess import GOOD
 from test_tui_setup import Seed, text
@@ -171,6 +172,44 @@ async def test_s_on_the_pursuit_screen_assesses_and_reloads(
         panel = text(app, "#assessment")
         assert "fit 72" in panel and "go" in panel and "Call the COR" in panel
         assert "fit 72" in app.history[-1].lines[-1]
+
+
+async def test_leaving_the_pursuit_screen_mid_assessment_does_not_kill_the_app(
+    app: OrreryTop, httpx_mock: HTTPXMock
+) -> None:
+    """The job outlives the screen that started it. A completion callback bound to a popped
+    screen queries widgets that are no longer mounted, which takes the app down from inside
+    a message handler -- so the model answers only once the screen is gone."""
+    answered = threading.Event()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert answered.wait(10), "the test never released the model"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": json.dumps(GOOD)}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 40},
+            },
+        )
+
+    httpx_mock.add_callback(respond, url=CHAT_URL, is_reusable=True)
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(PursuitScreen(1))
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+
+        answered.set()
+        await wait_idle(pilot, app)
+
+        assert app.current is not None and app.current.error is None
+        assert app.is_running and isinstance(app.screen, DashboardScreen)
+        app.push_screen(PursuitScreen(1))
+        await pilot.pause()
+        assert "fit 72" in text(app, "#assessment")
 
 
 async def test_missing_needs_open_connections_instead_of_running(
