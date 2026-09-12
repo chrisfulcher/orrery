@@ -1288,22 +1288,17 @@ def pipeline(conn: sqlite3.Connection, *, user_id: int = USER_ID) -> list[Tracke
     """One row per pursuit and linked notice, closed ones included, in workflow order then
     soonest deadline: what ``orrery pipeline`` has always shown."""
     rows = []
-    for p in pursuits(conn, include_closed=True, user_id=user_id):
+    # pursuits() already returns workflow order, so the rank comes from the loop: a sort key
+    # that re-queried it would re-parse the workflow document once per row.
+    for rank, p in enumerate(pursuits(conn, include_closed=True, user_id=user_id)):
         for (notice_id,) in conn.execute(
             "SELECT notice_id FROM pursuit_notices WHERE pursuit_id = ? ORDER BY linked_at",
             (p.pursuit_id,),
         ).fetchall():
-            rows.append(_tracked(conn, p, notice_id))
-    return sorted(
-        rows,
-        key=lambda t: (
-            [p.pursuit_id for p in pursuits(conn, include_closed=True, user_id=user_id)].index(
-                t.tracked_id
-            ),
-            t.response_deadline is None,
-            t.response_deadline or "",
-        ),
-    )
+            tracked = _tracked(conn, p, notice_id)
+            deadline = tracked.response_deadline
+            rows.append(((rank, deadline is None, deadline or ""), tracked))
+    return [tracked for _, tracked in sorted(rows, key=lambda row: row[0])]
 
 
 def history(conn: sqlite3.Connection, notice_id: str, *, user_id: int = USER_ID) -> list[Event]:
