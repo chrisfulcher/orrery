@@ -1,6 +1,6 @@
 # Project Design Reference
 *Open source government contracting business development intelligence ecosystem - design elements, constraints, and decisions*\
-*Status: living document; §8 mirrors `src/orrery/migrations/`. Last updated: 2026-09-06*
+*Status: living document; §8 mirrors `src/orrery/migrations/`. Last updated: 2026-09-14*
 
 ---
 
