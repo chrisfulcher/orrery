@@ -9,7 +9,9 @@ routinely laid out as tables and dropping them would lose the part a bidder need
 .docx has no pages, so no separators are written. Workbooks are read with openpyxl, one
 sheet per form-feed block headed by the sheet's name, so a sheet lands where a PDF page
 would and the search layer can already point at it. A file that cannot be read is recorded
-as ``failed`` and, like fetch failures, never retried automatically.
+as ``failed`` and, like fetch failures, never retried automatically. A type no reader covers
+is ``unsupported``, and the run tallies what those files were, so the summary says which
+extractor would pay for itself rather than only how many files went unread.
 
 Measured over one NAICS slice on 2026-09-09 (docs/notes/sam-manifest-probe.md), attachment
 types ran 70% PDF, 22% .docx and 5% .xlsx, so these three readers cover roughly 97% of
@@ -19,12 +21,14 @@ evaluated, CLIN structures, and questionnaires. Blank price templates are the lo
 case and cost little, since only the cells a workbook actually stores are read.
 """
 
+import codecs
 import logging
 import sqlite3
 import warnings
 import zipfile
+from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from io import BytesIO
 from pathlib import Path
@@ -48,6 +52,10 @@ PDF_MAGIC = b"%PDF-"
 ZIP_MAGIC = b"PK\x03\x04"  # .docx, .xlsx and .pptx are all zips; the members tell them apart
 DOCX_MEMBER = "word/document.xml"
 XLSX_MEMBER = "xl/workbook.xml"  # .xlsx and macro-enabled .xlsm alike; .xls is not a zip
+PPTX_MEMBER = "ppt/presentation.xml"
+OLE2_MAGIC = b"\xd0\xcf\x11\xe0"  # the pre-2007 .doc, .xls and .ppt container
+RTF_MAGIC = b"{\\rtf"
+SNIFF_BYTES = 4096  # enough to tell text from binary without decoding a 100 MiB file
 PAGE_SEPARATOR = "\f"
 
 PENDING = """
@@ -63,6 +71,9 @@ class ExtractResult:
     done: int
     unsupported: int
     failed: int
+    # Which types went unread, not just how many: "4 unsupported" cannot tell a store that is
+    # missing one extractor from one holding four files nothing will ever read.
+    unsupported_kinds: dict[str, int] = field(default_factory=dict)
 
 
 def extract_pending(
@@ -75,22 +86,26 @@ def extract_pending(
 ) -> ExtractResult:
     """Extract text from every fetched attachment not yet attempted."""
     counts = {"done": 0, "unsupported": 0, "failed": 0}
+    kinds: Counter[str] = Counter()
     rows = conn.execute(PENDING, (-1 if limit is None else limit,)).fetchall()
     for attachment_id, path in rows:
         check(cancelled)
-        status, text = _extract(settings.data_dir / path)
-        report(f"{status}: {path}")
+        status, text, kind = _extract(settings.data_dir / path)
+        report(f"{status} ({kind}): {path}" if kind else f"{status}: {path}")
         conn.execute(
             "UPDATE attachments SET extracted_text = ?, extract_status = ? WHERE attachment_id = ?",
             (text, status, attachment_id),
         )
         counts[status] += 1
-    return ExtractResult(**counts)
+        if kind:
+            kinds[kind] += 1
+    return ExtractResult(**counts, unsupported_kinds=dict(kinds.most_common()))
 
 
-def _extract(file: Path) -> tuple[str, str | None]:
-    """(status, text). A file with no extractable text -- a scanned PDF, an empty document --
-    is done with empty text, which is the queue a later OCR step will read."""
+def _extract(file: Path) -> tuple[str, str | None, str]:
+    """(status, text, kind). ``kind`` names the type of an unsupported file and is empty
+    otherwise. A file with no extractable text -- a scanned PDF, an empty document -- is done
+    with empty text, which is the queue a later OCR step will read."""
     try:
         data = file.read_bytes()
         if data.startswith(PDF_MAGIC):
@@ -100,10 +115,38 @@ def _extract(file: Path) -> tuple[str, str | None]:
         elif data.startswith(ZIP_MAGIC) and _zip_has(data, XLSX_MEMBER):
             text = _xlsx_text(data)
         else:
-            return "unsupported", None
+            return "unsupported", None, _kind(data)
     except Exception:  # pypdf and python-docx both raise more than their own errors
-        return "failed", None
-    return "done", text if text.strip() else ""
+        return "failed", None, ""
+    return "done", text if text.strip() else "", ""
+
+
+def _kind(data: bytes) -> str:
+    """What an unsupported file is, sniffed on the same terms as the readers above: a name
+    ending .xls is as often a zipped .xlsx, and Content-Type is always
+    ``application/octet-stream``. The names are coarse on purpose -- they answer which
+    extractor would pay for itself, not what the file holds."""
+    if data.startswith(ZIP_MAGIC):
+        return "pptx" if _zip_has(data, PPTX_MEMBER) else "zip"
+    if data.startswith(OLE2_MAGIC):
+        return "ole"
+    if data.startswith(RTF_MAGIC):
+        return "rtf"
+    head = data[:SNIFF_BYTES]
+    # Markup before text, and on the bytes, so a page in a legacy encoding still reads as
+    # html rather than falling through to unknown.
+    if data.startswith(b"<") and b"<html" in head[:1024].lower():
+        return "html"
+    if b"\x00" in head:
+        return "unknown"
+    # An incremental decoder holds a character the 4 KiB cut lands inside rather than
+    # calling the file binary over it.
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        decoder.decode(head)
+    except UnicodeDecodeError:
+        return "unknown"
+    return "text"
 
 
 def _pdf_text(data: bytes) -> str:

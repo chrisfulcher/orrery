@@ -24,7 +24,9 @@ def test_extracts_pdf_and_records_other_outcomes(
 
     result = extract_pending(conn, settings)
 
-    assert result == ExtractResult(done=1, unsupported=1, failed=1)
+    # notes.txt is plain text, which no reader covers; the kind says so rather than leaving
+    # the run to report a bare count.
+    assert result == ExtractResult(done=1, unsupported=1, failed=1, unsupported_kinds={"text": 1})
     by_id = statuses(conn)
     assert by_id[pdf_id] == ("done", "Section L instructions for wi-fi\fStatement of work page two")
     assert by_id[other_id] == ("unsupported", None)
@@ -119,9 +121,72 @@ def test_a_deck_is_unsupported_and_is_not_mistaken_for_a_document_or_a_workbook(
         archive.writestr("ppt/presentation.xml", "<presentation/>")
     pptx_id = fetched("briefing.pptx", buffer.getvalue())
 
-    extract_pending(conn, settings)
+    result = extract_pending(conn, settings)
 
     assert statuses(conn)[pptx_id] == ("unsupported", None)
+    assert result.unsupported_kinds == {"pptx": 1}
+
+
+def test_unsupported_files_are_tallied_by_sniffed_kind(
+    conn: sqlite3.Connection, settings: Settings, fetched: Fetched
+) -> None:
+    """Naming what went unread is what says whether one more reader would pay for itself. The
+    kind is sniffed like everything else here: these names all lie about their contents (#11)."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("readme.txt", "loose files")
+    fetched("legacy.xlsx", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512)
+    fetched("questions.docx", b"{\\rtf1\\ansi Questions and answers}")
+    fetched("notice.pdf", b"<!DOCTYPE html>\n<HTML><body>Amendment 0001</body></html>")
+    fetched("sow.doc", "Statement of work. Nada m\u00e1s.".encode())
+    fetched("docs.zip", buffer.getvalue())
+    fetched("scan.tif", b"II*\x00\x08\x00\x00\x00 raw scan")
+
+    result = extract_pending(conn, settings)
+
+    assert result.unsupported == 6 and result.done == 0 and result.failed == 0
+    assert result.unsupported_kinds == {
+        "ole": 1,
+        "rtf": 1,
+        "html": 1,
+        "text": 1,
+        "zip": 1,
+        "unknown": 1,
+    }
+    assert list(statuses(conn).values()).count(("unsupported", None)) == 6
+
+
+def test_a_kind_is_reported_per_file_and_the_tally_is_ordered_by_count(
+    conn: sqlite3.Connection, settings: Settings, fetched: Fetched
+) -> None:
+    fetched("a.doc", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 one")
+    fetched("b.xls", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 two")
+    fetched("c.txt", b"three")
+    lines: list[str] = []
+
+    result = extract_pending(conn, settings, report=lines.append)
+
+    assert [line.split(": ")[0] for line in lines] == [
+        "unsupported (ole)", "unsupported (ole)", "unsupported (text)",
+    ]  # fmt: skip
+    # Ordered by count, so the reader worth writing first is named first.
+    assert list(result.unsupported_kinds.items()) == [("ole", 2), ("text", 1)]
+
+
+def test_a_multibyte_character_across_the_sniff_boundary_is_still_text(
+    conn: sqlite3.Connection, settings: Settings, fetched: Fetched
+) -> None:
+    """Only the first 4 KiB is decoded, so a character the cut lands inside must not make a
+    plain-text file read as binary."""
+    from orrery.extract.text import SNIFF_BYTES
+
+    body = ("a" * (SNIFF_BYTES - 1) + "\u00e9" + "b" * 100).encode()
+    fetched("long.txt", body)
+
+    assert extract_pending(conn, settings).unsupported_kinds == {"text": 1}
 
 
 def test_an_empty_word_document_is_done_with_empty_text(

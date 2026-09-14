@@ -284,7 +284,12 @@ def test_extract_search_and_reindex(
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "1 extracted, 0 unsupported, 0 failed"
     result = runner.invoke(app, ["extract", "--json"], env=env)
-    assert json.loads(result.output) == {"done": 0, "unsupported": 0, "failed": 0}
+    assert json.loads(result.output) == {
+        "done": 0,
+        "unsupported": 0,
+        "failed": 0,
+        "unsupported_kinds": {},
+    }
 
     result = runner.invoke(app, ["search", "xylophone"], env=env)
     assert result.exit_code == 0, result.output

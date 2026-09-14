@@ -156,7 +156,7 @@ def _stub_sync_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **overrid
     results = {
         "ingest_bulk": BulkResult(1, 10, 3, 3, 0, 0, 3, 0, 0, bulk.ACTIVE_PASS_DONE),
         "fetch": FetchResult(2, 4, 0, 4, 0, 9, 9, 0, 0, 4, False),
-        "extract": ExtractResult(9, 0, 0),
+        "extract": ExtractResult(9, 2, 0, {"ole": 2}),
         "summarize": SummarizeResult(3, 0, "qwen3:14b"),
         "embed": EmbedResult(3, 9, 40, "nomic-embed-text"),
     } | overrides
@@ -192,6 +192,9 @@ def test_sync_runs_every_stage_in_order(
     assert order == ["ingest_bulk", "fetch", "extract", "summarize", "embed"]
     assert result.skipped == ()
     assert result.extract.done == 9 and result.embed.chunks == 40
+    # The roll-up is each stage's own summary, so the unsupported kinds reach it unchanged.
+    roll_up = summarize(JOBS["sync"], result)
+    assert "extract: 9 extracted, 2 unsupported (ole 2), 0 failed" in roll_up
     # Each stage announces itself, so a long run says where it is.
     assert [line for line in lines if line.startswith("sync: ")] == [
         "sync: ingest bulk", "sync: fetch", "sync: extract", "sync: summarize", "sync: embed",
@@ -337,6 +340,10 @@ def test_summaries_match_the_cli() -> None:
     )
     assert (
         summarize(JOBS["extract"], ExtractResult(1, 2, 3)) == "1 extracted, 2 unsupported, 3 failed"
+    )
+    # Which readers a store is missing, so "unsupported" is an answer rather than a count.
+    assert summarize(JOBS["extract"], ExtractResult(1, 3, 0, {"pptx": 2, "ole": 1})) == (
+        "1 extracted, 3 unsupported (pptx 2, ole 1), 0 failed"
     )
     assert summarize(JOBS["embed"], EmbedResult(1, 2, 9, "m")) == (
         "1 notices, 2 attachments, 9 chunks embedded with m"

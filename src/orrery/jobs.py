@@ -606,7 +606,11 @@ def summarize(job: Job, result: object) -> str:
                 f" {r.requests_spent} requests{note}"
             )
         case "extract":
-            return f"{r.done} extracted, {r.unsupported} unsupported, {r.failed} failed"
+            # Which types went unread, so a store that needs one more reader is told apart
+            # from one holding files nothing will ever read.
+            kinds = ", ".join(f"{kind} {n}" for kind, n in r.unsupported_kinds.items())
+            named = f" ({kinds})" if kinds else ""
+            return f"{r.done} extracted, {r.unsupported} unsupported{named}, {r.failed} failed"
         case "embed":
             return (
                 f"{r.notices} notices, {r.attachments} attachments,"
