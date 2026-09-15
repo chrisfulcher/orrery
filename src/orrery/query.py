@@ -3,6 +3,12 @@
 Search unions hits from the notice text index and the attachment text index, keeps the
 best-ranked hit per notice, and labels it with its source. bm25 scores from two tables are
 not one scale; treating them as comparable is a ranking heuristic, not a measurement.
+
+A solicitation is bought once and announced many times: a sources-sought, a presolicitation,
+the solicitation itself, amendments, then the award. The opportunity lists collapse those to
+one row per solicitation number, standing for the group by its furthest-along notice, so the
+table counts requirements rather than announcements. ``collapse=False`` asks for the notices
+themselves, which is what a per-notice panel wants.
 """
 
 import json
@@ -39,6 +45,11 @@ class SearchHit:
     work_type: str | None = None
     stated_set_aside: str | None = None
     """The set-aside the notice text states, from the summary; fills an empty code."""
+    notice_type: str | None = None
+    """The notice's own type; for a collapsed row, the group's furthest-along stage."""
+    notices: int = 1
+    """Notices in this row's solicitation group; 1 for a per-notice result."""
+    solicitation_number: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,8 +79,82 @@ class Filters:
 NO_FILTERS = Filters()
 
 
+# The strings SAM.gov's API and its bulk extract both emit, ranked by how far along the buy
+# they stand. Anything else ranks 0 and passes through verbatim: an unranked type is a type
+# orrery has not been taught, not an "other". Amendments rank 0 on purpose -- an amendment's
+# type says it changed, not where the buy stands.
+STAGE_RANK = {
+    "Sources Sought": 1,
+    "Special Notice": 1,
+    "Presolicitation": 2,
+    "Solicitation": 3,
+    "Combined Synopsis/Solicitation": 3,
+    "Award Notice": 4,
+    "Justification": 5,
+    "Fair Opportunity / Limited Sources Justification": 5,
+}
+
+AWARDED = frozenset(
+    {"Award Notice", "Justification", "Fair Opportunity / Limited Sources Justification"}
+)
+"""Stages that say the work is already placed. The opportunity table hides them by default:
+they are history for a market, not a thing to bid."""
+
+
+def awarded(hit: SearchHit) -> bool:
+    """Whether this row's stage says the buy is over."""
+    return hit.notice_type in AWARDED
+
+
+def stage_rank_sql(column: str = "n.notice_type") -> str:
+    """``STAGE_RANK`` as a SQL CASE, generated so the table and the query cannot drift."""
+    whens = " ".join(
+        "WHEN '{}' THEN {}".format(stage.replace("'", "''"), rank)
+        for stage, rank in STAGE_RANK.items()
+    )
+    return f"CASE {column} {whens} ELSE 0 END"
+
+
+# One row per solicitation, or one row per notice, behind the same columns. The head row
+# carries the group's derived deadline, activity, and size in place of its own, so every
+# filter and ordering downstream reads the group without knowing it is one.
+_OPPORTUNITY_COLUMNS = (
+    "    SELECT n.id, n.notice_id, n.title, n.agency_entity_id, n.naics_code, n.set_aside_code,"
+    "\n           n.full_parent_path_code, n.posted_at, n.description, n.notice_type,"
+    "\n           n.solicitation_number,"
+)
+
+COLLAPSED = f"""
+opportunities AS (
+{_OPPORTUNITY_COLUMNS}
+           first_value(n.id) OVER grp AS head_id,
+           count(*) OVER grp AS notices,
+           max(n.active) OVER grp AS active,
+           coalesce(max(CASE WHEN n.active = 1 THEN n.response_deadline END) OVER grp,
+                    max(n.response_deadline) OVER grp) AS response_deadline
+    FROM notices AS n
+    WINDOW grp AS (
+        PARTITION BY coalesce(nullif(n.solicitation_number, ''), n.notice_id)
+        ORDER BY {stage_rank_sql()} DESC, n.posted_at DESC, n.id DESC
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    )
+)"""
+
+UNCOLLAPSED = f"""
+opportunities AS (
+{_OPPORTUNITY_COLUMNS}
+           n.id AS head_id, 1 AS notices, n.active, n.response_deadline
+    FROM notices AS n
+)"""
+
+
+def _source(collapse: bool) -> str:
+    return COLLAPSED if collapse else UNCOLLAPSED
+
+
 def notice_filter_sql(src: str) -> str:
-    """Predicates on ``notices AS n`` reading filter values from ``src``: ``:`` for bound
+    """Predicates on ``notices AS n`` -- or on the ``opportunities`` CTE under the same alias,
+    which exposes the same columns -- reading filter values from ``src``: ``:`` for bound
     parameters, or a table alias such as ``s.`` whose columns carry the same names."""
     naics_match = naics.match_sql("n.naics_code", f"{src}naics")
     return f"""
@@ -90,8 +175,11 @@ CONTRACT_NAICS_MATCH = naics.match_sql("naics_code", ":naics")
 """The slice predicate over ``v_contracts``, hoisted so that callers whose own parameter is
 named ``naics`` can still reach it."""
 
+# A group matches when any of its notices does, and shows its best hit: the bare source and
+# snippet come from the row min(rank) picked, which is SQLite's documented behaviour.
 SEARCH = f"""
-WITH hits AS (
+WITH {{source}},
+hits AS (
     SELECT n.id AS nid, 'notice' AS source, bm25(notices_fts) AS rank,
            snippet(notices_fts, -1, '[', ']', '...', 12) AS snippet
     FROM notices_fts JOIN notices AS n ON n.id = notices_fts.rowid
@@ -103,26 +191,33 @@ WITH hits AS (
     JOIN attachments AS a ON a.attachment_id = attachments_fts.rowid
     JOIN notices AS n ON n.notice_id = a.notice_id
     WHERE attachments_fts MATCH :q
+),
+best AS (
+    SELECT m.head_id AS head_id, h.source AS source, h.snippet AS snippet, min(h.rank) AS rank
+    FROM hits AS h JOIN opportunities AS m ON m.id = h.nid
+    GROUP BY m.head_id
 )
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
-       h.source, h.snippet, min(h.rank) AS rank,
-       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
-FROM hits AS h JOIN notices AS n ON n.id = h.nid
+       b.source, b.snippet, b.rank,
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside,
+       n.notice_type, n.notices, n.solicitation_number
+FROM best AS b JOIN opportunities AS n ON n.id = b.head_id
 LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
 LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
 WHERE 1 = 1 {FILTERS}
-GROUP BY h.nid
 ORDER BY rank, n.posted_at DESC
 LIMIT :limit
 """
 
 _LIST_NOTICES = f"""
+WITH {{source}}
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
        'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank,
-       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
-FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside,
+       n.notice_type, n.notices, n.solicitation_number
+FROM opportunities AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id
 LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id
-WHERE 1 = 1 {FILTERS}
+WHERE n.id = n.head_id {FILTERS}
 ORDER BY {{order}}
 LIMIT :limit
 """
@@ -142,7 +237,8 @@ WITH hits AS (
 )
 SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,
        coalesce(a.filename, 'notice') AS source, h.text, min(h.distance) AS rank, h.page,
-       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside
+       n.set_aside_code, s.summary, s.work_type, s.stated_set_aside,
+       n.notice_type, 1 AS notices, n.solicitation_number
 FROM hits AS h
 JOIN notices AS n ON n.notice_id = h.notice_id
 LEFT JOIN attachments AS a ON a.attachment_id = h.attachment_id
@@ -159,6 +255,10 @@ def semantic_search(
 ) -> list[SearchHit]:
     """Nearest chunk per notice by cosine distance over rows embedded with ``model``.
 
+    Semantic hits stay one per notice rather than one per solicitation: the answer to "which
+    passage means this" is a passage, and collapsing would hide the sibling that carries it.
+    Every row therefore reports ``notices == 1``.
+
     ``vector`` is the query embedding as a float32 blob (``orrery.embed.client.pack``); the
     caller embeds the query, so this module never touches the network. The connection must
     have ``db.load_vec`` applied.
@@ -173,8 +273,9 @@ def _snippet(text: str, width: int = 200) -> str:
 
 
 def _hit(row: tuple, snippet: str, *, page: int | None = None) -> SearchHit:
-    """A hit from the eight standard columns followed by the notice's set-aside code and its
-    latest summary's text, work type, and stated set-aside."""
+    """A hit from the eight standard columns followed by the notice's set-aside code, its
+    latest summary's text, work type, and stated set-aside, and its group's stage, size, and
+    solicitation number: fifteen columns, and every SQL that feeds this sends all fifteen."""
     return SearchHit(
         *row[:6],
         snippet,
@@ -184,24 +285,32 @@ def _hit(row: tuple, snippet: str, *, page: int | None = None) -> SearchHit:
         summary=row[9],
         work_type=row[10],
         stated_set_aside=row[11],
+        notice_type=row[12],
+        notices=row[13],
+        solicitation_number=row[14],
     )
 
 
 def search(
-    conn: sqlite3.Connection, text: str, *, limit: int = 20, filters: Filters = NO_FILTERS
+    conn: sqlite3.Connection,
+    text: str,
+    *,
+    limit: int = 20,
+    filters: Filters = NO_FILTERS,
+    collapse: bool = True,
 ) -> list[SearchHit]:
-    """Full-text search across notice text and attachment text, best hit per notice.
+    """Full-text search across notice text and attachment text, best hit per solicitation.
 
     The text is passed to FTS5 as written first, so operators, prefixes, and phrases work;
     if FTS5 rejects it, every whitespace-separated token is retried as its own phrase, so
     plain queries such as ``wi-fi`` or ``section l/m`` work too. ``filters`` narrows the
-    notices considered.
+    notices considered; with ``collapse=False`` the best hit is per notice instead.
     """
     try:
-        rows = _match(conn, text, limit, filters)
+        rows = _match(conn, text, limit, filters, collapse)
     except sqlite3.OperationalError:
         try:
-            rows = _match(conn, _quoted(text), limit, filters)
+            rows = _match(conn, _quoted(text), limit, filters, collapse)
         except sqlite3.OperationalError as exc:
             raise InvalidQuery(str(exc)) from exc
     return [_hit(row, " ".join(row[6].split())) for row in rows]
@@ -213,10 +322,11 @@ def list_notices(
     *,
     limit: int = 50,
     order: Literal["deadline", "posted"] = "deadline",
+    collapse: bool = True,
 ) -> list[SearchHit]:
-    """Notices passing the filters; no text ranking (rank is 0). ``order`` is soonest
-    deadline first, or newest posted first."""
-    sql = _LIST_NOTICES.format(order=ORDERINGS[order])
+    """Solicitations passing the filters; no text ranking (rank is 0). ``order`` is soonest
+    deadline first, or newest posted first. With ``collapse=False`` the rows are notices."""
+    sql = _LIST_NOTICES.format(source=_source(collapse), order=ORDERINGS[order])
     rows = conn.execute(sql, {"limit": limit, **filters.params()}).fetchall()
     return [_hit(row, _snippet(row[6])) for row in rows]
 
@@ -227,8 +337,11 @@ def rebuild_search(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO attachments_fts(attachments_fts) VALUES ('rebuild')")
 
 
-def _match(conn: sqlite3.Connection, query: str, limit: int, filters: Filters) -> list[tuple]:
-    return conn.execute(SEARCH, {"q": query, "limit": limit, **filters.params()}).fetchall()
+def _match(
+    conn: sqlite3.Connection, query: str, limit: int, filters: Filters, collapse: bool
+) -> list[tuple]:
+    sql = SEARCH.format(source=_source(collapse))
+    return conn.execute(sql, {"q": query, "limit": limit, **filters.params()}).fetchall()
 
 
 def _quoted(text: str) -> str:
@@ -573,7 +686,13 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     chain = _chain(conn, entity_id)
     parent = chain[-2] if len(chain) > 1 else None
     hits = (
-        list_notices(conn, Filters(agency_prefixes=(row[3],)), limit=recent, order="posted")
+        list_notices(
+            conn,
+            Filters(agency_prefixes=(row[3],)),
+            limit=recent,
+            order="posted",
+            collapse=False,
+        )
         if row[3]
         else []
     )
@@ -739,6 +858,7 @@ def notices_for_solicitation(
         "SELECT n.notice_id, n.title, e.name, n.response_deadline, n.posted_at,"
         " 'notice' AS source, coalesce(n.description, '') AS snippet, 0.0 AS rank"
         ", n.set_aside_code, s.summary, s.work_type, s.stated_set_aside"
+        ", n.notice_type, 1 AS notices, n.solicitation_number"
         " FROM notices AS n LEFT JOIN entities AS e ON e.entity_id = n.agency_entity_id"
         " LEFT JOIN v_notice_summaries AS s ON s.notice_id = n.notice_id"
         " WHERE n.solicitation_number = ? ORDER BY n.posted_at DESC, n.id LIMIT ?",

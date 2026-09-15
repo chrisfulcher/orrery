@@ -82,8 +82,14 @@ async def test_tools_are_listed_over_the_protocol(store: sqlite3.Connection) -> 
         tools = getattr(listed, "tools", listed)
         assert {tool.name for tool in tools} == EXPECTED_TOOLS
         result = await client.call_tool("notice", {"notice_id": HRSA})
+        due = await client.call_tool("upcoming", {"days": 3650})
     assert not result.is_error
     assert result.structured_content["title"] == SEARCH_FIXTURE["opportunitiesData"][0]["title"]
+    # The collapsed fields are on the wire, not just on the dataclass: the schema still
+    # serialises after SearchHit gained them.
+    assert not due.is_error
+    first = due.structured_content["result"][0]
+    assert first["notices"] == 1 and first["notice_type"] and first["solicitation_number"]
 
 
 def test_award_tools(

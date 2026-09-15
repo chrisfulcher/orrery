@@ -316,7 +316,11 @@ def test_extract_search_and_reindex(
         "stated_set_aside",
         "rank",
         "page",
+        "notice_type",
+        "notices",
+        "solicitation_number",
     }
+    assert payload[0]["notices"] == 1 and payload[0]["notice_type"] == "Solicitation"
 
     assert runner.invoke(app, ["search", "nothing-here-zz"], env=env).output.strip() == "no matches"
     result = runner.invoke(app, ["search", ""], env=env)

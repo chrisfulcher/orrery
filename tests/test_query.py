@@ -146,6 +146,7 @@ def test_semantic_search_ranks_by_meaning(
     assert hits[0].source == "sow.pdf" and hits[0].page == 1
     assert hits[1].source == "notice" and hits[1].page is None
     assert hits[0].rank < hits[1].rank
+    assert all(h.notices == 1 for h in hits)  # semantic hits are passages, not solicitations
     assert "[" not in hits[0].snippet and len(hits[0].snippet) <= 203
     assert len(query.semantic_search(conn, pack([1.0, 0, 0, 1.0]), model="other", limit=5)) == 0
     assert (
@@ -511,3 +512,236 @@ def test_an_unextracted_attachment_is_a_gap(
 
     stages = {gap.stage: gap.pending for gap in query.gaps(conn, settings)}
     assert stages["attachments to extract"] == 1
+
+
+# One row per opportunity: a solicitation is announced many times and bought once.
+
+GROUP_ROWS = [
+    {
+        "NoticeId": "g" * 31 + "1",
+        "Sol#": "GRP-1",
+        "Type": "Sources Sought",
+        "BaseType": "Sources Sought",
+        "Title": "Help desk market research",
+        "PostedDate": "2026-09-01",
+        "ResponseDeadLine": "2026-09-08T15:00:00-04:00",
+        "Description": "The government seeks xylophone tuning capability.",
+    },
+    {
+        "NoticeId": "g" * 31 + "2",
+        "Sol#": "GRP-1",
+        "Type": "Presolicitation",
+        "BaseType": "Presolicitation",
+        "Title": "Help desk presolicitation",
+        "PostedDate": "2026-09-02",
+        "ResponseDeadLine": "2026-09-12T15:00:00-04:00",
+        "Description": "A solicitation is expected.",
+    },
+    {
+        "NoticeId": "g" * 31 + "3",
+        "Sol#": "GRP-1",
+        "Type": "Solicitation",
+        "BaseType": "Solicitation",
+        "Title": "Help desk solicitation",
+        "PostedDate": "2026-09-03",
+        "ResponseDeadLine": "2026-09-20T15:00:00-04:00",
+        "Description": "Proposals are due.",
+    },
+]
+SOURCES_SOUGHT, PRESOLICITATION, SOLICITATION = ("g" * 31 + n for n in "123")
+AWARD = "g" * 31 + "4"
+AWARD_ROW = {
+    "NoticeId": AWARD,
+    "Sol#": "GRP-1",
+    "Type": "Award Notice",
+    "BaseType": "Award Notice",
+    "Title": "Help desk award",
+    "PostedDate": "2026-09-04",
+    "ResponseDeadLine": "",
+}
+
+
+@pytest.fixture
+def group(
+    conn: sqlite3.Connection, settings: Settings, tmp_path: Path
+) -> Callable[[list[dict]], None]:
+    """Ingest extract rows into an otherwise empty store; each call gets its own file so the
+    bulk adapter's resume cursor never mistakes one for a rerun of the last."""
+    from conftest import make_extract
+
+    from orrery.ingest.bulk import ingest_bulk
+
+    files = iter(range(100))
+
+    def _ingest(rows: list[dict]) -> None:
+        path = tmp_path / f"extract-{next(files)}.csv"
+        path.write_bytes(make_extract(rows))
+        ingest_bulk(conn, settings, path)
+
+    return _ingest
+
+
+def test_one_solicitation_is_one_row_headed_by_its_furthest_along_notice(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    group(GROUP_ROWS)
+
+    [hit] = query.list_notices(conn, query.Filters())
+
+    assert hit.notice_id == SOLICITATION and hit.title == "Help desk solicitation"
+    assert (hit.notice_type, hit.notices, hit.solicitation_number) == ("Solicitation", 3, "GRP-1")
+    assert hit.response_deadline == "2026-09-20T19:00:00Z"
+    assert not query.awarded(hit)
+    per_notice = query.list_notices(conn, query.Filters(), collapse=False)
+    assert [h.notice_id for h in per_notice] == [SOURCES_SOUGHT, PRESOLICITATION, SOLICITATION]
+    assert all(h.notices == 1 for h in per_notice)
+
+
+def test_a_groups_deadline_is_the_latest_one_still_open(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    """The head stands for the group, but its own date does not: an archived solicitation
+    with a later deadline than the sources-sought still open beside it would put a date on
+    the row that nobody can answer."""
+    rows = [dict(row) for row in GROUP_ROWS]
+    rows[2]["Active"] = "No"
+
+    group(rows)
+
+    [hit] = query.list_notices(conn, query.Filters())
+    assert hit.notice_id == SOLICITATION  # still the furthest along
+    assert hit.response_deadline == "2026-09-12T19:00:00Z"
+    assert [h.notice_id for h in query.list_notices(conn, query.Filters(active_only=True))] == [
+        SOLICITATION
+    ]
+
+
+def test_a_group_with_nothing_active_keeps_its_last_deadline_and_active_only_drops_it(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    group([{**row, "Active": "No"} for row in GROUP_ROWS])
+
+    [hit] = query.list_notices(conn, query.Filters())
+    assert hit.response_deadline == "2026-09-20T19:00:00Z"
+    assert query.list_notices(conn, query.Filters(active_only=True)) == []
+
+
+def test_an_award_notice_heads_its_group_and_says_so(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    group([*GROUP_ROWS, AWARD_ROW])
+
+    [hit] = query.list_notices(conn, query.Filters())
+
+    assert hit.notice_id == AWARD and hit.notices == 4
+    assert hit.notice_type == "Award Notice" and query.awarded(hit)
+    assert hit.response_deadline == "2026-09-20T19:00:00Z"  # the award itself has none
+
+
+def test_an_unrecognised_type_passes_through_and_never_outranks_a_known_stage(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    """A type orrery has not been taught is still the type the government published. It ranks
+    below every known stage rather than being folded into an "other"."""
+    group(
+        [
+            {
+                "NoticeId": "u" * 31 + "1",
+                "Sol#": "UNK-1",
+                "Type": "Sale of Surplus Property",
+                "BaseType": "Sale of Surplus Property",
+                "Title": "Surplus",
+                "PostedDate": "2026-09-05",
+            },
+            {
+                "NoticeId": "u" * 31 + "2",
+                "Sol#": "UNK-1",
+                "Type": "Presolicitation",
+                "BaseType": "Presolicitation",
+                "Title": "Presolicitation",
+                "PostedDate": "2026-09-01",
+            },
+            {
+                "NoticeId": "u" * 31 + "3",
+                "Sol#": "UNK-2",
+                "Type": "Sale of Surplus Property",
+                "BaseType": "Sale of Surplus Property",
+                "Title": "Surplus alone",
+                "PostedDate": "2026-09-05",
+            },
+        ]
+    )
+
+    rows = {h.solicitation_number: h for h in query.list_notices(conn, query.Filters())}
+
+    assert rows["UNK-1"].notice_id == "u" * 31 + "2"  # older, but further along
+    assert rows["UNK-1"].notice_type == "Presolicitation"
+    assert rows["UNK-2"].notice_type == "Sale of Surplus Property"
+
+
+def test_search_matches_any_notice_in_the_group_and_shows_the_best_hit(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    group(GROUP_ROWS)
+    conn.execute(
+        "INSERT INTO attachments (notice_id, url, filename, fetch_status, extract_status,"
+        " extracted_text) VALUES (?, 'https://example.gov/sow.pdf', 'sow.pdf', 'fetched',"
+        " 'done', 'Zeppelin hangar maintenance is in scope.')",
+        (PRESOLICITATION,),
+    )
+
+    # A word only the sources-sought says still finds the requirement, keyed by its head.
+    [hit] = query.search(conn, "xylophone")
+    assert (hit.notice_id, hit.notices, hit.source) == (SOLICITATION, 3, "notice")
+    assert "[xylophone]" in hit.snippet.lower()
+
+    # So does a word only a sibling's attachment says.
+    [hit] = query.search(conn, "zeppelin")
+    assert (hit.notice_id, hit.notices, hit.source) == (SOLICITATION, 3, "sow.pdf")
+
+    # When more than one member matches, the group shows the best-ranked hit of any of them.
+    conn.execute(
+        "UPDATE notices SET description = description || ' Zeppelin.' WHERE notice_id <> ?",
+        (PRESOLICITATION,),
+    )
+    [collapsed] = query.search(conn, "zeppelin")
+    per_notice = query.search(conn, "zeppelin", collapse=False)
+    best = min(per_notice, key=lambda h: h.rank)
+    assert len(per_notice) == 3
+    assert (collapsed.rank, collapsed.source, collapsed.snippet) == (
+        best.rank,
+        best.source,
+        best.snippet,
+    )
+
+
+def test_notices_without_a_solicitation_number_are_their_own_groups(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    group(
+        [
+            {"NoticeId": "s" * 31 + "1", "Sol#": "", "Title": "One", "PostedDate": "2026-09-01"},
+            {"NoticeId": "s" * 31 + "2", "Sol#": "", "Title": "Two", "PostedDate": "2026-09-02"},
+        ]
+    )
+
+    hits = query.list_notices(conn, query.Filters())
+
+    assert sorted(h.title for h in hits) == ["One", "Two"]
+    assert all(h.notices == 1 and h.solicitation_number is None for h in hits)
+
+
+def test_an_entitys_recent_panel_stays_per_notice(
+    conn: sqlite3.Connection, group: Callable[[list[dict]], None]
+) -> None:
+    """The entity view answers "what has this office published", so every announcement counts."""
+    group(GROUP_ROWS)
+    (leaf_id,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075.7526.75R602'"
+    ).fetchone()
+
+    leaf = query.entity(conn, leaf_id)
+
+    assert leaf is not None
+    assert [h.notice_id for h in leaf.recent] == [SOLICITATION, PRESOLICITATION, SOURCES_SOUGHT]
+    assert all(h.notices == 1 for h in leaf.recent)
