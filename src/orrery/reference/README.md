@@ -23,20 +23,24 @@ snippet below and a diff.
   vintage does.
 - `sources` row: `census_naics`, adapter version `2022`.
 
-## `psc_2025_04.csv` (2,344 rows)
+## `psc_2025_04.csv` (2,540 rows)
 
 - Source: GSA, Product and Service Codes Manual, April 2025 edition.
 - URL: <https://www.acquisition.gov/sites/default/files/manual/PSC%20April%202025.xlsx>
   (452 KB, sheet `PSC for 042025`), linked from <https://www.acquisition.gov/psc-manual>.
 - Retrieved: 2026-09-14.
 - License: U.S. Government work, public domain.
-- Contents: the active four-character product and service codes only. The manual carries
-  retired codes alongside active ones and marks a retired one with an end date, so the 3,536
-  rows with an end date are dropped and the 2,344 without one are kept. The one- and
-  two-character rows are group and category headings rather than codes a notice cites, so
-  they are dropped too. The title is the manual's `PRODUCT AND SERVICE CODE NAME` column,
-  which GSA publishes in upper case; the mixed-case `FULL NAME (DESCRIPTION)` column is empty
-  for 686 of the active codes, so taking it would leave the list in two casings.
+- Contents: every active code the manual carries, at all three of its lengths: 25
+  one-character groups, 171 two-character categories and 2,344 four-character product and
+  service codes. The short codes are headings in the manual's layout but codes on a notice,
+  and the government puts one on about a fifth of what orrery ingests, so a list of the
+  four-character codes alone leaves those notices reading as a bare `99`. Retired codes sit
+  alongside active ones and are marked with an end date, so the 3,568 rows carrying one are
+  dropped (25 of them have no name either) and the 2,540 without one are kept; the header row
+  is dropped by the same length test that picks the three code lengths out. The title is the
+  manual's `PRODUCT AND SERVICE CODE NAME` column, which GSA publishes in upper case; the
+  mixed-case `FULL NAME (DESCRIPTION)` column is empty for 877 of the active codes, so taking
+  it would leave the list in two casings.
 - `sources` row: `gsa_psc_manual`, adapter version `2025-04`.
 
 ## Refreshing
@@ -67,16 +71,17 @@ for code, title in ((r[1], r[2]) for r in book.worksheets[0].iter_rows(values_on
 book.close()
 
 # PSC: sheet "PSC for 042025". Column A the code (a float when it is all digits), column B the
-# name, column D the end date -- set on a retired code, empty on an active one. Only the
-# four-character product and service codes are kept; the one- and two-character rows are the
-# group and category headings above them.
+# name, column D the end date -- set on a retired code, empty on an active one. Every active
+# code is kept at all three lengths the manual uses: the four-character product and service
+# codes and the one- and two-character group and category codes above them, which notices cite
+# as well. The length test also drops the header row, whose "PSC CODE" is none of the three.
 book = openpyxl.load_workbook(src / "PSC April 2025.xlsx", read_only=True, data_only=True)
 psc = []
 for code, name, _start, end in (r[:4] for r in book["PSC for 042025"].iter_rows(values_only=True)):
     if code is None or name is None or end is not None:
         continue
     code = str(int(code)) if isinstance(code, float) else str(code).strip()
-    if len(code) == 4:
+    if len(code) in (1, 2, 4):
         psc.append((code, str(name).strip()))
 book.close()
 

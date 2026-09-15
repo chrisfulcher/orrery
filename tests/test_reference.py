@@ -1,8 +1,10 @@
 """The shipped NAICS and PSC code lists, and the loader that puts them in a store."""
 
 import json
+import re
 import shutil
 import sqlite3
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,15 @@ from orrery.cli import app
 
 NOW = "2026-01-01T00:00:00Z"
 TERMS = "U.S. Government work, public domain; shipped with orrery"
+
+
+def readme_rows(file: str) -> int:
+    """The row count the reference README states for one shipped list. The README is the
+    record of how the file was made, so a regenerated list that does not match it is a
+    half-done refresh."""
+    text = resources.files("orrery.reference").joinpath("README.md").read_text(encoding="utf-8")
+    (stated,) = re.findall(rf"^## `{re.escape(file)}` \(([\d,]+) rows\)$", text, re.MULTILINE)
+    return int(stated.replace(",", ""))
 
 
 def counts(conn: sqlite3.Connection) -> tuple[int, int]:
@@ -31,6 +42,19 @@ def test_migrate_loads_both_lists(conn: sqlite3.Connection) -> None:
     assert conn.execute("SELECT title FROM psc_codes WHERE code = 'DA01'").fetchone() == (
         "IT AND TELECOM - BUSINESS APPLICATION/APPLICATION DEVELOPMENT SUPPORT SERVICES (LABOR)",
     )
+
+
+def test_psc_group_codes_read_as_titles(conn: sqlite3.Connection) -> None:
+    """A PSC group or category code is what the government puts on about one notice in five,
+    so the manual's one- and two-character rows are codes the store has to answer for, not
+    headings above the four-character ones."""
+    assert conn.execute("SELECT title FROM psc_codes WHERE code = '99'").fetchone() == (
+        "MISCELLANEOUS",
+    )
+    assert conn.execute("SELECT title FROM psc_codes WHERE code = 'R'").fetchone() == (
+        "SUPPORT SVCS (PROF, ADMIN, MGMT)",
+    )
+    assert counts(conn)[1] == readme_rows("psc_2025_04.csv")
 
 
 def test_sector_ranges_keep_the_census_spelling(conn: sqlite3.Connection) -> None:
