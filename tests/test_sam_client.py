@@ -445,3 +445,78 @@ def test_access_flags_are_strings_and_are_read_as_flags(
     assert items["c1"].export_controlled and not items["c1"].public
     assert items["d1"].deleted
     assert not items["r1"].public
+
+
+ORGS_FIXTURE = json.loads((FIXTURES / "sam_fh_orgs_v1.json").read_text())
+ORGS_URL = re.compile(r".*/prod/federalorganizations/v1/orgs.*")
+
+
+def test_organizations_are_keyed_counted_and_filtered_by_office_code(
+    httpx_mock: HTTPXMock, client: SamClient, conn: sqlite3.Connection
+) -> None:
+    httpx_mock.add_response(url=ORGS_URL, json=ORGS_FIXTURE)
+
+    orgs = client.get_organizations(old_fpds_office_code="EX0001")
+
+    assert [org["fhorgid"] for org in orgs] == ["100000001"]
+    sent = httpx_mock.get_request()
+    assert sent.url.host == "api.sam.gov"
+    assert sent.url.path == "/prod/federalorganizations/v1/orgs"
+    assert sent.url.params["oldfpdsofficecode"] == "EX0001"
+    assert sent.url.params["limit"] == "100"
+    assert sent.url.params["api_key"] == "test-key"
+    [logged] = endpoints(conn)
+    assert "oldfpdsofficecode=EX0001" in logged and "api_key" not in logged
+    assert conn.execute("SELECT status_code FROM api_requests").fetchone() == (200,)
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ([{"fhorgid": "1"}], ["1"]),
+        ({"totalrecords": 1, "orglist": [{"fhorgid": "1"}]}, ["1"]),
+        ({"_note": "text first", "orgList": [{"fhorgid": "1"}]}, ["1"]),
+        ({"totalrecords": 0}, []),
+        ({"orglist": ["not an object"]}, []),
+        ("", []),
+    ],
+)
+def test_the_organization_envelope_is_read_rather_than_pinned(
+    httpx_mock: HTTPXMock, client: SamClient, body: object, expected: list[str]
+) -> None:
+    """The wrapper is undocumented (see the fixture's note), so a shape nobody has seen yet
+    costs one office rather than a run: the list is found by being a list."""
+    httpx_mock.add_response(url=ORGS_URL, json=body)
+    orgs = client.get_organizations(old_fpds_office_code="EX0001")
+    assert [org["fhorgid"] for org in orgs] == expected
+
+
+def test_organizations_refuse_a_spent_budget_before_sending(
+    httpx_mock: HTTPXMock, settings: Settings, conn: sqlite3.Connection, run_id: int
+) -> None:
+    conn.execute(
+        "INSERT INTO api_requests (run_id, endpoint) VALUES (?, 'https://api.sam.gov/spent')",
+        (run_id,),
+    )
+    one = settings.model_copy(update={"sam_daily_budget": 1})
+    with SamClient(one, conn, run_id) as client, pytest.raises(BudgetExceeded):
+        client.get_organizations(old_fpds_office_code="EX0001")
+    assert httpx_mock.get_requests() == []
+    assert len(endpoints(conn)) == 1
+
+
+def test_organizations_go_only_to_the_api_host(
+    httpx_mock: HTTPXMock,
+    settings: Settings,
+    client: SamClient,
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Federal Hierarchy URL that moved off api.sam.gov is refused by the same check every
+    other keyed call goes through, before the key is added and before anything is sent."""
+    elsewhere = settings.model_copy(update={"sam_base_url": "https://evil.example"})
+    monkeypatch.setattr(client, "_settings", elsewhere)
+    with pytest.raises(SamError, match="refusing"):
+        client.get_organizations(old_fpds_office_code="EX0001")
+    assert httpx_mock.get_requests() == []
+    assert endpoints(conn) == []

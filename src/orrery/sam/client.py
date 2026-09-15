@@ -30,6 +30,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 SEARCH_PATH = "/opportunities/v2/search"
 ENTITIES_PATH = "/entity-information/v3/entities"
 EXTRACTS_PATH = "/data-services/v1/extracts"
+ORGS_PATH = "/prod/federalorganizations/v1/orgs"
 ENTITY_EXTRACT_PARAMS = {
     "fileType": "ENTITY", "sensitivity": "PUBLIC", "frequency": "MONTHLY", "charset": "UTF-8"
 }  # fmt: skip
@@ -37,6 +38,7 @@ MANIFEST_PATH = "/api/prod/opps/v3/opportunities/{notice_id}/resources"
 MANIFEST_ACCEPT = "application/hal+json"  # a plain Accept header is answered with a 406
 FILE_PATH = "/api/prod/opps/v3/opportunities/resources/files/{resource_id}/download"
 ENTITIES_PER_REQUEST = 10  # the v3 page size cap
+ORGS_PER_REQUEST = 100  # the Federal Hierarchy limit cap; the default is 10
 MAX_WINDOW = timedelta(days=365)
 NAME_MAX = 255  # bytes, every filesystem orrery supports
 NAME_BUDGET = NAME_MAX - 17  # room for the "<sha256[:16]>-" prefix the store path adds
@@ -260,6 +262,20 @@ class SamClient:
             },
         ).json()
 
+    def get_organizations(self, *, old_fpds_office_code: str) -> list[dict]:
+        """Federal Hierarchy organizations carrying this FPDS office code, in one keyed request.
+
+        The office code is the AAC, the last segment of a SAM.gov agency path, which is the
+        only key the store and the Federal Hierarchy share. Non-federal keys get ten of these
+        a day, so a caller resolves a few offices per run rather than crawling the hierarchy.
+        Serves docs/DESIGN.md §5 source 5.
+        """
+        response = self._keyed_request(
+            self._settings.sam_base_url + ORGS_PATH,
+            {"oldfpdsofficecode": old_fpds_office_code, "limit": ORGS_PER_REQUEST},
+        )
+        return _organizations(response.json())
+
     def download_entity_extract(self, dest_dir: Path) -> Path:
         """The public monthly entity extract: one keyed request, answered with a redirect to a
         presigned file URL that carries no key and is streamed without one. The file keeps
@@ -430,6 +446,26 @@ class SamClient:
         if self._key is None:
             return text
         return text.replace(self._key.get_secret_value(), "[api_key]")
+
+
+def _organizations(body: object) -> list[dict]:
+    """The organization list out of an envelope this release has not verified.
+
+    open.gsa.gov/api/fh-public-api documents every field of an organization and nothing about
+    the wrapper around them, so the wrapper is read rather than pinned: a bare list is the
+    list, and an object hands back its first list-valued member. An envelope with no list in
+    it reads as no organizations, which is what a filter matching nothing also reads as; the
+    caller tells the two apart by the response size already recorded in ``api_requests`` and
+    by its own report line, and either way one office goes unresolved instead of a run dying
+    on a shape nobody has seen yet. Pin the key here once docs/notes/fh-probe.md exists.
+    """
+    if isinstance(body, list):
+        return [item for item in body if isinstance(item, dict)]
+    if isinstance(body, dict):
+        for value in body.values():
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
 
 
 def _manifest_item(raw: object, url: str) -> ManifestItem:

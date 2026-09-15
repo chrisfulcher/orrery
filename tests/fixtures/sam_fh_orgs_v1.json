@@ -1,0 +1,26 @@
+{
+  "_unverified": "UNVERIFIED ENVELOPE. open.gsa.gov/api/fh-public-api (read 2026-09-14) documents the fields of a Federal Hierarchy organization but not the envelope around them, so the field names below are from the documentation and the 'orglist'/'totalrecords' wrapper is a guess. orrery.sam.client._organizations therefore reads the first list-valued member of the object rather than a pinned key, and this note exists to be a key that is NOT a list. Correct this file from docs/notes/fh-probe.md once one live lookup has been made. Every id and name here is synthetic.",
+  "totalrecords": 1,
+  "orglist": [
+    {
+      "fhorgid": "100000001",
+      "fhorgname": "EXAMPLE CONTRACTING OFFICE 01",
+      "fhorgtype": "Office",
+      "status": "Active",
+      "agencycode": "9999",
+      "cgaclist": [{"cgac": "999"}],
+      "oldfpdsofficecode": "EX0001",
+      "fhdeptindagencyorgid": "100000000",
+      "fhagencyorgname": "EXAMPLE DEPARTMENT",
+      "createddate": "2015-01-01 00:00:00",
+      "lastupdateddate": "2026-01-15 00:00:00",
+      "fhorganamehistory": [
+        {"fhorgname": "EXAMPLE CONTRACTING OFFICE (FORMER)", "effectivedate": "2015-01-01"},
+        {"fhorgname": "EXAMPLE CONTRACTING OFFICE 01", "effectivedate": "2020-06-01"}
+      ],
+      "fhorgparenthistory": [
+        {"fhorgid": "100000000", "fhorgname": "EXAMPLE DEPARTMENT", "effectivedate": "2015-01-01"}
+      ]
+    }
+  ]
+}
