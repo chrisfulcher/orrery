@@ -41,6 +41,15 @@ def _money(value: float | None) -> str:
     return f"${value:,.0f}" if value is not None else "-"
 
 
+def _exclusion(item: query.Exclusion) -> str:
+    """One exclusion in a line, the same way the CLI says it."""
+    return (
+        f"{item.exclusion_type or 'excluded'} by {item.agency or '-'}"
+        f" · {item.active_date or '-'} to {item.termination_date or 'indefinite'}"
+        f" · SAM {item.sam_number}"
+    )
+
+
 def _code(label: str, code: str | None, title: str | None) -> str:
     """A code with what it means, when the shipped lists know: ``NAICS 541512 Computer Systems
     Design Services``. A code the lists do not carry is shown bare rather than annotated."""
@@ -437,12 +446,21 @@ class ContextScreen(Screen):
             f" · {current.open_tasks} open task(s) (t to open)"
         )
         incumbent = detail.incumbent
+        # An incumbent who may not be awarded work changes what this page is about, so it is
+        # said on the incumbent's own line rather than left to the entity screen.
+        barred = next((item for item in detail.incumbent_exclusions if item.current), None)
+        mark = (
+            f" · [bold red]EXCLUDED by {barred.agency or 'unknown'}"
+            f" until {barred.termination_date or 'indefinite'}[/]"
+            if barred is not None
+            else ""
+        )
         self.query_one("#incumbent", Static).update(
             "none known (no award shares this solicitation or award number)"
             if incumbent is None
             else f"{incumbent.vendor or '-'} · {incumbent.piid} · {_money(incumbent.value_usd)}"
             f" · {_day(incumbent.award_date)} to {_day(incumbent.pop_end)}"
-            f" · set-aside {incumbent.set_aside_code or '-'} (i to open)"
+            f" · set-aside {incumbent.set_aside_code or '-'} (i to open){mark}"
         )
         summary = self.query_one("#summary", Static)
         if detail.summary is None:
@@ -1170,11 +1188,20 @@ class EntityScreen(Screen):
             f"{predicate}: {value}"
             for predicate, value in query.summarize_facts(detail.facts, max_items=8)
         )
+        # One line per exclusion, the ones already over dimmed: a vendor debarred until last
+        # March is not the same as one never debarred, and both belong on the record.
+        excluded = "\n".join(
+            f"[bold red]excluded:[/] {_exclusion(item)}"
+            if item.current
+            else f"[dim]excluded: {_exclusion(item)} (ended)[/]"
+            for item in detail.exclusions
+        )
+        trailer = (f"\n{excluded}" if excluded else "") + (f"\n{facts}" if facts else "")
         header.update(
             f"{detail.kind}: {detail.name}\n"
             f"{' › '.join(ref.name for ref in detail.chain)}\n"
             f"{keys} · {detail.awards_count} award(s), {_money(detail.awards_value_usd)}\n"
-            f"{second}" + (f"\n{facts}" if facts else "")
+            f"{second}{trailer}"
         )
         awards.border_title = "awards won" if contractor else "awards made"
         awards.set_rows([_award_row(award) for award in detail.awards])

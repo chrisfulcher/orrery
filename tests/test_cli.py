@@ -505,7 +505,11 @@ def test_sync_command(
 
     result = runner.invoke(app, ["sync", "--no-ai", "--json"], env=env)
     payload = json.loads(result.output[result.output.index("{") :])
-    assert set(payload) == {"ingest_bulk", "fetch", "extract", "summarize", "embed", "skipped"}
+    assert set(payload) == {
+        "ingest_bulk", "exclusions", "fetch", "extract", "summarize", "embed", "skipped",
+    }  # fmt: skip
+    # No contractor in this store, so the exclusions file was never downloaded.
+    assert payload["exclusions"] is None
     assert payload["summarize"] is None and payload["skipped"] == ["summarize", "embed"]
     assert payload["ingest_bulk"]["active_pass"] == "done"
 
@@ -689,6 +693,44 @@ def test_ingest_entities_from_file_and_key_guard(
 
     result = runner.invoke(app, ["ingest", "entities"], env=env)  # nothing on disk, no key
     assert result.exit_code == 2
+
+
+def test_ingest_exclusions_from_a_file_needs_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conftest import write_exclusions
+    from test_ingest_exclusions import DAY_257, FIRM_ONE
+
+    monkeypatch.chdir(tmp_path)  # no .env here: nothing about this command is keyed
+    monkeypatch.delenv("ORRERY_SAM_API_KEY", raising=False)
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
+        conn.execute(
+            "INSERT INTO entities (kind, name, uei, cage, source_id, first_seen_at, last_seen_at)"
+            " VALUES ('contractor', 'EXAMPLE LOGISTICS LLC', 'EXCL00000001', 'EXCL1',"
+            " 'usaspending_awards', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')"
+        )
+    path = write_exclusions(tmp_path, [FIRM_ONE, {"Classification": "Individual"}], DAY_257)
+
+    result = runner.invoke(app, ["ingest", "exclusions", "--file", str(path)], env=env)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == (
+        "run 1: 2 rows read, 1 individuals not read, 1 matched a contractor, 1 new, 7 facts,"
+        " 0 ended"
+    )
+
+    result = runner.invoke(
+        app, ["ingest", "exclusions", "--file", str(path), "--limit", "1", "--json"], env=env
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert payload["rows_matched"] == 1 and payload["facts_added"] == 0
+    assert payload["termination_pass"].startswith("skipped:")
+
+    contractor = runner.invoke(app, ["contractor", "EXCL00000001"], env=env)
+    assert "excluded: Prohibition/Restriction by TREAS" in contractor.output
 
 
 def test_profile_edit_reopens_the_editor_until_valid(

@@ -506,3 +506,43 @@ async def test_an_award_folds_into_its_solicitation_and_hides_until_asked(
         await pilot.pause()
         assert isinstance(app.screen, ContextScreen)
         assert "Sentinel award" in text(app, "#header")
+
+
+@pytest.fixture
+def app_with_exclusion(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed_awards: SeedAwards,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> OrreryTop:
+    """An invented vendor, holding the incumbent contract, under an invented exclusion."""
+    from conftest import write_exclusions
+    from test_ingest_exclusions import DAY_257, FIRM_ONE, VENDORS
+
+    from orrery.ingest.exclusions import ingest_extract
+
+    monkeypatch.setattr(db, "utcnow", lambda: "2026-09-06T00:00:00Z")
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
+    seed_awards([dict(VENDORS[0], solicitation_identifier=hrsa["solicitationNumber"])])
+    ingest_extract(conn, settings, write_exclusions(tmp_path, [FIRM_ONE], DAY_257))
+    conn.close()
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path))
+
+
+async def test_an_excluded_incumbent_is_said_where_the_decision_is_made(
+    app_with_exclusion: OrreryTop,
+) -> None:
+    app = app_with_exclusion
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(ContextScreen(HRSA))
+        await pilot.pause()
+        assert "EXCLUDED by TREAS until indefinite" in text(app, "#incumbent")
+
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, EntityScreen)
+        header = text(app, "#entity_header")
+        assert "excluded:[/] Prohibition/Restriction by TREAS · 2026-03-01 to indefinite" in header
+        assert "SAM 11111111-2222-4333-8444-555555555555" in header

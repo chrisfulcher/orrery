@@ -239,9 +239,10 @@ def fetch_extract(
     """Today's extract in ``dest_dir``, else yesterday's.
 
     The daily file appears during its own UTC day, so early in that day today's name is not
-    there yet and yesterday's is the current file. A copy already on disk under either name
-    is that day's file and is reused: the name carries the date, so there is no staleness to
-    reason about.
+    there yet and yesterday's is the current file. A name with no file behind it answers 204
+    No Content rather than 404 (`docs/notes/exclusions-probe.md`), which the download treats
+    as the failure it is. A copy already on disk under either name is that day's file and is
+    reused: the name carries the date, so there is no staleness to reason about.
     """
     today = datetime.now(UTC).date()
     days = (today, today - timedelta(days=1))

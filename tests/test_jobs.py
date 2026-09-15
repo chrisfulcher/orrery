@@ -9,10 +9,11 @@ from orrery.embed.pipeline import EmbedResult
 from orrery.extract.text import ExtractResult
 from orrery.fetch import queue
 from orrery.fetch.queue import FetchResult
-from orrery.ingest import awards, bulk, entities, notices
+from orrery.ingest import awards, bulk, entities, exclusions, notices
 from orrery.ingest.awards import AwardsResult
 from orrery.ingest.bulk import BulkResult
 from orrery.ingest.entities import EntitiesResult
+from orrery.ingest.exclusions import ExclusionsResult
 from orrery.ingest.notices import IngestResult
 from orrery.jobs import (
     JOBS,
@@ -31,8 +32,9 @@ from orrery.summaries import SummarizeResult
 
 def test_registry_lists_the_operations_with_their_needs() -> None:
     assert list(OPERATIONS) == [
-        "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities", "fetch",
-        "extract", "embed", "summarize", "sync", "assess", "db-migrate", "db-reindex",
+        "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities",
+        "ingest-exclusions", "fetch", "extract", "embed", "summarize", "sync", "assess",
+        "db-migrate", "db-reindex",
     ]  # fmt: skip
     assert [n for n in JOBS if n not in OPERATIONS] == [
         "probe-sam", "probe-embed", "probe-fast", "probe-deep"
@@ -41,6 +43,8 @@ def test_registry_lists_the_operations_with_their_needs() -> None:
     assert JOBS["ingest-notices"].needs == {"sam_key", "naics"}
     # fetch needs no key: only its description stage is keyed, and that stage stands aside.
     assert JOBS["fetch"].needs == set() and JOBS["ingest-awards"].needs == {"naics"}
+    # Exclusions are a public file matched against contractors: no key, and no slice either.
+    assert JOBS["ingest-exclusions"].needs == set()
     assert not JOBS["assess"].cancellable and JOBS["fetch"].cancellable
 
 
@@ -155,6 +159,7 @@ def _stub_sync_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **overrid
     order: list[str] = []
     results = {
         "ingest_bulk": BulkResult(1, 10, 3, 3, 0, 0, 3, 0, 0, bulk.ACTIVE_PASS_DONE),
+        "exclusions": ExclusionsResult(6, 9, 1, 4, 1, 8, 0, exclusions.TERMINATION_DONE),
         "fetch": FetchResult(2, 4, 0, 4, 0, 9, 9, 0, 0, 4, False),
         "extract": ExtractResult(9, 2, 0, {"ole": 2}),
         "summarize": SummarizeResult(3, 0, "qwen3:14b"),
@@ -174,6 +179,12 @@ def _stub_sync_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **overrid
         lambda *a, **k: bulk.Extract(tmp_path / "x.csv", "2026-09-08T00:00:00Z"),
     )
     monkeypatch.setattr(bulk, "ingest_bulk", stage("ingest_bulk"))
+    monkeypatch.setattr(
+        exclusions,
+        "fetch_extract",
+        lambda *a, **k: bulk.Extract(tmp_path / "exclusions.ZIP", None),
+    )
+    monkeypatch.setattr(exclusions, "ingest_extract", stage("exclusions"))
     monkeypatch.setattr(queue, "fetch_pending", stage("fetch"))
     monkeypatch.setattr(jobs, "extract_pending", stage("extract"))
     monkeypatch.setattr(summaries, "summarize_pending", stage("summarize"))
@@ -197,8 +208,30 @@ def test_sync_runs_every_stage_in_order(
     assert "extract: 9 extracted, 2 unsupported (ole 2), 0 failed" in roll_up
     # Each stage announces itself, so a long run says where it is.
     assert [line for line in lines if line.startswith("sync: ")] == [
-        "sync: ingest bulk", "sync: fetch", "sync: extract", "sync: summarize", "sync: embed",
+        "sync: ingest bulk", "sync: ingest exclusions",
+        "sync: no contractor in the store yet, so an exclusion could match nothing",
+        "sync: fetch", "sync: extract", "sync: summarize", "sync: embed",
     ]  # fmt: skip
+    assert result.exclusions is None
+
+
+def test_sync_reads_exclusions_once_the_store_has_a_contractor(
+    conn, settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The file is 12 MB of vendors this store may know nothing about; with no contractor in
+    it there is nothing to match, and the download is the one cost a keyless source still has."""
+    order = _stub_sync_stages(monkeypatch, tmp_path)
+    conn.execute(
+        "INSERT INTO entities (kind, name, uei, source_id, first_seen_at, last_seen_at)"
+        " VALUES ('contractor', 'EXAMPLE LOGISTICS LLC', 'EXCL00000001', 'usaspending_awards',"
+        " '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')"
+    )
+
+    result = jobs.run(JOBS["sync"], conn, settings, {}, report=lambda _: None)
+
+    assert order == ["ingest_bulk", "exclusions", "fetch", "extract", "summarize", "embed"]
+    assert result.exclusions.rows_matched == 1
+    assert "ingest-exclusions: run 6:" in summarize(JOBS["sync"], result)
 
 
 def test_sync_without_ai_skips_exactly_the_model_stages(
@@ -332,6 +365,17 @@ def test_summaries_match_the_cli() -> None:
     assert summarize(JOBS["ingest-entities"], EntitiesResult(6, 3, 2, 0, 1, 2, 11, 0, 0)) == (
         "run 6: 3 registrants read, 2 in slice, 0 malformed, 1 contractors new, 2 registrations,"
         " 11 facts, 0 requests"
+    )
+    ended = ExclusionsResult(8, 168452, 3, 133266, 1, 9, 2, exclusions.TERMINATION_DONE)
+    assert summarize(JOBS["ingest-exclusions"], ended) == (
+        "run 8: 168452 rows read, 133266 individuals not read, 3 matched a contractor, 1 new,"
+        " 9 facts, 2 ended"
+    )
+    # A capped run never reports a count of endings: it cannot tell one the file dropped from
+    # one it never reached, and 0 ended would be the claim that it can.
+    capped = ExclusionsResult(9, 1, 1, 0, 1, 9, 0, exclusions.TERMINATION_PARTIAL)
+    assert summarize(JOBS["ingest-exclusions"], capped).endswith(
+        f"termination pass {exclusions.TERMINATION_PARTIAL}"
     )
     assert summarize(JOBS["fetch"], FetchResult(7, 2, 1, 9, 4, 12, 3, 0, 1, 2, True)) == (
         "run 7: 2 descriptions fetched, 1 failed; 9 manifests read, 4 failed,"

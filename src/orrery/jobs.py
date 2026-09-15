@@ -22,7 +22,7 @@ from orrery.embed.client import EmbeddingError
 from orrery.embed.pipeline import embed_pending
 from orrery.extract.text import extract_pending
 from orrery.fetch import queue
-from orrery.ingest import awards, bulk, entities, notices
+from orrery.ingest import awards, bulk, entities, exclusions, notices
 from orrery.progress import Cancelled, JobCancelled, Report, check, never, quiet
 from orrery.quota import BudgetExceeded
 from orrery.sam.client import SamError
@@ -98,7 +98,12 @@ def run(
         raise
     except (BudgetExceeded, SamError, UsaspendingError, EmbeddingError, AIError) as exc:
         raise JobFailed(f"{_prefix(job)}{exc}") from exc
-    except (bulk.BulkError, awards.AwardsError, entities.EntitiesError) as exc:
+    except (
+        bulk.BulkError,
+        awards.AwardsError,
+        entities.EntitiesError,
+        exclusions.ExclusionsError,
+    ) as exc:
         raise JobFailed(f"{_prefix(job)}{exc}") from exc
     except (ValueError, workspace.NotFound) as exc:
         raise JobFailed(f"{_prefix(job)}{exc}") from exc
@@ -118,6 +123,7 @@ PREFIXES = {
     "ingest-bulk": "bulk ingest stopped: ",
     "ingest-awards": "awards ingest stopped: ",
     "ingest-entities": "entities ingest stopped: ",
+    "ingest-exclusions": "exclusions ingest stopped: ",
     "embed": "embedding stopped: ",
     "summarize": "summarize stopped: ",
     "sync": "sync stopped: ",
@@ -242,6 +248,7 @@ class SyncResult:
     """
 
     ingest_bulk: object | None = None
+    exclusions: object | None = None
     fetch: object | None = None
     extract: object | None = None
     summarize: object | None = None
@@ -268,6 +275,20 @@ def _run_sync(conn, settings, values, report, cancelled) -> object:
         conn, settings, extract.path, mark_inactive=True, limit=limit,
         generated_at=extract.generated_at, report=report, cancelled=cancelled,
     )  # fmt: skip
+    check(cancelled)
+
+    # Exclusions are matched against contractors by exact key, so a store with none has
+    # nothing this 12 MB file could say. Downloading it anyway would be a download for
+    # nothing, which is the one thing a keyless source still costs a user.
+    report("sync: ingest exclusions")
+    if _has_contractors(conn):
+        path = exclusions.fetch_extract(settings.data_dir / "extracts", report=report).path
+        report(f"extract: {path}")
+        done["exclusions"] = exclusions.ingest_extract(
+            conn, settings, path, limit=limit, report=report, cancelled=cancelled
+        )
+    else:
+        report("sync: no contractor in the store yet, so an exclusion could match nothing")
     check(cancelled)
 
     report("sync: fetch")
@@ -300,6 +321,13 @@ def _run_sync(conn, settings, values, report, cancelled) -> object:
         )
 
     return SyncResult(**done, skipped=skipped)
+
+
+def _has_contractors(conn: sqlite3.Connection) -> bool:
+    (found,) = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM entities WHERE kind = 'contractor')"
+    ).fetchone()
+    return bool(found)
 
 
 def _run_awards(conn, settings, values, report, cancelled) -> object:
@@ -358,6 +386,21 @@ def _run_entities(conn, settings, values, report, cancelled) -> object:
         path = entities.fetch_extract(conn, settings, extract_dir, report=report)
     report(f"extract: {path}")
     return entities.ingest_extract(
+        conn, settings, path, limit=values.get("limit"), report=report, cancelled=cancelled
+    )
+
+
+def _exclusions_extract(settings: Settings, values: dict, report: Report) -> Path:
+    file = values.get("file")
+    if file:
+        return Path(file)
+    return exclusions.fetch_extract(settings.data_dir / "extracts", report=report).path
+
+
+def _run_exclusions(conn, settings, values, report, cancelled) -> object:
+    path = _exclusions_extract(settings, values, report)
+    report(f"extract: {path}")
+    return exclusions.ingest_extract(
         conn, settings, path, limit=values.get("limit"), report=report, cancelled=cancelled
     )
 
@@ -508,6 +551,12 @@ JOBS: dict[str, Job] = {
             True, _run_entities, unmet=_entities_unmet,
         ),
         Job(
+            "ingest-exclusions", "Ingest exclusions (SAM.gov, no key)", frozenset(),
+            (Param("file", "Local extract file", "str"),
+             Param("limit", "Row limit", "int")),
+            True, _run_exclusions,
+        ),
+        Job(
             "fetch", "Fetch descriptions and attachments", frozenset(),
             (Param("budget", "Description budget", "int"),
              Param("max_attachments", "Attachment limit", "int"),
@@ -589,6 +638,20 @@ def summarize(job: Job, result: object) -> str:
                 f" {r.registrations_added} registrations, {r.facts_added} facts,"
                 f" {r.requests_spent} requests{resumed}"
             )
+        case "ingest-exclusions":
+            # An exclusion that ended is only knowable from the file no longer carrying it,
+            # so a pass that did not finish must never read as "nothing ended today".
+            ended = (
+                f"{r.terminated} ended"
+                if r.termination_pass == exclusions.TERMINATION_DONE
+                else f"termination pass {r.termination_pass}"
+            )
+            return (
+                f"run {r.run_id}: {r.rows_read} rows read,"
+                f" {r.individuals_skipped} individuals not read,"
+                f" {r.rows_matched} matched a contractor, {r.exclusions_new} new,"
+                f" {r.facts_added} facts, {ended}"
+            )
         case "fetch":
             note = (
                 " (daily budget exhausted; attachments still fetched)" if r.budget_exhausted else ""
@@ -624,7 +687,8 @@ def summarize(job: Job, result: object) -> str:
             lines = [
                 f"{stage}: {summarize(JOBS[stage], result)}"
                 for stage, result in (
-                    ("ingest-bulk", r.ingest_bulk), ("fetch", r.fetch), ("extract", r.extract),
+                    ("ingest-bulk", r.ingest_bulk), ("ingest-exclusions", r.exclusions),
+                    ("fetch", r.fetch), ("extract", r.extract),
                     ("summarize", r.summarize), ("embed", r.embed),
                 )
                 if result is not None

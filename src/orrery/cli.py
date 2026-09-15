@@ -53,6 +53,7 @@ MILESTONES = {
     "ingest-bulk": ("extract: ", "NAICS "),
     "ingest-awards": ("awards: ", "NAICS "),
     "ingest-entities": ("extract: ", "NAICS "),
+    "ingest-exclusions": ("extract: ", "no exclusion "),
     "assess": ("",),
     "sync": ("sync: ", "extract: ", "NAICS "),
 }
@@ -313,6 +314,15 @@ def _money(value: float | None) -> str:
     return f"${value:,.0f}" if value is not None else "-"
 
 
+def _exclusion(item: query.Exclusion) -> str:
+    """One exclusion in a line, the same way every surface says it."""
+    return (
+        f"{item.exclusion_type or 'excluded'} by {item.agency or '-'}"
+        f" · {item.active_date or '-'} to {item.termination_date or 'indefinite'}"
+        f" · SAM {item.sam_number}"
+    )
+
+
 def _print_contracts(rows: list[query.ContractRef], json_output: bool) -> None:
     if json_output:
         print_json([dataclasses.asdict(row) for row in rows])
@@ -402,10 +412,20 @@ def contractor_command(
     typer.echo(f"{detail.name}  uei {detail.uei}  cage {detail.cage or '-'}")
     typer.echo(f"also seen as: {', '.join(a for a in detail.aliases if a != detail.name) or '-'}")
     typer.echo(f"awards: {detail.awards_count}, {_money(detail.awards_value_usd)} current value")
+    for item in detail.exclusions:
+        typer.echo(
+            f"  {'excluded' if item.current else 'was excluded'}: {_exclusion(item)}"
+            f" · observed {item.observed_at[:10]}"
+        )
     for predicate, value in query.summarize_facts(detail.facts):
         typer.echo(f"  {predicate}: {value}")
-    if detail.facts:
-        typer.echo(f"  ({detail.facts[0].source_id}, observed {detail.facts[0].observed_at})")
+    # The exclusions above name their own source in each line; this attributes the rest, so a
+    # vendor with an exclusion and no registration is not credited to the wrong adapter.
+    attributed = next(
+        (f for f in detail.facts if not f.predicate.startswith(query.EXCLUSION_PREFIX)), None
+    )
+    if attributed is not None:
+        typer.echo(f"  ({attributed.source_id}, observed {attributed.observed_at})")
     _print_contracts(list(detail.awards), False)
 
 
@@ -1151,6 +1171,23 @@ def ingest_entities_command(
         {"uei": uei, "file": file, "refresh": refresh, "limit": limit},
         json_output,
     )
+
+
+@ingest_app.command("exclusions")
+def ingest_exclusions_command(
+    file: Annotated[
+        Path | None, typer.Option("--file", help="Ingest a downloaded extract instead.")
+    ] = None,
+    limit: Annotated[int | None, typer.Option(help="Cap matched rows this run.")] = None,
+    json_output: JsonFlag = False,
+) -> None:
+    """Ingest SAM.gov exclusions from the daily public extract: no key, no quota.
+
+    Only rows matching a contractor already in the store by UEI or CAGE are read, and rows
+    for individuals are counted and nothing more. A capped run ends no exclusion, because it
+    cannot tell one the file has dropped from one it never reached.
+    """
+    _run_job("ingest-exclusions", {"file": file, "limit": limit}, json_output)
 
 
 @app.command()

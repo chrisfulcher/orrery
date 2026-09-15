@@ -110,6 +110,11 @@ def download(
                 received += len(chunk)
                 if received % (1 << 24) < len(chunk):
                     report(f"{received >> 20} MB")
+            if received == 0:
+                # SAM.gov answers 204 No Content for a dated file it has not published yet,
+                # and 204 is a success. An empty body is never an extract, so it is the
+                # caller's failure to handle rather than a zero-byte file left on disk.
+                raise error(f"{url}: HTTP {response.status_code} with an empty body")
     except BaseException as exc:
         tmp.unlink(missing_ok=True)
         if isinstance(exc, httpx.HTTPError):

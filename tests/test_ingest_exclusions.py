@@ -41,8 +41,10 @@ CUT_258 = "2026-09-15T00:00:00Z"
 DAY_257 = date(2026, 9, 14)
 DAY_258 = date(2026, 9, 15)
 
-SAM_ONE = "S4MEX00001"
-SAM_TWO = "S4MEX00002"
+SAM_ONE = "11111111-2222-4333-8444-555555555555"
+SAM_TWO = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+SAM_THREE = "cccccccc-dddd-4eee-8fff-111111111111"
+SAM_FOUR = "22222222-3333-4444-8555-666666666666"
 
 VENDORS = [
     {
@@ -123,11 +125,8 @@ def test_only_contractors_already_in_the_store_are_read(
             FIRM_ONE,
             FIRM_BY_CAGE,
             # An individual whose UEI would have matched: the classification decides, not the key.
-            dict(
-                _individual(),
-                **{"Unique Entity ID": "EXCL00000001", "SAM Number": "S4MEX00003"},
-            ),
-            {"Unique Entity ID": "EXCL00000009", "CAGE": "", "SAM Number": "S4MEX00004"},
+            dict(_individual(), **{"Unique Entity ID": "EXCL00000001", "SAM Number": SAM_THREE}),
+            {"Unique Entity ID": "EXCL00000009", "CAGE": "", "SAM Number": SAM_FOUR},
         ],
         DAY_257,
     )
@@ -292,10 +291,14 @@ def test_a_changed_termination_date_appends_one_fact(
 def test_fetch_extract_falls_back_to_yesterday_and_then_caches(
     httpx_mock: HTTPXMock, tmp_path: Path
 ) -> None:
-    """The daily file appears during its own UTC day, so early on, today's name is a 404."""
+    """The daily file appears during its own UTC day, so early on, today's name has no file
+    behind it -- and the service says so with 204 No Content, which is a success status with
+    nothing in it. An empty body is never an extract."""
     today = datetime.now(UTC).date()
     yesterday = date.fromordinal(today.toordinal() - 1)
-    httpx_mock.add_response(url=EXTRACT_URL.format(name=extract_name(today)), status_code=404)
+    httpx_mock.add_response(
+        url=EXTRACT_URL.format(name=extract_name(today)), status_code=204, content=b""
+    )
     httpx_mock.add_response(
         url=EXTRACT_URL.format(name=extract_name(yesterday)),
         content=make_exclusions([FIRM_ONE]),
@@ -307,6 +310,10 @@ def test_fetch_extract_falls_back_to_yesterday_and_then_caches(
     assert extract.path.name == extract_name(yesterday)
     assert extract.generated_at == "2026-09-13T06:02:00Z"
     assert not list(extract.path.parent.glob("*.part"))
+    assert not list(extract.path.parent.glob("*.ZIP.part"))
+    assert [p.name for p in extract.path.parent.glob("SAM_Exclusions*")] != [
+        extract_name(today)
+    ]  # nothing was left on disk under the name that answered with nothing
     assert fetch_extract(tmp_path / "extracts") == extract
     assert len(httpx_mock.get_requests()) == 2
 

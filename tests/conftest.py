@@ -465,7 +465,8 @@ EXCLUSION_DEFAULTS = {
     "Active Date": "2026-03-01",
     "Termination Date": "Indefinite",
     "Record Status": "Active",
-    "SAM Number": "S4MEX00001",
+    # The real file's SAM Number is a UUID, so the fixture's is one too, invented.
+    "SAM Number": "11111111-2222-4333-8444-555555555555",
     "CAGE": "EXCL1",
     "Creation_Date": "2026-03-01",
 }
