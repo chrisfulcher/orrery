@@ -60,6 +60,10 @@ V1_COLUMNS = {
         "user_id", "tracked_id", "notice_id", "stage", "stage_order", "pwin", "notes",
         "created_at", "updated_at", "title", "agency", "response_deadline", "active",
     },
+    "v_exclusions": {
+        "entity_id", "name", "uei", "cage", "sam_number", "status", "exclusion_type",
+        "program", "agency", "active_date", "termination_date", "observed_at", "current",
+    },
     "v_quota_daily": {"day", "requests", "failed"},
 }  # fmt: skip
 
