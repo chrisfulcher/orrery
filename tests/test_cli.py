@@ -55,6 +55,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0018_tasks.sql",
         "applied 0019_reference.sql",
         "applied 0020_exclusions.sql",
+        "applied 0021_hierarchy.sql",
     ]
     assert (tmp_path / "orrery.sqlite").exists()
 
@@ -86,6 +87,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0018_tasks.sql",
         "applied  0019_reference.sql",
         "applied  0020_exclusions.sql",
+        "applied  0021_hierarchy.sql",
         "codes    2125 in naics_codes from census_naics 2022",
         "codes    2344 in psc_codes from gsa_psc_manual 2025-04",
     ]

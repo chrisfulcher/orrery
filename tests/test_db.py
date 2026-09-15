@@ -60,6 +60,7 @@ MIGRATIONS = [
     "0018_tasks.sql",
     "0019_reference.sql",
     "0020_exclusions.sql",
+    "0021_hierarchy.sql",
 ]
 NOTICE_COLUMNS = "(notice_id, title, first_seen_at, last_seen_at, source_id, raw_json)"
 NOW = "2026-01-01T00:00:00Z"
@@ -117,6 +118,7 @@ def test_seed_rows(conn: sqlite3.Connection) -> None:
         ("sam_bulk_csv",),
         ("sam_entities",),
         ("sam_exclusions",),
+        ("sam_federal_hierarchy",),
         ("sam_opportunities_api",),
         ("usaspending_awards",),
     ]

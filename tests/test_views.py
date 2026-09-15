@@ -36,7 +36,8 @@ V1_COLUMNS = {
     },
     "v_entities": {
         "entity_id", "kind", "name", "agency_path_code", "uei", "cage", "parent_entity_id",
-        "parent", "first_seen_at", "last_seen_at", "notices",
+        "parent", "first_seen_at", "last_seen_at", "notices", "fh_org_id",
+        "old_fpds_office_code",
     },
     "v_contractors": {
         "entity_id", "name", "uei", "cage", "first_seen_at", "last_seen_at", "awards",
