@@ -27,6 +27,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+# Wheel and sdist written by `uv build`
+dist/
 
 # Local data directory (database, downloaded attachments)
 data/
