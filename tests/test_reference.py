@@ -1,12 +1,15 @@
 """The shipped NAICS and PSC code lists, and the loader that puts them in a store."""
 
+import json
 import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from orrery import db, reference
+from orrery.cli import app
 
 NOW = "2026-01-01T00:00:00Z"
 TERMS = "U.S. Government work, public domain; shipped with orrery"
@@ -145,3 +148,32 @@ def test_a_store_short_of_the_migration_is_left_alone(
     assert counts(conn) == (0, 0)
     assert reference.loaded(conn) == ()
     conn.close()
+
+
+def test_db_status_names_the_vintage_each_list_came_from(tmp_path: Path) -> None:
+    runner = CliRunner()
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
+    assert runner.invoke(app, ["db", "migrate"], env=env).exit_code == 0
+
+    result = runner.invoke(app, ["db", "status", "--json"], env=env)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert [
+        (item["source_id"], item["table"], item["vintage"], item["rows"] > 1000)
+        for item in payload["reference"]
+    ] == [
+        ("census_naics", "naics_codes", "2022", True),
+        ("gsa_psc_manual", "psc_codes", "2025-04", True),
+    ]
+    assert all(item["last_run_at"] for item in payload["reference"])
+
+
+def test_db_status_before_the_migration_claims_no_lists(tmp_path: Path) -> None:
+    """A store that has never been migrated still answers, and says it holds nothing."""
+    result = CliRunner().invoke(
+        app, ["db", "status", "--json"], env={"ORRERY_DATA_DIR": str(tmp_path)}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["reference"] == []

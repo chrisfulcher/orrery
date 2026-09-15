@@ -12,7 +12,7 @@ from typing import Annotated
 import click
 import typer
 
-from orrery import __version__, assess, db, documents, jobs, query, summaries, workspace
+from orrery import __version__, assess, db, documents, jobs, query, reference, summaries, workspace
 from orrery import quota as quota_module
 from orrery.ai import AIError
 from orrery.config import Settings
@@ -1194,16 +1194,29 @@ def reindex() -> None:
 
 
 @db_app.command()
-def status() -> None:
-    """Show applied and pending schema migrations."""
+def status(json_output: JsonFlag = False) -> None:
+    """Show applied and pending schema migrations, and the code lists the store holds."""
     settings = Settings()
-    typer.echo(f"database: {settings.db_path}")
     with closing(db.connect(settings.db_path)) as conn:
         current = db.status(conn)
+        lists = reference.loaded(conn) if reference.MIGRATION in current.applied else ()
+    if json_output:
+        print_json(
+            {
+                "database": str(settings.db_path),
+                "applied": current.applied,
+                "pending": current.pending,
+                "reference": [dataclasses.asdict(item) for item in lists],
+            }
+        )
+        return
+    typer.echo(f"database: {settings.db_path}")
     for name in current.applied:
         typer.echo(f"applied  {name}")
     for name in current.pending:
         typer.echo(f"pending  {name}")
+    for item in lists:
+        typer.echo(f"codes    {item.rows} in {item.table} from {item.source_id} {item.vintage}")
 
 
 Subject = Annotated[

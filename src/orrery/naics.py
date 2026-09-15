@@ -9,7 +9,9 @@ is what every slice meant before this module existed.
 
 Nothing here knows about NAICS revisions. A prefix survives a renumbering only when the
 revision stays inside it, and that is not guaranteed: the 2022 revision moved wired telecom
-from 517311 to 517111, across the four-digit boundary. Vintage lineage is issue #2.
+from 517311 to 517111, across the four-digit boundary. The store ships the 2022 list as
+seed data (``orrery.reference``), so a 2017 code reads as a code with no title; mapping
+one vintage onto the next is the follow-up issue #2 left open.
 """
 
 import json

@@ -41,6 +41,14 @@ def _money(value: float | None) -> str:
     return f"${value:,.0f}" if value is not None else "-"
 
 
+def _code(label: str, code: str | None, title: str | None) -> str:
+    """A code with what it means, when the shipped lists know: ``NAICS 541512 Computer Systems
+    Design Services``. A code the lists do not carry is shown bare rather than annotated."""
+    if not code:
+        return f"{label} -"
+    return f"{label} {code} {title}" if title else f"{label} {code}"
+
+
 AWARD_COLUMNS: list[tuple[str, int | None]] = [
     ("action", 10), ("vendor", None), ("office", 30), ("value", 14), ("set-aside", 9), ("piid", 18)
 ]  # fmt: skip
@@ -375,8 +383,9 @@ class ContextScreen(Screen):
             f"{detail.notice_id} · {detail.solicitation_number or '-'}"
             f" · {detail.notice_type or '-'}\n"
             f"{chain}\n"
-            f"set-aside {detail.set_aside_code or '-'} · NAICS {detail.naics_code or '-'}"
-            f" · PSC {detail.psc_code or '-'}\n"
+            f"set-aside {detail.set_aside_code or '-'}"
+            f" · {_code('NAICS', detail.naics_code, detail.naics_title)}"
+            f" · {_code('PSC', detail.psc_code, detail.psc_title)}\n"
             f"posted {detail.posted_at or '-'} · deadline {detail.response_deadline or '-'}"
             f" · {'active' if detail.active else 'inactive'} · {detail.versions} version(s)"
             f" · source {detail.source_id}\n"

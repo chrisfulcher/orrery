@@ -361,6 +361,10 @@ class NoticeDetail:
     stated_set_aside: str | None = None
     """The set-aside the notice text states, as a SAM.gov code; fills an empty code."""
     summary_model: str | None = None
+    naics_title: str | None = None
+    """What the shipped code lists call this notice's codes; None for a code no longer in the
+    vintage orrery ships, which is a fact about the vintage and not about the notice."""
+    psc_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -422,7 +426,8 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         " set_aside_code, posted_at, response_deadline, active, first_seen_at, last_seen_at,"
         " source_id, description_status, description, url, agency, agency_entity_id, versions,"
         " award_number, award_date, award_amount, awardee, agency_path_code,"
-        " summary, work_type, keywords, stated_set_aside, summary_model"
+        " summary, work_type, keywords, stated_set_aside, summary_model,"
+        " naics_title, psc_title"
         " FROM v_notices WHERE notice_id = ?",
         (notice_id,),
     ).fetchone()
@@ -455,6 +460,8 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         keywords=tuple(json.loads(row[26])) if row[26] else (),
         stated_set_aside=row[27],
         summary_model=row[28],
+        naics_title=row[29],
+        psc_title=row[30],
     )
 
 

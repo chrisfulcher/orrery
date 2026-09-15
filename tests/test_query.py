@@ -217,7 +217,30 @@ def test_notice_detail(conn: sqlite3.Connection, seed: Seed) -> None:
     assert detail.agency == "HRSA HEADQUARTERS" and detail.url == hrsa["uiLink"]
     assert detail.versions == 1 and len(detail.attachments) == 1
     assert detail.attachments[0].fetch_status == "pending" and detail.attachments[0].text_chars == 0
+    assert (detail.naics_code, detail.naics_title) == ("541512", "Computer Systems Design Services")
+    assert (detail.psc_code, detail.psc_title) == (
+        "DJ01",
+        "IT AND TELECOM - SECURITY AND COMPLIANCE SUPPORT SERVICES (LABOR)",
+    )
     assert query.notice(conn, "nope") is None
+
+
+def test_notice_detail_leaves_an_unlisted_code_untitled(
+    conn: sqlite3.Connection, seed: Seed
+) -> None:
+    """A code from an older NAICS vintage, or a PSC the manual has retired, is still the code
+    the government put on the notice; it just has no title to show."""
+    seed()
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
+    conn.execute(
+        "UPDATE notices SET naics_code = '517311', psc_code = 'D399' WHERE notice_id = ?", (hrsa,)
+    )
+
+    detail = query.notice(conn, hrsa)
+
+    assert detail is not None
+    assert (detail.naics_code, detail.naics_title) == ("517311", None)
+    assert (detail.psc_code, detail.psc_title) == ("D399", None)
 
 
 def test_entity_detail(conn: sqlite3.Connection, seed: Seed) -> None:

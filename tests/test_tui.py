@@ -166,7 +166,10 @@ async def test_dashboard_search_context_and_entity(app: OrreryTop) -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, ContextScreen)
-        assert "Microsoft" in text(app, "#header")
+        header = text(app, "#header")
+        assert "Microsoft" in header
+        assert "NAICS 541512 Computer Systems Design Services" in header
+        assert "PSC DA10 IT AND TELECOM - BUSINESS APPLICATION" in header
         assert "not pursued" in text(app, "#pursuit")
 
         await pilot.press("t")
