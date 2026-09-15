@@ -436,6 +436,67 @@ class Fact:
 
 
 @dataclass(frozen=True)
+class Exclusion:
+    """One SAM.gov exclusion as the facts record it, folded to its latest values.
+
+    ``current`` is the question a reader actually has -- may this vendor be awarded work
+    today? -- and is derived here rather than stored, because it changes with the calendar
+    and not with anything a source said.
+    """
+
+    sam_number: str
+    status: str
+    exclusion_type: str | None = None
+    program: str | None = None
+    agency: str | None = None
+    active_date: str | None = None
+    termination_date: str | None = None
+    """None when the record says the exclusion is indefinite."""
+    observed_at: str = ""
+    current: bool = False
+
+
+EXCLUSION_PREFIX = "sam.exclusion."
+
+
+def exclusions(facts: tuple[Fact, ...], *, today: str | None = None) -> tuple[Exclusion, ...]:
+    """The exclusions in ``facts``, one per SAM Number, current ones first.
+
+    ``facts`` is newest first, as ``EntityDetail.facts`` is, so the first value seen for a
+    predicate is the latest one. ``today`` is an ISO date; it defaults to the store's clock.
+    """
+    today = today or db.utcnow()[:10]
+    values: dict[str, dict[str, str]] = {}
+    observed: dict[str, str] = {}
+    for fact in facts:
+        if not fact.predicate.startswith(EXCLUSION_PREFIX) or not fact.source_ref:
+            continue
+        values.setdefault(fact.source_ref, {}).setdefault(
+            fact.predicate[len(EXCLUSION_PREFIX) :], fact.value
+        )
+        observed.setdefault(fact.source_ref, fact.observed_at)
+    found = []
+    for sam_number, latest in values.items():
+        status = latest.get("status", "active")
+        ends = latest.get("termination_date")
+        found.append(
+            Exclusion(
+                sam_number,
+                status,
+                latest.get("type"),
+                latest.get("program"),
+                latest.get("agency"),
+                latest.get("active_date"),
+                ends,
+                observed[sam_number],
+                status == "active" and (ends is None or ends >= today),
+            )
+        )
+    found.sort(key=lambda item: (not item.current, item.sam_number))
+    return tuple(found)
+
+
+@dataclass(frozen=True)
 class NoticeDetail:
     notice_id: str
     solicitation_number: str | None
@@ -478,6 +539,9 @@ class NoticeDetail:
     """What the shipped code lists call this notice's codes; None for a code no longer in the
     vintage orrery ships, which is a fact about the vintage and not about the notice."""
     psc_title: str | None = None
+    incumbent_exclusions: tuple[Exclusion, ...] = ()
+    """The incumbent vendor's exclusions, when the store knows which entity it is. An
+    excluded incumbent is the loudest fact on the page and must not need a second lookup."""
 
 
 @dataclass(frozen=True)
@@ -502,6 +566,10 @@ class EntityDetail:
     awards_value_usd: float = 0.0
     facts: tuple[Fact, ...] = ()
     """Every sourced fact about the entity, newest first."""
+    exclusions: tuple[Exclusion, ...] = ()
+    """SAM.gov exclusions on this entity, current ones first; empty for an office."""
+    excluded: bool = False
+    """Whether any of them is in force today."""
 
 
 @dataclass(frozen=True)
@@ -557,6 +625,7 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
             (notice_id,),
         ).fetchall()
     )
+    incumbent = _incumbent(conn, row[1], row[19], office_code)
     return NoticeDetail(
         *row[:9],
         bool(row[9]),
@@ -565,7 +634,7 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         attachments,
         row[18],
         *row[19:23],
-        _incumbent(conn, row[1], row[19], office_code),
+        incumbent,
         tuple(history),
         _officials(conn, notice_id, row[17]),
         summary=row[24],
@@ -575,7 +644,28 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         summary_model=row[28],
         naics_title=row[29],
         psc_title=row[30],
+        incumbent_exclusions=(
+            _exclusions_for(conn, incumbent.vendor_entity_id) if incumbent is not None else ()
+        ),
     )
+
+
+def _exclusions_for(conn: sqlite3.Connection, entity_id: int | None) -> tuple[Exclusion, ...]:
+    """One entity's exclusions, read on their own so a notice does not load every fact
+    about its incumbent to find out whether it has any."""
+    if entity_id is None:
+        return ()
+    facts = tuple(
+        Fact(*item)
+        for item in conn.execute(
+            "SELECT predicate, value, value_type, observed_at, source_id, source_ref FROM facts"
+            " WHERE subject_type = 'entity' AND subject_id = ?"
+            " AND predicate LIKE 'sam.exclusion.%'"
+            " ORDER BY observed_at DESC, fact_id DESC",
+            (str(entity_id),),
+        ).fetchall()
+    )
+    return exclusions(facts)
 
 
 def _incumbent(
@@ -696,9 +786,11 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
         if row[3]
         else []
     )
+    found = exclusions(facts)
     return EntityDetail(
         row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits),
         row[7], row[8], tuple(won_or_made), awards_count, awards_value, facts,
+        found, any(item.current for item in found),
     )  # fmt: skip
 
 
@@ -714,6 +806,8 @@ def summarize_facts(
     single: dict[str, str] = {}
     lists: dict[str, tuple[str, list[str]]] = {}
     for fact in facts:
+        if fact.predicate.startswith(EXCLUSION_PREFIX):
+            continue  # an exclusion is a record of its own (``exclusions``), not a line here
         if fact.predicate in LIST_PREDICATES:
             newest, values = lists.setdefault(fact.predicate, (fact.observed_at, []))
             if fact.observed_at == newest and fact.value not in values:

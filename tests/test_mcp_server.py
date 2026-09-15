@@ -152,3 +152,27 @@ def test_assessments_are_read_only(
     assert [a.result["fit"] for a in mcp_server.assessments(opened.pursuit_id)] == [10]
     with pytest.raises(workspace.NotFound):
         mcp_server.assessments(999)
+
+
+def test_contractor_and_entity_carry_exclusions(
+    conn: sqlite3.Connection,
+    settings,
+    seed_awards: SeedAwards,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No new tool: an agent asking about a vendor is already asking the right question."""
+    from conftest import write_exclusions
+    from test_ingest_exclusions import DAY_257, FIRM_ONE, SAM_ONE, VENDORS
+
+    from orrery.ingest.exclusions import ingest_extract
+
+    seed_awards(VENDORS)
+    ingest_extract(conn, settings, write_exclusions(tmp_path, [FIRM_ONE], DAY_257))
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
+
+    detail = mcp_server.contractor("EXCL00000001")
+
+    assert detail.excluded is True
+    assert [e.sam_number for e in detail.exclusions] == [SAM_ONE]
+    assert mcp_server.entity(detail.entity_id).excluded is True

@@ -745,3 +745,70 @@ def test_an_entitys_recent_panel_stays_per_notice(
     assert leaf is not None
     assert [h.notice_id for h in leaf.recent] == [SOLICITATION, PRESOLICITATION, SOURCES_SOUGHT]
     assert all(h.notices == 1 for h in leaf.recent)
+
+
+def _excluded(conn: sqlite3.Connection, settings: Settings, tmp_path: Path, rows: list[dict]):
+    from conftest import write_exclusions
+    from test_ingest_exclusions import DAY_257
+
+    from orrery.ingest.exclusions import ingest_extract
+
+    return ingest_extract(conn, settings, write_exclusions(tmp_path, rows, DAY_257))
+
+
+def test_a_contractors_exclusions_and_whether_one_is_in_force(
+    conn: sqlite3.Connection, settings: Settings, seed_awards: SeedAwards, tmp_path: Path
+) -> None:
+    from test_ingest_exclusions import FIRM_ONE, SAM_ONE, SAM_TWO, VENDORS
+
+    seed_awards(VENDORS)
+    _excluded(conn, settings, tmp_path, [FIRM_ONE])
+
+    vendor = query.contractor(conn, "EXCL00000001")
+    assert vendor is not None and vendor.excluded is True
+    seen = [
+        (e.sam_number, e.status, e.agency, e.termination_date, e.current) for e in vendor.exclusions
+    ]
+    assert seen == [(SAM_ONE, "active", "TREAS", None, True)]
+    # The record JSON and the rest of the exclusion never crowd out the entity's own facts.
+    assert not any(
+        predicate.startswith("sam.exclusion.")
+        for predicate, _ in query.summarize_facts(vendor.facts)
+    )
+
+    # An end date already past reads as not in force, without anything being rewritten.
+    _excluded(conn, settings, tmp_path, [dict(FIRM_ONE, **{"Termination Date": "2026-01-31"})])
+    vendor = query.contractor(conn, "EXCL00000001")
+    assert vendor is not None and vendor.excluded is False
+    assert vendor.exclusions[0].termination_date == "2026-01-31"
+
+    # And a terminated one stays on the record, current first when there are several.
+    facts = (
+        query.Fact("sam.exclusion.status", "terminated", "text", "2026-09-15T00:00:00Z",
+                   "sam_exclusions", SAM_ONE),
+        query.Fact("sam.exclusion.status", "active", "text", "2026-09-14T00:00:00Z",
+                   "sam_exclusions", SAM_TWO),
+        query.Fact("sam.exclusion.status", "active", "text", "2026-09-14T00:00:00Z",
+                   "sam_exclusions", SAM_ONE),
+    )  # fmt: skip
+    folded = query.exclusions(facts, today="2026-09-16")
+    assert [(e.sam_number, e.current) for e in folded] == [(SAM_TWO, True), (SAM_ONE, False)]
+    assert folded[1].observed_at == "2026-09-15T00:00:00Z"
+
+
+def test_a_notice_says_when_its_incumbent_is_excluded(
+    conn: sqlite3.Connection, settings: Settings, seed_awards: SeedAwards, tmp_path: Path
+) -> None:
+    from test_ingest_exclusions import FIRM_ONE, SAM_ONE, VENDORS
+
+    hrsa = SEARCH_FIXTURE["opportunitiesData"][0]
+    seed_awards([dict(VENDORS[0], solicitation_identifier=hrsa["solicitationNumber"])])
+    detail = query.notice(conn, hrsa["noticeId"])
+    assert detail is not None and detail.incumbent is not None
+    assert detail.incumbent_exclusions == ()
+
+    _excluded(conn, settings, tmp_path, [FIRM_ONE])
+
+    detail = query.notice(conn, hrsa["noticeId"])
+    assert detail is not None
+    assert [(e.sam_number, e.current) for e in detail.incumbent_exclusions] == [(SAM_ONE, True)]

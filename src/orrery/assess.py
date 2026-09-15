@@ -131,6 +131,21 @@ def gather(conn, pursuit_id: int, *, user_id: int = workspace.USER_ID) -> Inputs
         vendor = query.contractor(conn, detail.incumbent.vendor_uei)
         if vendor is not None:
             facts = query.summarize_facts(vendor.facts, max_items=8)
+            # An incumbent who may not be awarded work is the single most decision-changing
+            # thing the store knows about this pursuit, so it leads rather than hides in a list.
+            current = [item for item in vendor.exclusions if item.current]
+            if current:
+                facts.insert(
+                    0,
+                    (
+                        "excluded",
+                        "; ".join(
+                            f"{item.exclusion_type or 'excluded'} by {item.agency or 'unknown'}"
+                            f" until {item.termination_date or 'indefinite'}"
+                            for item in current
+                        ),
+                    ),
+                )
     awards = (
         query.awards(conn, office_code=p.office_code, naics=p.naics_code, limit=AWARDS)
         if p.office_code
