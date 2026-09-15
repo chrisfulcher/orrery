@@ -947,20 +947,29 @@ def last_runs(conn: sqlite3.Connection) -> dict[str, RunRef]:
 
 
 def office_for_code(conn: sqlite3.Connection, code: str) -> EntityRef | None:
-    """The office entity whose agency path ends with this code: one candidate, or the
-    deepest of twins sharing the same department and sub-tier; otherwise None."""
+    """The office entity whose agency path ends with this code, or None.
+
+    A row the Federal Hierarchy resolved wins outright: twins sharing an AAC are the same
+    real office, and the lookup has said which row holds its identity. Without that answer
+    the old heuristics stand -- one candidate, or the deepest of twins under the same
+    department and sub-tier -- but they are guesses at what the lookup now knows, and they
+    give up on twins whose paths diverge higher, which is exactly the Defense case.
+    """
     candidates = conn.execute(
-        "SELECT entity_id, name, agency_path_code FROM entities WHERE kind = 'office'"
-        " AND substr(agency_path_code, -length(?) - 1) = '.' || ?",
+        "SELECT entity_id, name, agency_path_code, fh_org_id FROM entities"
+        " WHERE kind = 'office' AND substr(agency_path_code, -length(?) - 1) = '.' || ?",
         (code, code),
     ).fetchall()
     if not candidates:
         return None
+    resolved = [row for row in candidates if row[3]]
+    if len(resolved) == 1:
+        return EntityRef(*resolved[0][:3])
     if len(candidates) > 1:
-        if len({".".join(path.split(".")[:2]) for _, _, path in candidates}) > 1:
+        if len({".".join(path.split(".")[:2]) for _, _, path, _ in candidates}) > 1:
             return None
-        candidates.sort(key=lambda c: len(c[2]), reverse=True)
-    return EntityRef(*candidates[0])
+        candidates.sort(key=lambda row: len(row[2]), reverse=True)
+    return EntityRef(*candidates[0][:3])
 
 
 def contract(conn: sqlite3.Connection, contract_id: int) -> ContractRef | None:
