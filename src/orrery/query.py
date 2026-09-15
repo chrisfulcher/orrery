@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
-from orrery import db, naics
+from orrery import clauses, db, naics
+from orrery.clauses import ClauseRef  # NoticeDetail's field is named for the module
 from orrery.config import Settings
 
 
@@ -542,6 +543,9 @@ class NoticeDetail:
     incumbent_exclusions: tuple[Exclusion, ...] = ()
     """The incumbent vendor's exclusions, when the store knows which entity it is. An
     excluded incumbent is the loudest fact on the page and must not need a second lookup."""
+    clauses: tuple[ClauseRef, ...] = ()
+    """The FAR and DFARS clauses the notice and its extracted documents cite, read at query
+    time; empty until ``orrery extract`` has text to read."""
 
 
 @dataclass(frozen=True)
@@ -647,7 +651,29 @@ def notice(conn: sqlite3.Connection, notice_id: str) -> NoticeDetail | None:
         incumbent_exclusions=(
             _exclusions_for(conn, incumbent.vendor_entity_id) if incumbent is not None else ()
         ),
+        clauses=clause_references(conn, notice_id),
     )
+
+
+def clause_references(conn: sqlite3.Connection, notice_id: str) -> tuple[ClauseRef, ...]:
+    """The FAR and DFARS clauses this notice cites, read out of its description and every
+    attachment that has been extracted. Parsed on each read rather than stored: the answer is
+    a function of text the store already holds, so storing it would only add a second copy to
+    keep in step with the extractor."""
+    texts: list[tuple[str, str]] = []
+    row = conn.execute(
+        "SELECT description FROM notices WHERE notice_id = ?", (notice_id,)
+    ).fetchone()
+    if row is not None and row[0]:
+        texts.append(("notice", row[0]))
+    for filename, url, text in conn.execute(
+        "SELECT filename, url, extracted_text FROM attachments"
+        " WHERE notice_id = ? AND extract_status = 'done' ORDER BY attachment_id",
+        (notice_id,),
+    ).fetchall():
+        if text:
+            texts.append((filename or url.rsplit("/", 2)[-2], text))
+    return clauses.references(texts)
 
 
 def _exclusions_for(conn: sqlite3.Connection, entity_id: int | None) -> tuple[Exclusion, ...]:

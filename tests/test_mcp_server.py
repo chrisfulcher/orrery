@@ -77,6 +77,13 @@ def test_unknown_ids_raise(store: sqlite3.Connection) -> None:
 
 
 async def test_tools_are_listed_over_the_protocol(store: sqlite3.Connection) -> None:
+    with store:
+        store.execute(
+            "UPDATE attachments SET filename = 'sow.pdf', extract_status = 'done',"
+            " extracted_text = 'Incorporates FAR 52.219-14 and DFARS 252.204-7012.'"
+            " WHERE notice_id = ?",
+            (HRSA,),
+        )
     async with Client(mcp_server.server) as client:
         listed = await client.list_tools()
         tools = getattr(listed, "tools", listed)
@@ -85,6 +92,23 @@ async def test_tools_are_listed_over_the_protocol(store: sqlite3.Connection) -> 
         due = await client.call_tool("upcoming", {"days": 3650})
     assert not result.is_error
     assert result.structured_content["title"] == SEARCH_FIXTURE["opportunitiesData"][0]["title"]
+    # Clause references are on the wire too, nested dataclass and tuple of filenames and all.
+    assert result.structured_content["clauses"] == [
+        {
+            "number": "52.219-14",
+            "regulation": "FAR",
+            "mentions": 1,
+            "attachments": ["sow.pdf"],
+            "title": None,
+        },
+        {
+            "number": "252.204-7012",
+            "regulation": "DFARS",
+            "mentions": 1,
+            "attachments": ["sow.pdf"],
+            "title": None,
+        },
+    ]
     # The collapsed fields are on the wire, not just on the dataclass: the schema still
     # serialises after SearchHit gained them.
     assert not due.is_error

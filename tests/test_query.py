@@ -244,6 +244,45 @@ def test_notice_detail_leaves_an_unlisted_code_untitled(
     assert (detail.psc_code, detail.psc_title) == ("D399", None)
 
 
+def test_notice_detail_reads_clauses_out_of_the_documents(
+    conn: sqlite3.Connection, notice_with_links: str
+) -> None:
+    """The clause list is the cheapest description of a deal, and it lives in the
+    attachments; the panel has to say which document cited what."""
+    first, second = attachments_of(conn, notice_with_links)[:2]
+    set_text(conn, first, "sow.pdf", "Incorporates 52.219-14 and FAR 52.204-21 by reference.")
+    set_text(conn, second, "sectionI.pdf", "52.219-14 again, plus DFARS 252.204-7012.")
+    conn.execute(
+        "UPDATE notices SET description = 'Award subject to 52.204-21.' WHERE notice_id = ?",
+        (notice_with_links,),
+    )
+
+    detail = query.notice(conn, notice_with_links)
+
+    assert detail is not None
+    assert [(ref.number, ref.mentions, ref.attachments) for ref in detail.clauses] == [
+        ("52.204-21", 2, ("notice", "sow.pdf")),
+        ("52.219-14", 2, ("sow.pdf", "sectionI.pdf")),
+        ("252.204-7012", 1, ("sectionI.pdf",)),
+    ]
+    assert [ref.regulation for ref in detail.clauses] == ["FAR", "FAR", "DFARS"]
+
+
+def test_notice_with_nothing_extracted_cites_no_clauses(
+    conn: sqlite3.Connection, notice_with_links: str
+) -> None:
+    """An attachment that is fetched but not extracted is not text yet; the panel says so
+    rather than implying the solicitation cites nothing."""
+    conn.execute(
+        "UPDATE attachments SET extracted_text = 'FAR 52.219-14 applies.' WHERE notice_id = ?",
+        (notice_with_links,),
+    )
+
+    detail = query.notice(conn, notice_with_links)
+
+    assert detail is not None and detail.clauses == ()
+
+
 def test_entity_detail(conn: sqlite3.Connection, seed: Seed) -> None:
     seed()
     hrsa = SEARCH_FIXTURE["opportunitiesData"][0]["noticeId"]
