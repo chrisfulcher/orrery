@@ -444,3 +444,67 @@ def seed_registrations(
         return ingest_extract(conn, settings, EXTRACT_SAMPLE)
 
     return _seed
+
+
+EXCLUSION_DEFAULTS = {
+    # An invented firm with invented keys. The real file names real companies and, in four
+    # rows out of five, real people; no key in it and no name from it belongs in a fixture.
+    "Classification": "Firm",
+    "Name": "EXAMPLE LOGISTICS LLC",
+    "Address 1": "1 Sample Road",
+    "City": "ARVADA",
+    "State / Province": "CO",
+    "Country": "USA",
+    "Zip Code": "80003",
+    "Open Data Flag": "Y",
+    "Unique Entity ID": "EXCL00000001",
+    "Exclusion Program": "Reciprocal",
+    "Excluding Agency": "TREAS",
+    "CT Code": "Z1",
+    "Exclusion Type": "Prohibition/Restriction",
+    "Active Date": "2026-03-01",
+    "Termination Date": "Indefinite",
+    "Record Status": "Active",
+    "SAM Number": "S4MEX00001",
+    "CAGE": "EXCL1",
+    "Creation_Date": "2026-03-01",
+}
+
+
+def make_exclusions(rows: list[dict], columns: list[str] | None = None) -> bytes:
+    """A UTF-8 exclusions CSV with the real 31 headers; unspecified cells take defaults."""
+    from orrery.ingest.exclusions import COLUMNS as EXCLUSION_COLUMNS
+
+    columns = EXCLUSION_COLUMNS if columns is None else columns
+    out = io.StringIO(newline="")
+    writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        full = dict.fromkeys(columns, "")
+        full.update({k: v for k, v in EXCLUSION_DEFAULTS.items() if k in full})
+        full.update(row)
+        writer.writerow(full)
+    return out.getvalue().encode("utf-8")
+
+
+def write_exclusions(
+    tmp_path: Path,
+    rows: list[dict],
+    day: date | None = None,
+    *,
+    columns: list[str] | None = None,
+) -> Path:
+    """The zip the service serves: one CSV member, both named for the day the file was cut.
+    ``day`` of None writes a bare, undated CSV, which is what a user's own file looks like."""
+    import zipfile
+
+    body = make_exclusions(rows, columns)
+    if day is None:
+        path = tmp_path / "exclusions.csv"
+        path.write_bytes(body)
+        return path
+    name = f"SAM_Exclusions_Public_Extract_V2_{day:%y%j}"
+    path = tmp_path / f"{name}.ZIP"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{name}.CSV", body)
+    return path

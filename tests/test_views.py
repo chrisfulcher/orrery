@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Callable
+from datetime import date
 
 import pytest
 
@@ -225,3 +226,33 @@ def test_a_half_written_subject_is_refused(conn: sqlite3.Connection) -> None:
     ):
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(f"INSERT INTO tasks (user_id, {columns}) VALUES (1, {values})")
+
+
+def test_v_exclusions_folds_the_latest_facts(
+    conn: sqlite3.Connection, settings, seed_awards: SeedAwards, tmp_path
+) -> None:
+    """One row per (contractor, SAM Number), and 'current' answers the only question most
+    readers have: may this vendor be awarded work today?"""
+    from conftest import write_exclusions
+    from test_ingest_exclusions import DAY_257, FIRM_ONE, SAM_ONE, VENDORS
+
+    from orrery.ingest.exclusions import ingest_extract
+
+    seed_awards(VENDORS)
+    ingest_extract(conn, settings, write_exclusions(tmp_path, [FIRM_ONE], DAY_257))
+
+    row = conn.execute(
+        "SELECT name, uei, cage, sam_number, status, exclusion_type, program, agency,"
+        " active_date, termination_date, observed_at, current FROM v_exclusions"
+    ).fetchall()
+    assert row == [
+        ("EXAMPLE LOGISTICS LLC", "EXCL00000001", "EXCL1", SAM_ONE, "active",
+         "Prohibition/Restriction", "Reciprocal", "TREAS", "2026-03-01", None,
+         "2026-09-14T00:00:00Z", 1),
+    ]  # fmt: skip
+
+    ingest_extract(conn, settings, write_exclusions(tmp_path, [], date(2026, 9, 15)))
+
+    assert conn.execute("SELECT status, current FROM v_exclusions").fetchall() == [
+        ("terminated", 0)
+    ]
