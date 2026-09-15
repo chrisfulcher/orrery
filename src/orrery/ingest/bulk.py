@@ -11,18 +11,16 @@ so an interrupted run is a plain rerun. Serves docs/DESIGN.md ยง5 source 2 and ย
 import csv
 import hashlib
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import unquote
 
 import httpx
 
-from orrery import __version__, db, naics, runs
+from orrery import db, naics, runs
 from orrery.config import Settings
+from orrery.ingest import download
 from orrery.ingest.notices import _deadline_utc, resolve_agency_segments
 from orrery.progress import Cancelled, Report, check, never, quiet
 
@@ -123,62 +121,15 @@ class BulkResult:
     active_pass: str = ACTIVE_PASS_NOT_ASKED
 
 
-@dataclass(frozen=True)
-class Extract:
-    """One extract file on disk and what the server said about it.
+Extract = download.Extract
+"""One extract file on disk and what the server said about it; see orrery.ingest.download."""
 
-    ``generated_at`` is the file's own cut, parsed from ``Last-Modified`` into the store's
-    timestamp format, and is None whenever the server did not say: a file the user supplied,
-    one downloaded before this metadata was kept, or a response with no such header.
-    """
-
-    path: Path
-    generated_at: str | None = None
-    etag: str | None = None
+_meta_path = download.meta_path
+_read_meta = download.read_meta
 
 
 def archive_name(fiscal_year: int) -> str:
     return f"Archived%20Data/FY{fiscal_year}_archived_opportunities.csv"
-
-
-def _meta_path(dest: Path) -> Path:
-    return dest.with_name(dest.name + ".meta.json")
-
-
-def _write_meta(dest: Path, url: str, headers: httpx.Headers) -> None:
-    """Record what the server said, verbatim, beside the file it said it about."""
-    meta = {
-        "url": url,
-        "last_modified": headers.get("last-modified"),
-        "etag": headers.get("etag"),
-        "downloaded_at": db.utcnow(),
-    }
-    _meta_path(dest).write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
-
-def _read_meta(dest: Path) -> Extract:
-    """Read the sidecar beside ``dest``. A missing or unreadable one is not an error: the
-    extract is still usable, the caller simply learns nothing about when it was cut."""
-    try:
-        meta = json.loads(_meta_path(dest).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return Extract(dest)
-    if not isinstance(meta, dict):
-        return Extract(dest)
-    return Extract(dest, _http_date(meta.get("last_modified")), meta.get("etag"))
-
-
-def _http_date(value: object) -> str | None:
-    """An RFC 7231 date as the store writes timestamps, or None if it is not one."""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def fetch_extract(
@@ -189,47 +140,15 @@ def fetch_extract(
     report: Report = quiet,
 ) -> Extract:
     """Download the active extract (or one fiscal year's archive) into ``dest_dir`` unless a
-    copy downloaded today (UTC) is already there. Streams to a .part file, then renames, and
-    writes a ``.meta.json`` sidecar holding what the server said about the file, so a cached
-    copy still knows when it was cut. Delete the file to force a fresh download."""
+    copy downloaded today (UTC) is already there. Delete the file to force a fresh download."""
     name = ACTIVE_NAME if fiscal_year is None else archive_name(fiscal_year)
     dest = dest_dir / unquote(name).rsplit("/", 1)[-1]
-    if dest.exists():
-        modified = datetime.fromtimestamp(dest.stat().st_mtime, UTC).date()
-        if modified == datetime.now(UTC).date():
-            return _read_meta(dest)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
-    client = http or httpx.Client(
-        timeout=httpx.Timeout(30.0, read=120.0), headers={"User-Agent": f"orrery/{__version__}"}
+    cached = download.cached_today(dest)
+    if cached is not None:
+        return cached
+    return download.download(
+        EXTRACT_URL.format(name=name), dest, http=http, report=report, error=BulkError
     )
-    url = EXTRACT_URL.format(name=name)
-    try:
-        with (
-            open(tmp, "wb") as out,
-            client.stream("GET", url, follow_redirects=True) as response,
-        ):
-            if not response.is_success:
-                raise BulkError(f"{url}: HTTP {response.status_code}")
-            headers = response.headers
-            report(f"downloading {dest.name}")
-            received = 0
-            for chunk in response.iter_bytes():
-                out.write(chunk)
-                received += len(chunk)
-                if received % (1 << 24) < len(chunk):
-                    report(f"{received >> 20} MB")
-    except BaseException as exc:
-        tmp.unlink(missing_ok=True)
-        if isinstance(exc, httpx.HTTPError):
-            raise BulkError(f"{url}: {type(exc).__name__}: {exc}") from exc
-        raise
-    finally:
-        if http is None:
-            client.close()
-    os.replace(tmp, dest)
-    _write_meta(dest, url, headers)
-    return _read_meta(dest)
 
 
 def ingest_bulk(
