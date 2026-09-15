@@ -23,7 +23,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, ListItem, ListView, Sparkline, Static
 from textual.worker import Worker, WorkerState, get_current_worker
 
-from orrery import assess, db, jobs, query, quota, summaries, workspace
+from orrery import assess, clauses, db, jobs, query, quota, summaries, workspace
 from orrery.config import Settings, setup_needed
 from orrery.fetch import queue
 from orrery.progress import JobCancelled
@@ -48,6 +48,22 @@ def _exclusion(item: query.Exclusion) -> str:
         f" · {item.active_date or '-'} to {item.termination_date or 'indefinite'}"
         f" · SAM {item.sam_number}"
     )
+
+
+def _clauses(refs: tuple[clauses.ClauseRef, ...]) -> str:
+    """The clause references as one line: ``FAR 52.219-14 ×3 · 52.204-21 · DFARS 252.204-7012
+    ×2``. The regulation is named once per run of it, a count only where the documents cite a
+    clause more than once, and no claim at all when nothing has been extracted: text orrery
+    has not read is not a solicitation that cites no clauses."""
+    if not refs:
+        return "none found in extracted text"
+    said = ""
+    parts = []
+    for ref in refs:
+        head = f"{ref.regulation} " if ref.regulation != said else ""
+        said = ref.regulation
+        parts.append(f"{head}{ref.number}" + (f" ×{ref.mentions}" if ref.mentions > 1 else ""))
+    return " · ".join(parts)
 
 
 def _code(label: str, code: str | None, title: str | None) -> str:
@@ -392,6 +408,8 @@ class ContextScreen(Screen):
         yield Static(id="pursuit", classes="panel")
         yield Static(id="incumbent", classes="panel")
         yield Static(id="summary", classes="panel")
+        with VerticalScroll(id="clauses_scroll", classes="panel"):
+            yield Static(id="clauses")
         with VerticalScroll(id="description_scroll", classes="panel"):
             yield Static(id="description")
         yield WrapTable(AWARD_COLUMNS, id="awards", classes="panel", cursor_type="row")
@@ -408,6 +426,7 @@ class ContextScreen(Screen):
         self.query_one("#pursuit").border_title = "pursuit"
         self.query_one("#incumbent").border_title = "incumbent"
         self.query_one("#summary").border_title = "summary"
+        self.query_one("#clauses_scroll").border_title = "clauses"
         self.query_one("#description_scroll").border_title = "description"
         self.query_one("#awards").border_title = "award history"
         self.query_one("#officials").border_title = "officials"
@@ -475,6 +494,11 @@ class ContextScreen(Screen):
                 f" · {', '.join(detail.keywords) or '-'}"
             )
             summary.border_subtitle = detail.summary_model or ""
+        self.query_one("#clauses", Static).update(_clauses(detail.clauses))
+        documents = {name for ref in detail.clauses for name in ref.attachments}
+        self.query_one("#clauses_scroll").border_subtitle = (
+            f"{len(detail.clauses)} in {len(documents)} document(s)" if detail.clauses else ""
+        )
         self.query_one("#description", Static).update(
             detail.description or f"description {detail.description_status}"
         )

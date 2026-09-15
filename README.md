@@ -265,7 +265,11 @@ which says how many it is holding back.
 The agency chain, the notice's pursuit, the incumbent (the award that shares its
 solicitation or award number), the summary with its tags and set-aside fit, the
 description, the office's recent awards in the same NAICS, the government
-contacts named on the notice, and the documents.
+contacts named on the notice, and the documents. It also lists the FAR and
+DFARS clause numbers the notice and its extracted documents cite, with how
+often each is cited, read out of that text every time you open the notice and
+never stored, so a solicitation you have not extracted yet says so rather than
+appearing to cite nothing.
 
 | Key | Does |
 |---|---|
@@ -346,7 +350,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"orrery": {"command": "uv", "args": ["run", "--directory", "/path/to/orrery", "orrery", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `tasks`, `task_done`, `update_pursuit` (the BD workflow), `recompetes`, `assessments` (stored AI assessments; running one is a CLI command, the server never contacts a model), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. `search` and `notice` carry the stored summary, work type, and stated set-aside once `orrery summarize` has run, and rows from `search` and `upcoming` carry `notice_type`, `notices`, and `solicitation_number` for the solicitation the row stands for. `entity` and `contractor` carry any SAM.gov exclusions on the vendor and whether one is in force today, so there is no separate tool to ask. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `tasks`, `task_done`, `update_pursuit` (the BD workflow), `recompetes`, `assessments` (stored AI assessments; running one is a CLI command, the server never contacts a model), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. `search` and `notice` carry the stored summary, work type, and stated set-aside once `orrery summarize` has run, and rows from `search` and `upcoming` carry `notice_type`, `notices`, and `solicitation_number` for the solicitation the row stands for. `entity` and `contractor` carry any SAM.gov exclusions on the vendor and whether one is in force today, so there is no separate tool to ask. `notice` carries the FAR and DFARS clauses its description and extracted documents cite, parsed on each read. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 

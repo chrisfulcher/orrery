@@ -33,6 +33,12 @@ Sparkline {
 #assessment {
     height: auto;
 }
+/* A large solicitation cites well over a hundred clauses (174 on the biggest notice in a
+   real store), so this panel is bounded and scrolls rather than pushing the description off
+   the screen; the count is on its border. */
+#clauses_scroll {
+    height: 5;
+}
 #description_scroll {
     height: 1fr;
 }

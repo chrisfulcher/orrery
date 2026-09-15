@@ -142,6 +142,50 @@ async def test_opportunities_and_context_show_the_summary(app_with_summary: Orre
         assert text(app, "#summary") == "none yet (orrery summarize)"
 
 
+@pytest.fixture
+def app_with_clauses(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> OrreryTop:
+    """One notice whose only extracted document cites clauses, and the rest with nothing
+    read yet."""
+    seed()
+    conn.execute("UPDATE notices SET description = 'Nothing cited in the notice itself.'")
+    conn.execute(
+        "UPDATE attachments SET filename = 'sectionI.pdf', fetch_status = 'fetched',"
+        " extract_status = 'done', extracted_text = ? WHERE notice_id = ?",
+        (
+            "Incorporates FAR 52.219-14 by reference. 52.219-14 applies to each order."
+            " See 52.219-14 again, and 52.204-21, and DFARS 252.204-7012."
+            " 252.204-7012 flows down to subcontractors.",
+            HRSA,
+        ),
+    )
+    conn.close()
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path))
+
+
+async def test_context_view_lists_the_clauses_the_documents_cite(
+    app_with_clauses: OrreryTop,
+) -> None:
+    app = app_with_clauses
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(ContextScreen(HRSA))
+        await pilot.pause()
+
+        # Numeric order within a part, so 52.204-21 comes before 52.219-14.
+        assert text(app, "#clauses") == "FAR 52.204-21 · 52.219-14 ×3 · DFARS 252.204-7012 ×2"
+        assert app.screen.query_one("#clauses_scroll").border_subtitle == "3 in 1 document(s)"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        app.push_screen(ContextScreen(SENTINEL))
+        await pilot.pause()
+
+        assert text(app, "#clauses") == "none found in extracted text"
+        assert app.screen.query_one("#clauses_scroll").border_subtitle == ""
+
+
 async def test_dashboard_search_context_and_entity(app: OrreryTop) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
