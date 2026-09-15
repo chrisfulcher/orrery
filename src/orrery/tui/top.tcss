@@ -25,6 +25,10 @@ Sparkline {
 #query {
     border: round $primary;
 }
+#hits {
+    border: round $primary;
+    height: 1fr;
+}
 #header, #pursuit, #incumbent, #summary, #officials, #entity_header, #pursuit_header,
 #assessment {
     height: auto;

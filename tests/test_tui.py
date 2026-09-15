@@ -119,14 +119,15 @@ async def test_opportunities_and_context_show_the_summary(app_with_summary: Orre
         assert isinstance(app.screen, OpportunitiesScreen)
         assert app.screen.query_one("#hits", DataTable).row_count == 4
         rows = {key: cells for cells, key in app.screen.query_one("#hits").rows_data}
-        assert rows[SENTINEL][2:5] == (
-            "it",
+        assert rows[SENTINEL][2:6] == (
+            "Solicitation",
+            "1",
             "eligible",
             f"{SEARCH_FIXTURE['opportunitiesData'][1]['title']}"
-            "\n[dim]Buys a help desk. Due soon.[/]",
+            "\n[dim]it · Buys a help desk. Due soon.[/]",
         )
         other_id, other = next((k, c) for k, c in rows.items() if k != SENTINEL)
-        assert other[2] == "-" and other[3] in ("open", "eligible") and "\n" not in other[4]
+        assert other[3] == "1" and other[4] in ("open", "eligible") and "\n" not in other[5]
 
         app.push_screen(ContextScreen(SENTINEL))
         await pilot.pause()
@@ -458,3 +459,50 @@ async def test_the_dashboard_creates_a_task_about_anything(app: OrreryTop) -> No
                 ("Renew the registration",),
             ).fetchone()
         assert (kind, precedence) == (None, "flash")
+
+
+async def test_an_award_folds_into_its_solicitation_and_hides_until_asked(
+    conn: sqlite3.Connection, settings: Settings, seed: Seed, tmp_path: Path
+) -> None:
+    """An award notice is the same buy as the solicitation beside it, and it is history: the
+    table counts it into the row and keeps it out of sight until `a` asks for it."""
+    seed()
+    (sol,) = conn.execute(
+        "SELECT solicitation_number FROM notices WHERE notice_id = ?", (SENTINEL,)
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO notices (notice_id, solicitation_number, title, notice_type,"
+        " full_parent_path_code, agency_entity_id, posted_at, response_deadline, active,"
+        " first_seen_at, last_seen_at, source_id, description_status, raw_json)"
+        " SELECT 'AWARD-1', solicitation_number, 'Sentinel award', 'Award Notice',"
+        " full_parent_path_code, agency_entity_id, '2026-09-08', response_deadline, 1,"
+        " first_seen_at, last_seen_at, source_id, 'none', '{}' FROM notices WHERE notice_id = ?",
+        (SENTINEL,),
+    )
+    conn.commit()
+    conn.close()
+    app = OrreryTop(settings, env_path=write_env(settings, tmp_path))
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        assert isinstance(app.screen, OpportunitiesScreen)
+        table = app.screen.query_one("#hits", DataTable)
+        keys = [key for _, key in table.rows_data]
+        assert "AWARD-1" not in keys and SENTINEL not in keys
+        assert "1 hidden awarded (a)" in table.border_title
+        assert sol is not None
+
+        await pilot.press("a")
+        await pilot.pause()
+        rows = {key: cells for cells, key in table.rows_data}
+        assert "AWARD-1" in rows and SENTINEL not in rows  # one row, headed by the award
+        assert rows["AWARD-1"][2:4] == ("Award Notice", "2")
+        assert "hidden awarded" not in table.border_title
+
+        table.move_cursor(row=table.get_row_index("AWARD-1"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ContextScreen)
+        assert "Sentinel award" in text(app, "#header")

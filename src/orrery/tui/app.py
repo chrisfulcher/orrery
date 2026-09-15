@@ -261,8 +261,28 @@ def _fit(quals: summaries.Qualifications, code: str | None, stated: str | None) 
     return "-" if fit == "unknown" else fit
 
 
+def _beneath(hit: query.SearchHit) -> str:
+    """The dim second line under a title: what kind of work it is and what it buys."""
+    parts = [part for part in (hit.work_type, hit.summary) if part]
+    return f"\n[dim]{escape(' · '.join(parts))}[/]" if parts else ""
+
+
 class OpportunitiesScreen(Screen):
-    BINDINGS = [Binding("escape", "focus_table", "Table", show=False)]
+    """One row per solicitation: the group's furthest-along notice stands for it, and Enter
+    opens that notice. Rows whose stage says the work is already placed are hidden until
+    ``a`` asks for them."""
+
+    BINDINGS = [
+        Binding("escape", "focus_table", "Table", show=False),
+        Binding("a", "toggle_awarded", "Awards"),
+    ]
+    DEFAULT_TITLE = "due in the next 30 days"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hits: list[query.SearchHit] = []
+        self.hits_title = self.DEFAULT_TITLE
+        self.show_awarded = False
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="search notice and attachment text, Enter to run", id="query")
@@ -270,7 +290,8 @@ class OpportunitiesScreen(Screen):
             [
                 ("deadline", 10),
                 ("agency", 28),
-                ("type", 12),
+                ("stage", 14),
+                ("notices", 7),
                 ("fit", 10),
                 ("title", None),
                 ("source", 24),
@@ -285,24 +306,39 @@ class OpportunitiesScreen(Screen):
         self.fill(query.upcoming(self.app.conn, days=30, limit=200))
         self.query_one("#hits", WrapTable).focus()
 
-    def fill(self, hits: list[query.SearchHit]) -> None:
-        self.query_one("#hits", WrapTable).set_rows(
+    def fill(self, hits: list[query.SearchHit], title: str | None = None) -> None:
+        """Show these hits under this title. The title lives here rather than at the call
+        site so that the hidden-awards count is always part of it."""
+        self.hits = hits
+        self.hits_title = self.DEFAULT_TITLE if title is None else title
+        self.render_hits()
+
+    def render_hits(self) -> None:
+        table = self.query_one("#hits", WrapTable)
+        shown = [hit for hit in self.hits if self.show_awarded or not query.awarded(hit)]
+        hidden = len(self.hits) - len(shown)
+        table.border_title = self.hits_title + (f" · {hidden} hidden awarded (a)" if hidden else "")
+        table.set_rows(
             [
                 (
                     (
                         _day(hit.response_deadline),
                         hit.agency or "-",
-                        hit.work_type or "-",
+                        hit.notice_type or "-",
+                        str(hit.notices),
                         _fit(self.quals, hit.set_aside_code, hit.stated_set_aside),
-                        escape(hit.title)
-                        + (f"\n[dim]{escape(hit.summary)}[/]" if hit.summary else ""),
+                        escape(hit.title) + _beneath(hit),
                         hit.source,
                     ),
                     hit.notice_id,
                 )
-                for hit in hits
+                for hit in shown
             ]
         )
+
+    def action_toggle_awarded(self) -> None:
+        self.show_awarded = not self.show_awarded
+        self.render_hits()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -312,7 +348,7 @@ class OpportunitiesScreen(Screen):
         else:
             try:
                 filters = query.Filters(active_only=True)
-                self.fill(query.search(conn, text, limit=100, filters=filters))
+                self.fill(query.search(conn, text, limit=100, filters=filters), f"search: {text}")
             except query.InvalidQuery as exc:
                 self.notify(f"invalid query: {exc}", severity="error")
         self.action_focus_table()
@@ -1339,8 +1375,7 @@ class OrreryTop(App):
         await self.switch_mode("opportunities")
         screen = self.screen
         if isinstance(screen, OpportunitiesScreen):
-            screen.fill(hits)
-            screen.query_one("#hits", WrapTable).border_title = title
+            screen.fill(hits, title)
 
     def reload_settings(self) -> None:
         """Re-read settings after the Connections tab wrote .env."""
