@@ -226,7 +226,7 @@ The app draws in your terminal's own colours. Five tabs, selected by number:
 | Tab | Screen | What it shows |
 |---|---|---|
 | `1` | Dashboard | Quota against budget with a 30-day sparkline, the fetch queues, and store activity; this week's work (tasks due and response deadlines for pursuits in a gated stage, overdue first); what needs attention — a gate with every task done, a hold whose date has come, a pursuit with no activity in two weeks — with the open pursuits per stage; and the government's dates for the next 60 days as a strip. Enter on any row opens the pursuit. |
-| `2` | Opportunities | Deadline, agency, work type, set-aside fit against your profile, title with its summary beneath, and the matching source. |
+| `2` | Opportunities | One row per solicitation: deadline, agency, the stage the buy has reached, how many notices are in the group, set-aside fit against your profile, title with its work type and summary beneath, and the matching source. |
 | `3` | Pursuit board | Open pursuits by stage. |
 | `4` | Recompete radar | Awards in your profile's NAICS ending soonest, options included. |
 | `5` | Setup | Connections, Profile, Workflow, Searches, and Jobs. |
@@ -237,13 +237,22 @@ active tab, and `q` quits.
 
 ### Opportunities (`2`)
 
-![The opportunities table: deadline, agency, work type, set-aside fit, and title with its summary](docs/images/opportunities.png)
+![The opportunities table: deadline, agency, stage, notice count, set-aside fit, and title with its summary](docs/images/opportunities.png)
+
+A requirement is announced many times and bought once: a sources sought, a
+presolicitation, the solicitation, amendments, then the award. The table
+shows one row per solicitation number, standing for the group by its
+furthest-along notice, with that stage and the group's notice count in their
+own columns. The deadline is the latest one still open in the group. Rows
+whose stage is an award or a justification are hidden until you press `a`,
+which says how many it is holding back.
 
 | Key | Does |
 |---|---|
 | `/` | Focus the search box |
 | Enter | Run a keyword search over notice and attachment text |
 | Escape | Return to the table |
+| `a` | Show or hide awards and justifications |
 | Enter *on a row* | Open the context view of that notice |
 
 ### Context view
@@ -332,7 +341,7 @@ For a point-and-click table browser over the whole store, the read-only views (`
 {"mcpServers": {"orrery": {"command": "uv", "args": ["run", "--directory", "/path/to/orrery", "orrery", "mcp"]}}}
 ```
 
-Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `tasks`, `task_done`, `update_pursuit` (the BD workflow), `recompetes`, `assessments` (stored AI assessments; running one is a CLI command, the server never contacts a model), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. `search` and `notice` carry the stored summary, work type, and stated set-aside once `orrery summarize` has run. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
+Tools: `search` (keyword, with NAICS, set-aside, agency, and deadline filters), `notice`, `entity`, `awards` (award history by office, vendor UEI, NAICS, or solicitation), `contractor` (one vendor by UEI), `pursuits`, `pursuit`, `new_pursuit`, `link_notice`, `gate`, `tasks`, `task_done`, `update_pursuit` (the BD workflow), `recompetes`, `assessments` (stored AI assessments; running one is a CLI command, the server never contacts a model), `upcoming`, `pipeline`, `track`, `history`, `saved_searches`, `run_saved_search`, `save_search`, `queue_status`, `quota_today`, and `profile`. `search` and `notice` carry the stored summary, work type, and stated set-aside once `orrery summarize` has run, and rows from `search` and `upcoming` carry `notice_type`, `notices`, and `solicitation_number` for the solicitation the row stands for. No tool spends SAM.gov quota or contacts the network: an agent can read everything and edit your pipeline and saved searches, nothing else. The interface is version 1; tools and fields are only ever added.
 
 ## Contributing
 

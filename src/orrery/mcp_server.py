@@ -50,10 +50,12 @@ def search(
     agency: list[str] | None = None,
     deadline_days: int | None = None,
 ) -> list[query.SearchHit]:
-    """Keyword search across notice text and attachment text (FTS5 syntax allowed); one
-    best hit per notice with its source and snippet, plus the stored summary, work type,
-    and stated set-aside when `orrery summarize` has run. Filters: NAICS codes, set-aside codes,
-    agency path-code prefixes, and a deadline window in days."""
+    """Keyword search across notice text and attachment text (FTS5 syntax allowed); one row
+    per solicitation, headed by its furthest-along notice, with the best hit found anywhere in
+    the group, its source and snippet, the group's stage (`notice_type`) and size (`notices`),
+    and the stored summary, work type, and stated set-aside when `orrery summarize` has run.
+    Filters: NAICS codes, set-aside codes, agency path-code prefixes, and a deadline window in
+    days."""
     filters = query.Filters(
         naics=_tuple(naics),
         set_asides=_tuple(set_aside),
@@ -143,7 +145,9 @@ def contractor(uei: str) -> query.EntityDetail:
 
 @server.tool()
 def upcoming(days: int = 7, limit: int = 50) -> list[query.SearchHit]:
-    """Active notices with a response deadline within the next N days, soonest first."""
+    """Active solicitations with a response deadline within the next N days, soonest first.
+    One row per solicitation, headed by its furthest-along notice; the deadline is the latest
+    one still open in the group."""
     with _conn() as conn:
         return query.upcoming(conn, days=days, limit=limit)
 

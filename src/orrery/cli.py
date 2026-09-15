@@ -275,7 +275,7 @@ def search(
     deadline_days: DeadlineOption = None,
     json_output: JsonFlag = False,
 ) -> None:
-    """Search notice text and attachment text; one best hit per notice."""
+    """Search notice text and attachment text; one row per solicitation, its best hit."""
     settings = Settings()
     filters = _filters(naics, set_aside, agency, deadline_days)
     if semantic and filters != query.NO_FILTERS:
