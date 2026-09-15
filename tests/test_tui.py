@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from conftest import SEARCH_FIXTURE
+from pytest_httpx import HTTPXMock
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Static
 
@@ -590,3 +591,63 @@ async def test_an_excluded_incumbent_is_said_where_the_decision_is_made(
         header = text(app, "#entity_header")
         assert "excluded:[/] Prohibition/Restriction by TREAS · 2026-03-01 to indefinite" in header
         assert "SAM 11111111-2222-4333-8444-555555555555" in header
+
+
+@pytest.fixture
+def app_with_resolved_offices(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    seed: Seed,
+    httpx_mock: HTTPXMock,
+    tmp_path: Path,
+) -> tuple[OrreryTop, int, int]:
+    """The fixture's HRSA office resolved against an invented hierarchy record, with a twin
+    of it linked rather than merged away."""
+    from test_ingest_hierarchy import envelope, make_office, org, orgs_url
+
+    from orrery.ingest.hierarchy import ingest_hierarchy
+
+    seed()
+    (held,) = conn.execute(
+        "SELECT entity_id FROM entities WHERE agency_path_code = '075.7526.75R602'"
+    ).fetchone()
+    twin = make_office(conn, "075.9999.75R602", "HRSA HQ AS THE EXTRACT NAMED IT")
+    # The store's other offices have already been asked about, so this run is about these two.
+    conn.execute(
+        "INSERT INTO facts (subject_type, subject_id, predicate, value_type, value, source_id,"
+        " observed_at, confidence, extraction_method)"
+        " SELECT 'entity', CAST(entity_id AS TEXT), 'fh.lookup', 'text', 'not found',"
+        " 'sam_federal_hierarchy', ?, 1.0, 'api' FROM entities"
+        " WHERE kind = 'office' AND agency_path_code NOT LIKE '%.75R602'",
+        (db.utcnow(),),
+    )
+    httpx_mock.add_response(
+        url=orgs_url("75R602"),
+        json=envelope(org(aac="75R602", org_id="100000001", name="EXAMPLE HRSA HEADQUARTERS")),
+    )
+    ingest_hierarchy(conn, settings, budget=1)
+    conn.close()
+    return OrreryTop(settings, env_path=write_env(settings, tmp_path)), held, twin
+
+
+async def test_a_resolved_office_says_which_organization_it_is(
+    app_with_resolved_offices: tuple[OrreryTop, int, int],
+) -> None:
+    app, held, twin = app_with_resolved_offices
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.push_screen(EntityScreen(held))
+        await pilot.pause()
+        header = text(app, "#entity_header")
+        assert header.startswith("office: EXAMPLE HRSA HEADQUARTERS")
+        assert "hierarchy 100000001 (office code 75R602)" in header
+        # The stored record is kept but is not a line anyone reads in a header.
+        assert "fhdeptindagencyorgid" not in header
+        assert "fh.org_type: Office" in header
+
+        app.pop_screen()
+        app.push_screen(EntityScreen(twin))
+        await pilot.pause()
+        header = text(app, "#entity_header")
+        assert "same office as: EXAMPLE HRSA HEADQUARTERS (075.7526.75R602)" in header
+        assert "office code 75R602" in header

@@ -1,3 +1,4 @@
+import inspect
 from datetime import date
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from orrery.ingest.awards import AwardsResult
 from orrery.ingest.bulk import BulkResult
 from orrery.ingest.entities import EntitiesResult
 from orrery.ingest.exclusions import ExclusionsResult
+from orrery.ingest.hierarchy import HierarchyResult
 from orrery.ingest.notices import IngestResult
 from orrery.jobs import (
     JOBS,
@@ -33,7 +35,8 @@ from orrery.summaries import SummarizeResult
 def test_registry_lists_the_operations_with_their_needs() -> None:
     assert list(OPERATIONS) == [
         "ingest-notices", "ingest-bulk", "ingest-awards", "ingest-entities",
-        "ingest-exclusions", "fetch", "extract", "embed", "summarize", "sync", "assess",
+        "ingest-exclusions", "ingest-hierarchy", "fetch", "extract", "embed", "summarize",
+        "sync", "assess",
         "db-migrate", "db-reindex",
     ]  # fmt: skip
     assert [n for n in JOBS if n not in OPERATIONS] == [
@@ -45,6 +48,10 @@ def test_registry_lists_the_operations_with_their_needs() -> None:
     assert JOBS["fetch"].needs == set() and JOBS["ingest-awards"].needs == {"naics"}
     # Exclusions are a public file matched against contractors: no key, and no slice either.
     assert JOBS["ingest-exclusions"].needs == set()
+    # The hierarchy is keyed and has no free path, so the key is a static precondition; it
+    # is deliberately absent from sync, where it would compete for the same ten requests.
+    assert JOBS["ingest-hierarchy"].needs == {"sam_key"}
+    assert "hierarchy" not in inspect.getsource(jobs._run_sync)
     assert not JOBS["assess"].cancellable and JOBS["fetch"].cancellable
 
 
@@ -376,6 +383,16 @@ def test_summaries_match_the_cli() -> None:
     capped = ExclusionsResult(9, 1, 1, 0, 1, 9, 0, exclusions.TERMINATION_PARTIAL)
     assert summarize(JOBS["ingest-exclusions"], capped).endswith(
         f"termination pass {exclusions.TERMINATION_PARTIAL}"
+    )
+    # The queue is worked a few offices a day, so what is left is part of the answer.
+    queued = HierarchyResult(10, 82, 5, 4, 1, 0, 1, 5, False)
+    assert summarize(JOBS["ingest-hierarchy"], queued) == (
+        "run 10: 5 offices looked up, 4 resolved, 1 twins linked, 0 ambiguous,"
+        " 1 not in the hierarchy, 5 requests; 77 still pending"
+    )
+    stopped = HierarchyResult(11, 82, 2, 2, 0, 0, 0, 2, True)
+    assert summarize(JOBS["ingest-hierarchy"], stopped).endswith(
+        "80 still pending (daily budget exhausted)"
     )
     assert summarize(JOBS["fetch"], FetchResult(7, 2, 1, 9, 4, 12, 3, 0, 1, 2, True)) == (
         "run 7: 2 descriptions fetched, 1 failed; 9 manifests read, 4 failed,"

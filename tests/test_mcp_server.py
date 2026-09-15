@@ -6,7 +6,7 @@ import pytest
 from conftest import SEARCH_FIXTURE
 from mcp import Client
 
-from orrery import mcp_server, workspace
+from orrery import mcp_server, query, workspace
 from orrery.ingest.awards import AwardsResult
 
 Seed = Callable[[dict | None], None]
@@ -200,3 +200,35 @@ def test_contractor_and_entity_carry_exclusions(
     assert detail.excluded is True
     assert [e.sam_number for e in detail.exclusions] == [SAM_ONE]
     assert mcp_server.entity(detail.entity_id).excluded is True
+
+
+def test_entity_carries_the_hierarchy_keys_it_resolved_to(
+    conn: sqlite3.Connection,
+    settings,
+    httpx_mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No new tool: an agent asking about an office is already asking which office it is."""
+    from test_ingest_hierarchy import envelope, make_office, org, orgs_url
+
+    from orrery.ingest.hierarchy import ingest_hierarchy
+
+    office = make_office(conn, "097.97DH.EX0001", "OFFICE AS THE NOTICE NAMED IT")
+    twin = make_office(conn, "097.9700.EX0001", "THE SAME OFFICE, SHALLOWER")
+    httpx_mock.add_response(url=orgs_url("EX0001"), json=envelope(org()))
+    ingest_hierarchy(conn, settings, budget=1)
+    monkeypatch.setenv("ORRERY_DATA_DIR", str(tmp_path))
+
+    detail = mcp_server.entity(office)
+
+    assert detail.fh_org_id == "100000001"
+    assert detail.old_fpds_office_code == "EX0001"
+    assert detail.same_as is None
+    linked = mcp_server.entity(twin)
+    assert linked.fh_org_id is None and linked.same_as is not None
+    assert linked.same_as.entity_id == office
+    # The stored record is a document, not a header line.
+    assert sorted(p for p, _ in query.summarize_facts(detail.facts)) == [
+        "fh.agency_code", "fh.org_id", "fh.org_name", "fh.org_type", "fh.status",
+    ]  # fmt: skip

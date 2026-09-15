@@ -574,6 +574,13 @@ class EntityDetail:
     """SAM.gov exclusions on this entity, current ones first; empty for an office."""
     excluded: bool = False
     """Whether any of them is in force today."""
+    fh_org_id: str | None = None
+    """The Federal Hierarchy organization this office resolved to, when one has."""
+    old_fpds_office_code: str | None = None
+    """The FPDS office code (the AAC) it was resolved by, or shares with a twin."""
+    same_as: EntityRef | None = None
+    """The office this one turned out to be, when a lookup merged twins. Set on the
+    shallower row only; the deeper row carries the identity."""
 
 
 @dataclass(frozen=True)
@@ -765,7 +772,7 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     """One agency or office with its place in the hierarchy and its recent notices."""
     row = conn.execute(
         "SELECT entity_id, kind, name, agency_path_code, parent_entity_id, parent, notices,"
-        " uei, cage FROM v_entities WHERE entity_id = ?",
+        " uei, cage, fh_org_id, old_fpds_office_code FROM v_entities WHERE entity_id = ?",
         (entity_id,),
     ).fetchone()
     if row is None:
@@ -816,11 +823,32 @@ def entity(conn: sqlite3.Connection, entity_id: int, *, recent: int = 10) -> Ent
     return EntityDetail(
         row[0], row[1], row[2], row[3], parent, chain, children, aliases, row[6], tuple(hits),
         row[7], row[8], tuple(won_or_made), awards_count, awards_value, facts,
-        found, any(item.current for item in found),
+        found, any(item.current for item in found), row[9], row[10], _same_as(conn, facts),
     )  # fmt: skip
 
 
+def _same_as(conn: sqlite3.Connection, facts: tuple[Fact, ...]) -> EntityRef | None:
+    """The office a twin was linked to, from the newest ``fh.same_as`` fact.
+
+    A ref fact rather than a column, so the merge stays an observation that can be corrected
+    by a later one; reading it here is what makes it visible to every surface at once.
+    """
+    target = next((fact.value for fact in facts if fact.predicate == "fh.same_as"), None)
+    if target is None:
+        return None
+    row = conn.execute(
+        "SELECT entity_id, name, agency_path_code FROM entities WHERE entity_id = ?", (target,)
+    ).fetchone()
+    return EntityRef(*row) if row else None
+
+
 LIST_PREDICATES = frozenset({"sam.naics", "sam.psc", "sam.business_type", "sam.sba_business_type"})
+JSON_PREDICATES = frozenset({"fh.record", "fh.parent_history", "fh.candidate"})
+"""Facts whose value is a stored document rather than a line to read.
+
+They are kept because an unverified upstream shape has to be recoverable from the store, and
+they are skipped here for the same reason exclusions are: a header is a summary, and a
+kilobyte of JSON in it is not one."""
 
 
 def summarize_facts(
@@ -834,6 +862,8 @@ def summarize_facts(
     for fact in facts:
         if fact.predicate.startswith(EXCLUSION_PREFIX):
             continue  # an exclusion is a record of its own (``exclusions``), not a line here
+        if fact.predicate in JSON_PREDICATES:
+            continue
         if fact.predicate in LIST_PREDICATES:
             newest, values = lists.setdefault(fact.predicate, (fact.observed_at, []))
             if fact.observed_at == newest and fact.value not in values:

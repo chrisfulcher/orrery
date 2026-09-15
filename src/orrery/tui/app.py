@@ -1206,8 +1206,21 @@ class EntityScreen(Screen):
             others = ", ".join(a for a in detail.aliases if a != detail.name) or "-"
             second = f"also seen as: {others}"
         else:
-            keys = f"path {detail.path_code or '-'} · {detail.notices} notice(s)"
+            # An office that has been resolved says so: the id is what a later source keys
+            # against, and a twin says which row actually holds the identity.
+            resolved = (
+                f" · hierarchy {detail.fh_org_id} (office code {detail.old_fpds_office_code})"
+                if detail.fh_org_id
+                else f" · office code {detail.old_fpds_office_code}"
+                if detail.old_fpds_office_code
+                else ""
+            )
+            keys = f"path {detail.path_code or '-'} · {detail.notices} notice(s){resolved}"
             second = f"offices: {', '.join(child.name for child in detail.children) or '-'}"
+            if detail.same_as:
+                second += (
+                    f"\nsame office as: {detail.same_as.name} ({detail.same_as.path_code or '-'})"
+                )
         facts = "\n".join(
             f"{predicate}: {value}"
             for predicate, value in query.summarize_facts(detail.facts, max_items=8)

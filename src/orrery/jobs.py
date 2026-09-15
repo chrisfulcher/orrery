@@ -22,7 +22,7 @@ from orrery.embed.client import EmbeddingError
 from orrery.embed.pipeline import embed_pending
 from orrery.extract.text import extract_pending
 from orrery.fetch import queue
-from orrery.ingest import awards, bulk, entities, exclusions, notices
+from orrery.ingest import awards, bulk, entities, exclusions, hierarchy, notices
 from orrery.progress import Cancelled, JobCancelled, Report, check, never, quiet
 from orrery.quota import BudgetExceeded
 from orrery.sam.client import SamError
@@ -109,6 +109,15 @@ def run(
         raise JobFailed(f"{_prefix(job)}{exc}") from exc
 
 
+HIERARCHY_BUDGET = 5
+"""Offices resolved per run by default.
+
+Half a personal key's ten daily requests, so a run leaves room for the descriptions a
+fetch wants the same day. The store's offices are a fixed, small set that resolves over a
+few weeks at this rate and then needs nothing, which is why this job is not part of sync:
+it competes for the same ten requests as work the user asked for today.
+"""
+
 MANIFESTS_PER_RUN = 200
 """Notices asked about per fetch run, unless the caller says otherwise.
 
@@ -124,6 +133,7 @@ PREFIXES = {
     "ingest-awards": "awards ingest stopped: ",
     "ingest-entities": "entities ingest stopped: ",
     "ingest-exclusions": "exclusions ingest stopped: ",
+    "ingest-hierarchy": "hierarchy ingest stopped: ",
     "embed": "embedding stopped: ",
     "summarize": "summarize stopped: ",
     "sync": "sync stopped: ",
@@ -405,6 +415,12 @@ def _run_exclusions(conn, settings, values, report, cancelled) -> object:
     )
 
 
+def _run_hierarchy(conn, settings, values, report, cancelled) -> object:
+    return hierarchy.ingest_hierarchy(
+        conn, settings, budget=values["budget"], report=report, cancelled=cancelled
+    )
+
+
 def _run_fetch(conn, settings, values, report, cancelled) -> object:
     return queue.fetch_pending(
         conn, settings, budget=values.get("budget"),
@@ -557,6 +573,13 @@ JOBS: dict[str, Job] = {
             True, _run_exclusions,
         ),
         Job(
+            "ingest-hierarchy", "Resolve offices (SAM.gov Federal Hierarchy)",
+            frozenset({"sam_key"}),
+            (Param("budget", "Offices this run", "int", default=HIERARCHY_BUDGET,
+                   help="one keyed request each; the daily quota still applies"),),
+            True, _run_hierarchy,
+        ),
+        Job(
             "fetch", "Fetch descriptions and attachments", frozenset(),
             (Param("budget", "Description budget", "int"),
              Param("max_attachments", "Attachment limit", "int"),
@@ -651,6 +674,18 @@ def summarize(job: Job, result: object) -> str:
                 f" {r.individuals_skipped} individuals not read,"
                 f" {r.rows_matched} matched a contractor, {r.exclusions_new} new,"
                 f" {r.facts_added} facts, {ended}"
+            )
+        case "ingest-hierarchy":
+            # What is left matters as much as what was done: this job is a queue worked a
+            # few offices a day, so a run that resolved three of eighty is on track, and a
+            # run stopped by the quota is a different thing from one that ran out of work.
+            left = r.offices_pending - r.resolved - r.twins_linked
+            stopped = " (daily budget exhausted)" if r.budget_exhausted else ""
+            return (
+                f"run {r.run_id}: {r.looked_up} offices looked up, {r.resolved} resolved,"
+                f" {r.twins_linked} twins linked, {r.ambiguous} ambiguous,"
+                f" {r.not_found} not in the hierarchy, {r.requests_spent} requests;"
+                f" {max(left, 0)} still pending{stopped}"
             )
         case "fetch":
             note = (

@@ -265,6 +265,32 @@ def test_two_live_organizations_claiming_one_code_resolve_nothing(
     assert json.loads(candidates[0][1])["fhorgname"] == "FIRST CLAIMANT"
 
 
+def test_two_codes_that_turn_out_to_be_one_organization_are_linked_not_refused(
+    httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """One organization id belongs to one row. A second office arriving at an id another row
+    already holds is the twin case with different codes, and the unique index says so."""
+    first = make_office(conn, "097.97DH.EX0001", "FIRST OFFICE")
+    second = make_office(conn, "097.97DH.EX0002", "SECOND OFFICE")
+    httpx_mock.add_response(url=orgs_url("EX0001"), json=envelope(org()))
+    httpx_mock.add_response(url=orgs_url("EX0002"), json=envelope(org(aac="EX0002")))
+
+    result = ingest_hierarchy(conn, settings, budget=5)
+
+    assert (result.looked_up, result.resolved, result.twins_linked) == (2, 1, 1)
+    assert conn.execute(
+        "SELECT fh_org_id FROM entities WHERE entity_id = ?", (first,)
+    ).fetchone() == ("100000001",)
+    assert conn.execute(
+        "SELECT fh_org_id, old_fpds_office_code FROM entities WHERE entity_id = ?", (second,)
+    ).fetchone() == (None, "EX0002")
+    assert conn.execute(
+        "SELECT value FROM facts WHERE subject_id = ? AND predicate = 'fh.same_as'",
+        (str(second),),
+    ).fetchone() == (str(first),)
+    assert pending_offices(conn) == []
+
+
 def test_the_run_stops_at_its_own_budget_and_leaves_the_rest_pending(
     httpx_mock: HTTPXMock, conn: sqlite3.Connection, settings: Settings
 ) -> None:

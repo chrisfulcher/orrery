@@ -735,6 +735,48 @@ def test_ingest_exclusions_from_a_file_needs_no_key(
     assert "excluded: Prohibition/Restriction by TREAS" in contractor.output
 
 
+def test_ingest_hierarchy_needs_a_key_and_reports_the_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, httpx_mock: HTTPXMock
+) -> None:
+    from test_ingest_hierarchy import envelope, org, orgs_url
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ORRERY_SAM_API_KEY", raising=False)
+    env = {"ORRERY_DATA_DIR": str(tmp_path)}
+    runner.invoke(app, ["db", "migrate"], env=env)
+    with closing(db.connect(tmp_path / "orrery.sqlite")) as conn:
+        for path_code, name in (("097.97DH.EX0001", "FIRST"), ("097.97DH.EX0002", "SECOND")):
+            conn.execute(
+                "INSERT INTO entities (kind, name, agency_path_code, source_id, first_seen_at,"
+                " last_seen_at) VALUES ('office', ?, ?, 'sam_opportunities_api',"
+                " '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')",
+                (name, path_code),
+            )
+
+    # There is no keyless path to the hierarchy, so a store without a key is told before
+    # anything is opened rather than after a request fails.
+    assert runner.invoke(app, ["ingest", "hierarchy"], env=env).exit_code == 2
+
+    keyed = {**env, "ORRERY_SAM_API_KEY": "test-key"}
+    httpx_mock.add_response(url=orgs_url("EX0001"), json=envelope(org()))
+    result = runner.invoke(app, ["ingest", "hierarchy", "--budget", "1"], env=keyed)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-1] == (
+        "run 1: 1 offices looked up, 1 resolved, 0 twins linked, 0 ambiguous,"
+        " 0 not in the hierarchy, 1 requests; 1 still pending"
+    )
+
+    httpx_mock.add_response(
+        url=orgs_url("EX0002"), json=envelope(org(aac="EX0002", org_id="100000002"))
+    )
+    result = runner.invoke(app, ["ingest", "hierarchy", "--budget", "1", "--json"], env=keyed)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert payload["resolved"] == 1 and payload["budget_exhausted"] is False
+    assert payload["offices_pending"] == 1
+
+
 def test_profile_edit_reopens_the_editor_until_valid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

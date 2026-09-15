@@ -54,6 +54,7 @@ MILESTONES = {
     "ingest-awards": ("awards: ", "NAICS "),
     "ingest-entities": ("extract: ", "NAICS "),
     "ingest-exclusions": ("extract: ", "no exclusion "),
+    "ingest-hierarchy": ("hierarchy: ",),
     "assess": ("",),
     "sync": ("sync: ", "extract: ", "NAICS "),
 }
@@ -1188,6 +1189,23 @@ def ingest_exclusions_command(
     cannot tell one the file has dropped from one it never reached.
     """
     _run_job("ingest-exclusions", {"file": file, "limit": limit}, json_output)
+
+
+@ingest_app.command("hierarchy")
+def ingest_hierarchy_command(
+    budget: Annotated[
+        int, typer.Option(help="Offices to look up this run; one keyed request each.")
+    ] = jobs.HIERARCHY_BUDGET,
+    json_output: JsonFlag = False,
+) -> None:
+    """Resolve offices against the SAM.gov Federal Hierarchy: one keyed request per office.
+
+    Each office is looked up by the FPDS office code its agency path ends with, and takes
+    the hierarchy's canonical name, its organization id, and its former names. There is no
+    bulk download and a personal key gets ten requests a day, so this is a queue: run it at
+    a budget you can spare and the store's offices resolve over the following weeks.
+    """
+    _run_job("ingest-hierarchy", {"budget": budget}, json_output)
 
 
 @app.command()

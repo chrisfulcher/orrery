@@ -44,7 +44,9 @@ at all (see [Before you start](#before-you-start)).
 
 - Officials and organizations beyond the contacts named on a notice
 - Budget context
-- The resolver that merges the duplicate offices the bulk extract creates
+- Names for every office. `orrery ingest hierarchy` resolves them against SAM.gov's
+  Federal Hierarchy a few keyed requests at a time, so a fresh store's offices are still
+  the codes and names the notices carried until it has run for a while.
 
 The design lives in [`docs/DESIGN.md`](docs/DESIGN.md); §9 is the order of work.
 The probe notes in [`docs/notes/`](docs/notes/) record what was checked live
@@ -93,7 +95,7 @@ Every setting below can be entered in the app (`orrery top`, key `5`), which als
 
 **A chat model** (optional; needed only for `orrery pursuit assess`). Two slots, `fast` for grunt work and `deep` for judgment, each any OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM, OpenAI, OpenRouter) or Anthropic through its official SDK, set with `ORRERY_AI_FAST_*` and `ORRERY_AI_DEEP_*`. The default is a local Ollama running `qwen3:14b` (`ollama pull qwen3:14b`); run Ollama with `OLLAMA_CONTEXT_LENGTH=16384` or more, because its default context of 4,096 tokens silently truncates a long prompt from the front. Leave the deep slot unset to use the fast one for everything, or point it at `claude-opus-5` with `ORRERY_AI_DEEP_PROVIDER=anthropic` and a key in `ORRERY_AI_DEEP_API_KEY` or `ANTHROPIC_API_KEY` — that one provider needs a vendor SDK, shipped as an optional extra (`uv sync --extra anthropic`); every OpenAI-compatible endpoint is reached over plain HTTP with nothing extra to install. On Arch with an AMD GPU, the `ollama-rocm` package is the one that uses the card; the plain `ollama` package runs on the CPU.
 
-What leaves your machine: `orrery ingest bulk` downloads a public file from `sam.gov` and sends no key. `orrery ingest exclusions` downloads a public file from `sam.gov` and sends no key. `orrery fetch` asks `sam.gov` for each notice's attachment list and downloads the files, both without a key, and sends your key to `api.sam.gov` only for notice descriptions. `orrery ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `orrery ingest entities` sends your SAM.gov key to `api.sam.gov` like every other keyed command, and `--uei` sends the UEIs you name. `orrery embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `orrery search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else. `orrery pursuit assess` sends your profile document, the pursuit's summary and notes, and public notice and attachment text to the chat model you configured, and nothing else; `orrery summarize` sends each notice's public title, typed fields, and description to the fast model, and never your profile. With the local default nothing leaves the machine.
+What leaves your machine: `orrery ingest bulk` downloads a public file from `sam.gov` and sends no key. `orrery ingest exclusions` downloads a public file from `sam.gov` and sends no key. `orrery fetch` asks `sam.gov` for each notice's attachment list and downloads the files, both without a key, and sends your key to `api.sam.gov` only for notice descriptions. `orrery ingest awards` sends only its filter (your NAICS codes and a date window) to `api.usaspending.gov` and downloads the prepared file from `files.usaspending.gov`, with no key. `orrery ingest entities` sends your SAM.gov key to `api.sam.gov` like every other keyed command, and `--uei` sends the UEIs you name. `orrery ingest hierarchy` sends your SAM.gov key to `api.sam.gov` with one office code per request, and nothing else. `orrery embed` sends the text of your ingested notices and attachments (public SAM.gov data) to that endpoint, and `orrery search --semantic` sends your query text, which may reveal what you are pursuing. With the local default nothing leaves the machine. Nothing is ever sent anywhere else. `orrery pursuit assess` sends your profile document, the pursuit's summary and notes, and public notice and attachment text to the chat model you configured, and nothing else; `orrery summarize` sends each notice's public title, typed fields, and description to the fast model, and never your profile. With the local default nothing leaves the machine.
 
 ## Quickstart
 
@@ -116,6 +118,7 @@ uv run orrery ingest bulk         # start here: today's full extract (~250 MB, n
 uv run orrery ingest awards       # three years of USAspending award history for your slice (no key, no quota)
 uv run orrery ingest entities     # optional, needs a key: SAM.gov registrations (one request per month)
 uv run orrery ingest exclusions   # who may not be awarded work: SAM.gov's daily public list (no key)
+uv run orrery ingest hierarchy    # optional, needs a key: name your offices (one request each)
 uv run orrery fetch --dry-run     # what would be fetched, and today's remaining budget
 uv run orrery fetch               # attachment manifests and files (no key); descriptions too if you have one
 uv run orrery extract             # text from PDF, Word and Excel attachments; no quota
@@ -145,6 +148,7 @@ docker compose run --rm orrery ingest bulk
 docker compose run --rm orrery ingest awards
 docker compose run --rm orrery ingest entities
 docker compose run --rm orrery ingest exclusions
+docker compose run --rm orrery ingest hierarchy
 docker compose run --rm orrery fetch --dry-run
 docker compose run --rm orrery fetch
 docker compose run --rm orrery extract
@@ -172,6 +176,7 @@ The four ingest commands, and what each costs against the SAM.gov quota:
 | `orrery ingest bulk` | The daily SAM.gov extract, downloaded once per day into `data/extracts/`, keeping only notices whose NAICS code begins with one of yours and filling in descriptions the API has not fetched. `--archived 2025` ingests a fiscal year's archive for history. | None |
 | `orrery ingest awards` | Every USAspending contract action under your NAICS codes, matched by prefix there too, over the last three years (`--since` and `--until` change the window). Waits the few minutes the service takes to prepare the file, downloads it into `data/extracts/usaspending/`, and stores one row per award with its awarding office, vendor, value, dates, and solicitation number. | None |
 | `orrery ingest entities` | SAM.gov's public monthly entity extract — one keyed request for every registrant in the country, about 150 MB — into `data/extracts/sam/`. `--uei A,B` looks up a few registrants through the Entity Management API instead, ten per keyed request. | Counts against the daily budget |
+| `orrery ingest hierarchy` | Resolves your offices against SAM.gov's Federal Hierarchy by the FPDS office code their agency path ends with, taking the canonical name, the organization id, and the names each office used to go by. One keyed request per office, `--budget N` per run (default 5), so the offices resolve over a few runs; an office the hierarchy does not know is not asked about again for a month. | One request per office |
 | `orrery ingest exclusions` | SAM.gov's daily public exclusions extract — debarments, suspensions, and the other bars to award — downloaded into `data/extracts/` (12 MB, no key). Only rows matching a contractor already in your store by UEI or CAGE are read; rows for individuals are counted and nothing more. An exclusion that has ended is recorded as ended when a later file no longer carries it, never deleted. | None |
 
 Vendors become contractor entities keyed by UEI. Awards resolve to offices

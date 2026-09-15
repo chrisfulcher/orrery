@@ -139,9 +139,9 @@ def ingest_hierarchy(
                 )
                 conn.execute("BEGIN")
                 if len(matches) == 1:
-                    holder, linked = _resolve(conn, office, matches[0], now)
+                    holder, linked, claimed = _resolve(conn, office, matches[0], now)
                     handled |= linked | {holder}
-                    resolved += 1
+                    resolved += claimed
                     twins += len(linked)
                 elif matches:
                     _record_candidates(conn, office, matches, now)
@@ -179,31 +179,40 @@ def _matching(orgs: list[dict], aac: str) -> list[dict]:
     return active or matches
 
 
-def _resolve(conn: sqlite3.Connection, office: Office, org: dict, now: str) -> tuple[int, set[int]]:
-    """Write the identity onto the office (or its deepest twin) and link the rest to it.
+def _resolve(
+    conn: sqlite3.Connection, office: Office, org: dict, now: str
+) -> tuple[int, set[int], bool]:
+    """Put the identity on one row and point every other row at it.
 
-    Returns (holder entity id, the twins linked to it). The holder is whichever row already
-    carries this organization id, else the deepest path sharing the AAC: the deep row is the
-    one the API itself would produce, so it is the one that keeps the key.
+    Returns (the holder's entity id, the rows linked to it, whether this call claimed the
+    organization). One organization id belongs to exactly one row, which the unique index
+    enforces and this decides: a row that already holds it keeps it, and otherwise the
+    deepest path sharing the AAC takes it, because the deep path is the one the API itself
+    would have produced; between paths of equal depth the row the store saw first wins, being
+    the one everything else already points at. Two offices with *different* codes can also
+    turn out to be one organization, and that is the same answer -- the second one is linked,
+    not refused.
     """
     org_id = _text(org.get("fhorgid"))
     group = _twins(conn, office)
-    holder = next((row for row in group if row[3] == org_id), None) or max(
-        group, key=lambda row: (len(row[2]), row[0])
-    )
+    claimed = conn.execute(
+        "SELECT entity_id, name, agency_path_code FROM entities WHERE fh_org_id = ?", (org_id,)
+    ).fetchone()
+    holder = claimed or max(group, key=lambda row: (len(row[2]), -row[0]))[:3]
     holder_id, holder_name = holder[0], holder[1]
-    canonical = _text(org.get("fhorgname")) or holder_name
-    conn.execute(
-        "UPDATE entities SET fh_org_id = ?, old_fpds_office_code = ?, name = ?,"
-        " last_seen_at = ? WHERE entity_id = ?",
-        (org_id, office.aac, canonical, now, holder_id),
-    )
-    # The name the office arrived with is not wrong, it is what a source called it, so it
-    # stays reachable as an alias rather than being overwritten out of existence.
-    for alias in [holder_name, *_name_history(org)]:
-        if alias and alias != canonical:
-            record_alias(conn, holder_id, alias, SOURCE_ID, now)
-    _write_facts(conn, holder_id, _facts(org, org_id), org_id, now)
+    if claimed is None:
+        canonical = _text(org.get("fhorgname")) or holder_name
+        conn.execute(
+            "UPDATE entities SET fh_org_id = ?, old_fpds_office_code = ?, name = ?,"
+            " last_seen_at = ? WHERE entity_id = ?",
+            (org_id, office.aac, canonical, now, holder_id),
+        )
+        # The name the office arrived with is not wrong, it is what a source called it, so
+        # it stays reachable as an alias rather than being overwritten out of existence.
+        for alias in [holder_name, *_name_history(org)]:
+            if alias and alias != canonical:
+                record_alias(conn, holder_id, alias, SOURCE_ID, now)
+        _write_facts(conn, holder_id, _facts(org, org_id), org_id, now)
     linked = set()
     for entity_id, _, _, _ in group:
         if entity_id == holder_id:
@@ -214,7 +223,7 @@ def _resolve(conn: sqlite3.Connection, office: Office, org: dict, now: str) -> t
         )
         _write_facts(conn, entity_id, [("fh.same_as", str(holder_id), "ref")], org_id, now)
         linked.add(entity_id)
-    return holder_id, linked
+    return holder_id, linked, claimed is None
 
 
 def _twins(conn: sqlite3.Connection, office: Office) -> list[tuple[int, str, str, str | None]]:
