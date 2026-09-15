@@ -19,7 +19,7 @@ V1_COLUMNS = {
         "attachments_fetched", "attachments_extracted", "versions",
         "award_number", "award_date", "award_amount", "awardee",
         "summary", "work_type", "keywords", "stated_set_aside", "summary_model",
-        "manifest_status", "manifest_checked_at",
+        "manifest_status", "manifest_checked_at", "naics_title", "psc_title",
     },
     "v_notice_summaries": {
         "notice_id", "summary", "work_type", "keywords", "stated_set_aside", "slot", "model",

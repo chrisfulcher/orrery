@@ -107,4 +107,19 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
             conn.execute("ROLLBACK")
             raise
         applied_now.append(file.name)
+    _seed_reference(conn)
     return applied_now
+
+
+def _seed_reference(conn: sqlite3.Connection) -> None:
+    """Load the shipped NAICS and PSC code lists, once the migration that houses them is in.
+
+    Not a migration itself: the lists are release data that a later release refreshes, and a
+    migration runs once. Its return value is dropped on purpose, so ``migrate`` keeps saying
+    only which migrations it applied. The guard is what lets a test stage a prefix of the
+    migrations and still migrate.
+    """
+    from orrery import reference  # imports runs, which imports this module
+
+    if reference.MIGRATION in set(applied(conn)):
+        reference.seed(conn)

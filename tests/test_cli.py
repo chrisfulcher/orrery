@@ -53,6 +53,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied 0016_extract_provenance.sql",
         "applied 0017_failure_reasons.sql",
         "applied 0018_tasks.sql",
+        "applied 0019_reference.sql",
     ]
     assert (tmp_path / "orrery.sqlite").exists()
 
@@ -82,6 +83,7 @@ def test_db_migrate_and_status(tmp_path: Path) -> None:
         "applied  0016_extract_provenance.sql",
         "applied  0017_failure_reasons.sql",
         "applied  0018_tasks.sql",
+        "applied  0019_reference.sql",
     ]
 
 
